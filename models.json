@@ -1,0 +1,42 @@
+{
+  "claude-code": {
+    "claude-opus-4-6": "Claude Opus 4.6",
+    "claude-sonnet-4-6": "Claude Sonnet 4.6",
+    "claude-opus-4-5": "Claude Opus 4.5",
+    "claude-sonnet-4-5": "Claude Sonnet 4.5",
+    "claude-haiku-4-5": "Claude Haiku 4.5"
+  },
+  "opencode": {
+    "anthropic/claude-opus-4-6": "Claude Opus 4.6",
+    "anthropic/claude-sonnet-4-6": "Claude Sonnet 4.6",
+    "anthropic/claude-opus-4-5": "Claude Opus 4.5",
+    "anthropic/claude-sonnet-4-5": "Claude Sonnet 4.5",
+    "anthropic/claude-haiku-4-5": "Claude Haiku 4.5",
+    "openai/gpt-4o": "GPT-4o",
+    "openai/gpt-4o-mini": "GPT-4o Mini",
+    "openai/gpt-4.1": "GPT-4.1",
+    "openai/gpt-4.1-mini": "GPT-4.1 Mini",
+    "openai/gpt-4.1-nano": "GPT-4.1 Nano",
+    "openai/o3": "o3",
+    "openai/o3-mini": "o3 Mini",
+    "openai/o4-mini": "o4 Mini",
+    "google/gemini-2.5-pro": "Gemini 2.5 Pro",
+    "google/gemini-2.5-flash": "Gemini 2.5 Flash",
+    "google/gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite",
+    "deepseek/deepseek-chat": "DeepSeek Chat (V3)",
+    "deepseek/deepseek-reasoner": "DeepSeek Reasoner (R1)",
+    "xai/grok-4": "Grok 4",
+    "xai/grok-3": "Grok 3",
+    "xai/grok-3-mini": "Grok 3 Mini",
+    "mistral/codestral-latest": "Codestral",
+    "mistral/mistral-large-latest": "Mistral Large",
+    "mistral/devstral-medium-latest": "Devstral Medium"
+  },
+  "codex": {
+    "gpt-5.5": "GPT-5.5",
+    "gpt-5.4": "GPT-5.4",
+    "gpt-5.4-mini": "GPT-5.4 Mini",
+    "gpt-5.3-codex": "GPT-5.3 Codex",
+    "gpt-5.2": "GPT-5.2"
+  }
+}
