@@ -4,4 +4,5 @@ out
 .env*
 !.env.example
 *.tsbuildinfo
-
+dist
+.DS_Store

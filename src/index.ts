@@ -20,19 +20,20 @@ program
   .description("Start the bot hub — create bots, pick a repo, and run them in threads")
   .option("-c, --caffeinate", "run caffeinate for 8 hours to prevent sleep")
   .option("-p, --port <port>", "bind this local port and serve the UI at http://localhost:<port> (implies --local)", "3000")
-  .option("-l, --local", "bind a local port instead of connecting to the relay")
-  .option("-r, --relay <url>", "connect to a relay server instead of binding a local port (e.g. wss://relay.example.com)", "wss://relay.codeongrass.com")
+  .option("-l, --local", "bind a local port; combine with --relay to do both")
+  .option("-r, --relay <url>", "connect to a relay server; on its own no local port is bound (e.g. wss://relay.example.com)", "wss://relay.codeongrass.com")
   .action(async (opts, command) => {
-    // -p defaults to 3000; an explicit --relay still wins over that default.
+    // Both options carry defaults, so only an explicit flag counts as a choice:
+    // nothing → local on 3000, -r alone → relay only, -r with -p/-l → both.
     const portFromUser = command.getOptionValueSource("port") !== "default";
     const relayFromUser = command.getOptionValueSource("relay") !== "default";
-    const port = opts.port && !(relayFromUser && !portFromUser) ? Number(opts.port) : undefined;
-    if (port !== undefined && !Number.isInteger(port)) {
-      console.error("  --port must be a number");
+    const local = opts.local || portFromUser || !relayFromUser;
+    const port = local ? Number(opts.port) : undefined;
+    if (port !== undefined && !(Number.isInteger(port) && port > 0 && port < 65536)) {
+      console.error("  --port must be a number between 1 and 65535");
       process.exit(1);
     }
-    const local = opts.local || port !== undefined;
-    await start("local", port, opts.caffeinate ?? false, local ? undefined : opts.relay);
+    await start("local", port, opts.caffeinate ?? false, relayFromUser ? opts.relay : undefined);
   });
 
 program.parse();

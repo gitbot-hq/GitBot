@@ -117,7 +117,7 @@ When the agent wants to do something that needs approval (run a bash command, ed
 
 ### Ports and the relay
 
-`gitbot start` runs locally and binds port `3000` by default. Pass `-p <port>` to use a different one — handy when several instances run at once in different directories. Passing `-r <url>` (and no `-p`) switches to relay mode instead: the server dials out to the relay, defaulting to `wss://relay.codeongrass.com`, so the hub is reachable from outside your LAN. An explicit `-p` always wins over `-r`.
+`gitbot start` runs locally and binds port `3000` by default. Pass `-p <port>` to use a different one — handy when several instances run at once in different directories. Passing `-r <url>` on its own switches to relay mode instead: the server dials out to the relay, defaulting to `wss://relay.codeongrass.com`, so the hub is reachable from outside your LAN, and no local port is bound. Pass `-r` together with `-p` (or `-l`) to do both — the relay connection plus the local port, which is what a sandbox wants for its health check.
 
 ---
 
@@ -134,8 +134,8 @@ gitbot start [options]
 | Flag | Description |
 |---|---|
 | `-p, --port <number>` | Bind this local port and serve the UI at `http://localhost:<port>` (implies `--local`; default `3000`) |
-| `-l, --local` | Bind a local port instead of connecting to the relay |
-| `-r, --relay <url>` | Connect to a relay server instead of binding a local port (default: `wss://relay.codeongrass.com`) |
+| `-l, --local` | Bind a local port; combine with `--relay` to do both |
+| `-r, --relay <url>` | Connect to a relay server; on its own no local port is bound (default: `wss://relay.codeongrass.com`) |
 | `-c, --caffeinate` | Prevent macOS sleep for 8 hours while the server is running |
 
 **Examples:**

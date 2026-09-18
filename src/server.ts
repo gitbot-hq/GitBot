@@ -469,7 +469,8 @@ export async function start(network: string = "local", portOverride?: number, ca
   ];
   console.log(`  available agents: ${availableAgents.join(", ") || "none"}`);
 
-  if (relayUrl) {
+  // A relay URL with no port means relay only; with a port, serve both.
+  if (relayUrl && portOverride === undefined) {
     const caffeinatePid = maybeCaffeinate(caffeinate);
     setupShutdown(() => {}, caffeinatePid);
     await startRelayMode(relayUrl, availableAgents, workspaceCwd);
@@ -490,4 +491,8 @@ export async function start(network: string = "local", portOverride?: number, ca
   setupShutdown(() => {
     server.close(() => process.exit(0));
   }, caffeinatePid);
+
+  if (relayUrl) {
+    await startRelayMode(relayUrl, availableAgents, workspaceCwd);
+  }
 }
