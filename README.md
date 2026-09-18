@@ -43,6 +43,9 @@ Frontend dev: `npm run dev` (`:3000`). `npx tsc --noEmit` must stay clean.
   `repoPath` thread creation).
 - `app/components/bot-form.tsx` — bot studio (preview + mascot/color
   pickers + progressive form, original copy verbatim).
+- `app/components/bot-profile.tsx` — bot profile (generative cover,
+  facts, Share/Edit/Publish). Pencil badge + re-clicking the selected
+  row open it; Edit dives into the studio on top.
 - `app/components/bot-face.tsx` — avatar renderer + mood director (idle
   cycles, hover cheer, 60s-idle sleep, reduced-motion aware).
 - `app/components/thread-panel.tsx` — new-thread folder picker; mirrors the

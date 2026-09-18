@@ -13,6 +13,7 @@ import {
 import Chat from "./chat";
 import NewBotButton from "./new-bot-button";
 import BotForm from "./bot-form";
+import BotProfile from "./bot-profile";
 import ThreadPanel from "./thread-panel";
 import OnboardingFlow from "./onboarding-flow";
 import ThemeButton from "./theme-button";
@@ -78,6 +79,9 @@ export default function V2() {
   const [modal, setModal] = useState<Modal>(null);
   // Inline bot studio: slides over threads + chat.
   const [editing, setEditing] = useState<Bot | "new" | null>(null);
+  // Bot profile: fills the tray where threads + chat live. Edit dives
+  // into the studio on top of it; saving lands back here.
+  const [profileId, setProfileId] = useState<string | null>(null);
   // New-thread folder picker: slides over the chat column only.
   const [threadPanel, setThreadPanel] = useState(false);
   const [autoSend, setAutoSend] = useState<string | null>(null);
@@ -161,6 +165,10 @@ export default function V2() {
   }, [threadSearchOpen]);
 
   const bot = bots.find((b) => b.id === selectedId) ?? null;
+  const profileBot = bots.find((b) => b.id === profileId) ?? null;
+  // The profile stays mounted under the studio: opening edit slides the
+  // studio over it, closing slides back to it.
+  const showProfile = profileBot != null;
 
   const searchText = query.trim().toLowerCase();
   const visibleBots = searchText
@@ -391,6 +399,7 @@ export default function V2() {
 
   function deletedBot(id: string) {
     setEditing(null);
+    setProfileId((prev) => (prev === id ? null : prev));
     setBots((prev) => prev.filter((b) => b.id !== id));
     setSelectedId((prev) => (prev === id ? null : prev));
   }
@@ -552,7 +561,10 @@ export default function V2() {
                   key={b.id}
                   type="button"
                   className={`${b.id === bot?.id ? "bot-row selected" : "bot-row"}${searchText ? "" : " msg-in"}`}
-                  onClick={() => setSelectedId(b.id)}
+                  onClick={() => {
+                    if (b.id === bot?.id) setProfileId(b.id);
+                    else setSelectedId(b.id);
+                  }}
                   onMouseEnter={() => setHoverId(b.id)}
                   onMouseLeave={() => setHoverId((prev) => (prev === b.id ? null : prev))}
                   aria-current={b.id === bot?.id ? "true" : undefined}
@@ -572,7 +584,7 @@ export default function V2() {
                     aria-hidden="true"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setEditing(b);
+                      setProfileId(b.id);
                     }}
                   >
                     <IconPencil size={16} stroke={2} />
@@ -595,7 +607,7 @@ export default function V2() {
             aria-hidden="true"
           />
         </aside>
-        <div className={editing ? "tray open" : "tray"}>
+        <div className={`tray${editing ? " open" : ""}${showProfile ? " profile-open" : ""}`}>
           <div className="tray-main">
             <aside
               ref={threadsAsideRef}
@@ -721,6 +733,18 @@ export default function V2() {
                 )}
               </div>
             </div>
+          </div>
+          <div className="profile-overlay" aria-hidden={!showProfile || !!editing}>
+            {showProfile && (
+              <BotProfile
+                key={profileBot.id}
+                bot={profileBot}
+                pref={avatarFor(profileBot.id)}
+                onBack={() => setProfileId(null)}
+                onEdit={() => setEditing(profileBot)}
+                onShare={() => setModal({ kind: "share", bot: profileBot })}
+              />
+            )}
           </div>
           <div className="form-overlay" aria-hidden={!editing}>
             {editing && (

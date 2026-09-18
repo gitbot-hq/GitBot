@@ -399,6 +399,216 @@
   color: var(--faint);
 }
 
+/* Bot profile: slides over the tray like the studio. Back on top,
+   generative cover, overlapping avatar, facts, three actions. */
+.v2 .profile-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transform: translateX(100%);
+  visibility: hidden;
+  transition:
+    transform var(--duration-slow) ease,
+    visibility 0s linear var(--duration-slow);
+}
+
+.v2 .tray.profile-open .profile-overlay {
+  transform: none;
+  visibility: visible;
+  transition:
+    transform var(--duration-slow) ease,
+    visibility 0s;
+}
+
+.v2 .profile-pane {
+  min-width: 0;
+  overflow-y: auto;
+  padding: 22px var(--space-6) var(--space-12);
+}
+
+.v2 .profile-pane-inner {
+  max-width: 880px;
+  margin-inline: auto;
+}
+
+.v2 .profile-cover-wrap {
+  position: relative;
+  margin-top: var(--space-3);
+  margin-inline: calc(-1 * var(--space-3));
+}
+
+.v2 .profile-cover {
+  aspect-ratio: 4 / 1;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.v2 .profile-cover::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    120% 90% at 20% 0%,
+    rgb(255 255 255 / 0.35),
+    transparent 55%
+  );
+}
+
+.v2 .profile-avatar {
+  position: absolute;
+  /* matches the wrap's bleed so the tile sits flush with the column */
+  left: var(--space-3);
+  bottom: -30px;
+  padding: 10px;
+  background: #fff;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.18);
+}
+
+.v2 .profile-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: 42px 0 0;
+}
+
+.v2 .profile-head h2 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-2xl);
+  letter-spacing: -0.02em;
+}
+
+.v2 .profile-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-md);
+}
+
+.v2 .profile-head .profile-acts {
+  flex: none;
+  margin-top: 0;
+}
+
+.v2 .profile-meta {
+  margin: var(--space-5) 0 0;
+}
+
+.v2 .profile-meta > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.v2 .profile-meta dt {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.v2 .profile-meta dd {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-weight: 550;
+}
+
+.v2 .profile-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+
+.v2 .profile-head .profile-acts {
+  flex: none;
+  margin-top: 0;
+  justify-content: flex-end;
+}
+
+.v2 .profile-loading {
+  margin-top: var(--space-5);
+}
+
+.v2 .profile-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: var(--space-6);
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.v2 .profile-stats > div {
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+  text-align: center;
+}
+
+.v2 .profile-stats b {
+  font-size: var(--text-lg);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.v2 .profile-stats span {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.v2 .profile-contrib {
+  display: flex;
+  gap: 3px;
+  margin-top: var(--space-4);
+}
+
+.v2 .contrib-col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: grid;
+  grid-template-rows: repeat(7, 1fr);
+  gap: 3px;
+}
+
+.v2 .contrib-col i {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 3px;
+}
+
+.v2 .contrib-blank {
+  visibility: hidden;
+}
+
+.v2 .profile-contrib-legend {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  margin: var(--space-2) 0 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.v2 .profile-contrib-legend i {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+}
+
 /* Mascot desync: rail instances mount together, so the shared blink/gaze
    cycles start in lockstep. Negative delays drop each position into a
    different point of the same cycle. (JS activity cycles are staggered

@@ -46,6 +46,8 @@ export type ThreadFull = Thread & {
 export type HistoryBlock = {
   type: string;
   text?: string;
+  tool_name?: string;
+  tool_input?: unknown;
 };
 
 export type HistoryMsg = {

@@ -690,7 +690,10 @@ pre {
 }
 
 .tool-chip {
-  display: inline-block;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
   margin: var(--space-2) var(--space-1) 0 0;
   padding: 2px var(--space-2);
   background: var(--surface-2);
@@ -699,6 +702,13 @@ pre {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: var(--muted);
+}
+
+.tool-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .chat-error {
@@ -2125,6 +2135,322 @@ pre {
 /* Tool chips pop in, staggered */
 .tool-chip {
   animation: chip-in 180ms var(--ease-out) backwards;
+}
+
+/* Activity rows: 28px, icon swapping to a chevron on hover/open,
+   medium label, key detail in an inline mono chip. Breathing room
+   around prose handled below. */
+.act-row {
+  margin: 2px 0;
+  animation: msg-in 220ms var(--ease-out);
+}
+
+.bubble.assistant > .md + .act-row,
+.bubble.assistant > .run-card {
+  margin-top: 18px;
+}
+
+.bubble.assistant > .act-row + .md,
+.bubble.assistant > .run-card + .md {
+  margin-top: 12px;
+}
+
+.act-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 28px;
+  margin-inline: -6px;
+  padding-inline: 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+button.act-head:hover {
+  background: var(--surface-2);
+}
+
+div.act-head {
+  cursor: default;
+}
+
+.act-icon {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+}
+
+.act-glyph {
+  display: grid;
+  place-items: center;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.act-swap {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  transform: rotate(-90deg);
+  transition:
+    opacity 150ms var(--ease-out),
+    transform 150ms var(--ease-out);
+}
+
+button.act-head:hover .act-glyph,
+.act-icon.open .act-glyph {
+  opacity: 0;
+}
+
+button.act-head:hover .act-swap,
+.act-icon.open .act-swap {
+  opacity: 1;
+  transform: none;
+}
+
+.act-chev {
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.act-chev.open {
+  transform: rotate(180deg);
+}
+
+.act-name {
+  flex: none;
+  color: var(--text);
+  font-weight: 550;
+}
+
+.act-chip {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px var(--space-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.act-items {
+  display: grid;
+  gap: 2px;
+  margin: 2px 0 2px var(--space-2);
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+}
+
+.act-item {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+/* Turn summary line removed — receipts live in the run card now. */
+
+/* Run card: end-of-turn consolidation. Collapsed header, rows + file
+   chips behind a grid-rows disclosure. */
+.run-card {
+  margin-top: 16px;
+}
+
+.run-head {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.run-head:hover {
+  color: var(--text);
+}
+
+.run-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 280ms var(--ease-out),
+    opacity 200ms var(--ease-out),
+    visibility 0s linear 280ms;
+  visibility: hidden;
+}
+
+.run-body.open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    grid-template-rows 280ms var(--ease-out),
+    opacity 200ms var(--ease-out),
+    visibility 0s;
+}
+
+.run-clip {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.file-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.file-label {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 550;
+}
+
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 28px;
+  max-width: 100%;
+  overflow: hidden;
+  padding-inline: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  cursor: default;
+  transition: border-color var(--duration-fast) var(--ease-out);
+  animation: msg-in 250ms var(--ease-out) backwards;
+}
+
+button.file-chip {
+  cursor: pointer;
+  font: inherit;
+}
+
+button.file-chip:hover {
+  border-color: var(--faint);
+}
+
+.file-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Hover preview: the calls behind a file, flipped to fit. Lives in a
+   body portal above everything. */
+.diff-preview {
+  position: fixed;
+  z-index: 70;
+  width: 288px;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.25);
+  animation: msg-in 160ms var(--ease-out);
+}
+
+.diff-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.diff-preview-head span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.diff-preview-body {
+  padding: 4px 0;
+}
+
+.diff-preview-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 3px 10px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.diff-preview-row svg {
+  flex: none;
+}
+
+.diff-preview-row span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Jump to latest: floats over the chat while unscrolled. */
+.chat {
+  position: relative;
+}
+
+.jump-latest {
+  position: absolute;
+  right: var(--space-6);
+  bottom: 104px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.18);
+  font-size: var(--text-sm);
+  font-weight: 550;
+  cursor: pointer;
+  animation: msg-in 200ms var(--ease-out);
+}
+
+.jump-latest:hover {
+  border-color: var(--faint);
 }
 
 /* Per-reply actions: muted icons, container on hover */
