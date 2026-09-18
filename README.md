@@ -27,8 +27,7 @@ Frontend dev: `npm run dev` (`:3000`). `npx tsc --noEmit` must stay clean.
 
 | Route | What |
 |---|---|
-| `/` | Main page (v2). Shows onboarding when the user has no bots |
-| `/v2` | Same app (alias kept live) |
+| `/` | Main page. Shows onboarding when the user has no bots |
 | `/blank` | Previous build (light/dark system theme) |
 | `/onboarding` | Standalone first-run route (same flow as the empty state) |
 | `/bot-maker` | Character-studio playground (bot-maker system demo, internal) |
@@ -36,8 +35,8 @@ Frontend dev: `npm run dev` (`:3000`). `npx tsc --noEmit` must stay clean.
 
 ## Key files
 
-- `app/blank/page.tsx`, `app/v2/page.tsx` — app shells (bots sidebar +
-  threads + chat/tray). v2 theme in `app/v2/v2-theme.css`.
+- `app/components/app-shell.tsx` — the app shell (bots sidebar +
+  threads + chat/tray). Theme in `app/v2-theme.css`.
 - `app/components/chat.tsx` — live chat (SSE, typewriter reveal because the
   server emits whole messages, approvals, markdown).
 - `app/lib/api.ts` — backend adapter (incl. `browse()` folder picker,
@@ -51,7 +50,7 @@ Frontend dev: `npm run dev` (`:3000`). `npx tsc --noEmit` must stay clean.
 - `app/components/mascot-depth.{tsx,css}` — subtle 3D shading as an SVG
   filter applied to body art only (faces stay crisp).
 - `app/lib/avatar-prefs.ts` — localStorage avatar picks (frontend-only).
-- `app/v2/theme-button.tsx` + `TopBar actions` slot — light/dark switch.
+- `app/components/theme-button.tsx` + `TopBar actions` slot — light/dark switch.
 - `BRANDING.md` — palette/tokens source of truth. `AGENTS.md` — agent rules.
 
 ## Mascots: two generations

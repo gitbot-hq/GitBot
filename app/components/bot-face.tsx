@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import BotMascot from "./bot-maker/BotMascot";
-import { bodies } from "./bot-maker/registry";
+import { activityExpressions, bodies } from "./bot-maker/registry";
 import type { AvatarMascot } from "../lib/avatar-prefs";
 
 // Ambient behavior (our own director; the bot-maker motion system is
@@ -19,9 +19,14 @@ function dimsFor(id: string): { w: number; h: number } {
   return { w: w || 1, h: h || 1 };
 }
 
-function useMood(ambient: boolean, cheer: boolean) {
+function useMood(ambient: boolean, cheer: boolean, phase: number) {
   const [sleeping, setSleeping] = useState(false);
   const [hovering, setHovering] = useState(false);
+  // Staggered release: instances mounted together hold different starting
+  // expressions, then join the activity cycle offset — same period, so the
+  // offset (and the sleep-timer stagger below) persists instead of
+  // reconverging.
+  const [released, setReleased] = useState(() => !phase);
   const sleepTimer = useRef(0);
 
   const poke = useCallback(() => {
@@ -32,9 +37,19 @@ function useMood(ambient: boolean, cheer: boolean) {
   }, [ambient]);
 
   useEffect(() => {
-    poke();
-    return () => clearTimeout(sleepTimer.current);
-  }, [poke]);
+    // Arm the sleep watch late per instance so rails don't doze as one.
+    const arm = window.setTimeout(poke, phase * 1700);
+    return () => {
+      clearTimeout(arm);
+      clearTimeout(sleepTimer.current);
+    };
+  }, [poke, phase]);
+
+  useEffect(() => {
+    if (released || !phase) return;
+    const t = window.setTimeout(() => setReleased(true), phase * 1700);
+    return () => clearTimeout(t);
+  }, [phase, released]);
 
   // External cheer (e.g. hovering the bot's row) holds a smile and wakes.
   useEffect(() => {
@@ -52,6 +67,7 @@ function useMood(ambient: boolean, cheer: boolean) {
     activity: (sleeping ? "sleeping" : "idle") as "idle" | "sleeping",
     happy: cheer || hovering,
     reduced,
+    released,
     onEnter() {
       setHovering(true);
       poke();
@@ -74,6 +90,7 @@ export default function BotFace({
   follow = false,
   still = false,
   duration = 420,
+  phase = 0,
 }: {
   mascot: AvatarMascot;
   color: string;
@@ -87,10 +104,22 @@ export default function BotFace({
   still?: boolean;
   /** Geometry morph time in ms (bot-maker clamps 120–2000). */
   duration?: number;
+  /** Stagger index: holds a different starting expression and arms sleep
+   *  late, so instances mounted together never move as one. Default 0
+   *  preserves existing behavior exactly. */
+  phase?: number;
 }) {
-  const mood = useMood(ambient, cheer);
+  const mood = useMood(ambient, cheer, phase);
   const motion = mood.reduced ? false : !still;
-  const expression = mood.happy ? "happy" : still ? "neutral" : undefined;
+  const seq = activityExpressions[mood.activity] ?? activityExpressions.idle;
+  const holdExpr = seq[phase % seq.length];
+  const expression = mood.happy
+    ? "happy"
+    : !mood.released
+      ? holdExpr
+      : still
+        ? "neutral"
+        : undefined;
   // Fit tall bodies inside the square box by width.
   const { w, h } = dimsFor(mascot);
   const fitWidth = Math.round(size * Math.min(1, w / h));

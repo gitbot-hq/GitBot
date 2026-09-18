@@ -398,3 +398,31 @@
 .v2 .search-box input::placeholder {
   color: var(--faint);
 }
+
+/* Mascot desync: rail instances mount together, so the shared blink/gaze
+   cycles start in lockstep. Negative delays drop each position into a
+   different point of the same cycle. (JS activity cycles are staggered
+   separately via BotFace `phase`.) */
+.v2 .bot-list > :nth-child(4n + 2) .bot-mascot[data-motion="true"] .bm-eyes {
+  animation-delay: -2.4s;
+}
+
+.v2 .bot-list > :nth-child(4n + 2) .bot-mascot .bm-gaze {
+  animation-delay: -3.1s;
+}
+
+.v2 .bot-list > :nth-child(4n + 3) .bot-mascot[data-motion="true"] .bm-eyes {
+  animation-delay: -4.8s;
+}
+
+.v2 .bot-list > :nth-child(4n + 3) .bot-mascot .bm-gaze {
+  animation-delay: -6.2s;
+}
+
+.v2 .bot-list > :nth-child(4n + 4) .bot-mascot[data-motion="true"] .bm-eyes {
+  animation-delay: -6s;
+}
+
+.v2 .bot-list > :nth-child(4n + 4) .bot-mascot .bm-gaze {
+  animation-delay: -9.3s;
+}

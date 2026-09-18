@@ -1,6 +1,6 @@
-import V2 from "./v2/page";
+import AppShell from "./components/app-shell";
 
-// Home is v2. (/v2 renders the same component; both stay live.)
+// Home is the app.
 export default function Home() {
-  return <V2 />;
+  return <AppShell />;
 }

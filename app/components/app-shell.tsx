@@ -10,17 +10,17 @@ import {
   IconPlus,
   IconSearch,
 } from "@tabler/icons-react";
-import Chat from "../components/chat";
-import NewBotButton from "../components/new-bot-button";
-import BotForm from "../components/bot-form";
-import ThreadPanel from "../components/thread-panel";
-import OnboardingFlow from "../components/onboarding-flow";
+import Chat from "./chat";
+import NewBotButton from "./new-bot-button";
+import BotForm from "./bot-form";
+import ThreadPanel from "./thread-panel";
+import OnboardingFlow from "./onboarding-flow";
 import ThemeButton from "./theme-button";
-import { ImportModal, ShareModal } from "../components/share-modals";
-import { useToast } from "../components/toast";
-import BotFace from "../components/bot-face";
-import { botTile } from "../components/bot-avatar";
-import TopBar from "../components/top-bar";
+import { ImportModal, ShareModal } from "./share-modals";
+import { useToast } from "./toast";
+import BotFace from "./bot-face";
+import { botTile } from "./bot-avatar";
+import TopBar from "./top-bar";
 import {
   botSetupAction,
   createBot,
@@ -29,7 +29,7 @@ import {
 } from "../lib/api";
 import { getAvatarPref, setAvatarPref, resolveAvatar, defaultMascotFor, type AvatarPref } from "../lib/avatar-prefs";
 import type { Bot, ThreadFull } from "../lib/gitbot";
-import "./v2-theme.css";
+import "../v2-theme.css";
 import "../onboarding/onboarding.css";
 
 const DEFAULT_WIDTH = 260;
@@ -547,7 +547,7 @@ export default function V2() {
             </div>
           ) : (
             <div className="bot-list">
-              {visibleBots.map((b) => (
+              {visibleBots.map((b, i) => (
                 <button
                   key={b.id}
                   type="button"
@@ -558,7 +558,7 @@ export default function V2() {
                   aria-current={b.id === bot?.id ? "true" : undefined}
                 >
                   <span className="mascot-wrap">
-                    <BotFace mascot={avatarFor(b.id).mascot} size={44} color={avatarFor(b.id).color} cheer={hoverId === b.id} duration={240} />
+                    <BotFace mascot={avatarFor(b.id).mascot} size={44} color={avatarFor(b.id).color} cheer={hoverId === b.id} duration={240} phase={i} />
                   </span>
                   <span className="bot-row-text">
                     <b>{b.name}</b>
