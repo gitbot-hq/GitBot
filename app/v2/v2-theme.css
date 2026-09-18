@@ -398,38 +398,3 @@
 .v2 .search-box input::placeholder {
   color: var(--faint);
 }
-
-/* Mascot blink desync: every instance mounts together, so the shared
-   float/blink/gaze cycles start in lockstep and the whole rail blinks as
-   one. Negative delays drop each position into a different point of the
-   same cycle — each mascot keeps its own choreography, the sync breaks.
-   Position-based (not per-bot), scoped to v2 surfaces only. */
-.v2 .bot-list > :nth-child(4n + 2) .mascot .mascot-idle,
-.v2 .bot-list > :nth-child(4n + 2) .mascot .mascot-blink,
-.v2 .bot-list > :nth-child(4n + 2) .mascot .pupil,
-.v2 .pick-grid > :nth-child(4n + 2) .mascot .mascot-idle,
-.v2 .pick-grid > :nth-child(4n + 2) .mascot .mascot-blink,
-.v2 .pick-grid > :nth-child(4n + 2) .mascot .pupil {
-  animation-delay: -1.7s;
-}
-
-.v2 .bot-list > :nth-child(4n + 3) .mascot .mascot-idle,
-.v2 .bot-list > :nth-child(4n + 3) .mascot .mascot-blink,
-.v2 .bot-list > :nth-child(4n + 3) .mascot .pupil,
-.v2 .pick-grid > :nth-child(4n + 3) .mascot .mascot-idle,
-.v2 .pick-grid > :nth-child(4n + 3) .mascot .mascot-blink,
-.v2 .pick-grid > :nth-child(4n + 3) .mascot .pupil,
-.v2 .studio-preview .mascot .mascot-idle,
-.v2 .studio-preview .mascot .mascot-blink,
-.v2 .studio-preview .mascot .pupil {
-  animation-delay: -3.4s;
-}
-
-.v2 .bot-list > :nth-child(4n + 4) .mascot .mascot-idle,
-.v2 .bot-list > :nth-child(4n + 4) .mascot .mascot-blink,
-.v2 .bot-list > :nth-child(4n + 4) .mascot .pupil,
-.v2 .pick-grid > :nth-child(4n + 4) .mascot .mascot-idle,
-.v2 .pick-grid > :nth-child(4n + 4) .mascot .mascot-blink,
-.v2 .pick-grid > :nth-child(4n + 4) .mascot .pupil {
-  animation-delay: -5.1s;
-}

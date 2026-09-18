@@ -27,12 +27,12 @@ Frontend dev: `npm run dev` (`:3000`). `npx tsc --noEmit` must stay clean.
 
 | Route | What |
 |---|---|
-| `/` | Archived prototype — don't touch |
-| `/blank` | Main build (light/dark system theme) |
-| `/v2` | Current focus: dark card restyle of blank + full light mode |
-| `/onboarding` | First-run hero (mascot, explainer carousel, studio/import) |
+| `/` | Main page (v2). Shows onboarding when the user has no bots |
+| `/v2` | Same app (alias kept live) |
+| `/blank` | Previous build (light/dark system theme) |
+| `/onboarding` | Standalone first-run route (same flow as the empty state) |
 | `/bot-maker` | Character-studio playground (bot-maker system demo, internal) |
-| `/mascots`, `/mascot`, `/mascot-lab`, `/cta` | Internal demos, not public |
+| `/mascot-lab`, `/cta` | Internal demos, not public |
 
 ## Key files
 

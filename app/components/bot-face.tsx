@@ -73,6 +73,7 @@ export default function BotFace({
   cheer = false,
   follow = false,
   still = false,
+  duration = 420,
 }: {
   mascot: AvatarMascot;
   color: string;
@@ -84,6 +85,8 @@ export default function BotFace({
   follow?: boolean;
   /** Pose neutral and still (picker tiles). Preview + rail stay live. */
   still?: boolean;
+  /** Geometry morph time in ms (bot-maker clamps 120–2000). */
+  duration?: number;
 }) {
   const mood = useMood(ambient, cheer);
   const motion = mood.reduced ? false : !still;
@@ -106,6 +109,7 @@ export default function BotFace({
         expression={expression}
         activity={mood.activity}
         motion={motion}
+        duration={duration}
       />
     </span>
   );

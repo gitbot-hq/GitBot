@@ -274,7 +274,11 @@ export function LogoMark({ height = 40 }: { height?: number }) {
       aria-label="GitBot mascot"
       className="logo-mark"
     >
-      <MascotArt frame={frame} f={f} />
+      {/* Depth shading (same filter as the mascots): top light, bottom
+          shade. Eyes are white/dark, so only the body visibly models. */}
+      <g style={{ filter: "url(#mascot-depth)" }}>
+        <MascotArt frame={frame} f={f} />
+      </g>
       <MascotDefs f={f} />
     </svg>
   );

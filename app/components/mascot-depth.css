@@ -1,14 +1,7 @@
 /* Mascot depth: subtle top-light + bottom-shade inside the body
-   silhouette for a hint of 3D. Every rule stays scoped under `.mascot`
-   per the mascot contract — the provided motion system (mascots.css) is
-   untouched.
-   Only the direct body group is shaded, so overlapping body shapes render
-   as one silhouette (no seams) and the eye layers keep their crisp flat
-   ink. The outer drop-shadow still comes from `.bot-avatar svg`. */
-
-.mascot .mascot-idle > .mascot-body {
-  filter: url(#mascot-depth);
-}
+   silhouette for a hint of 3D. Applies to the bot-maker bodies; the
+   morphed face is separate DOM and stays crisp. The outer drop-shadow
+   still comes from `.bot-avatar svg`. */
 
 /* New bodies (bot-maker): same filter on the body SVG only. The morphed
    face is separate DOM (an HTML-anchored overlay), so it stays crisp —

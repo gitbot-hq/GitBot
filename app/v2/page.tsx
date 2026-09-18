@@ -14,6 +14,7 @@ import Chat from "../components/chat";
 import NewBotButton from "../components/new-bot-button";
 import BotForm from "../components/bot-form";
 import ThreadPanel from "../components/thread-panel";
+import OnboardingFlow from "../components/onboarding-flow";
 import ThemeButton from "./theme-button";
 import { ImportModal, ShareModal } from "../components/share-modals";
 import { useToast } from "../components/toast";
@@ -29,6 +30,7 @@ import {
 import { getAvatarPref, setAvatarPref, resolveAvatar, defaultMascotFor, type AvatarPref } from "../lib/avatar-prefs";
 import type { Bot, ThreadFull } from "../lib/gitbot";
 import "./v2-theme.css";
+import "../onboarding/onboarding.css";
 
 const DEFAULT_WIDTH = 260;
 const COLLAPSED_WIDTH = 96;
@@ -423,6 +425,21 @@ export default function V2() {
     toast(message);
   }
 
+  // No bots yet (and done loading, no error): first run. The onboarding
+  // flow takes the whole page; creating or importing reloads bots and
+  // lands in the app with the new bot selected.
+  if (!botsLoading && !botsError && bots.length === 0) {
+    return (
+      <div className="page v2">
+        <TopBar actions={<ThemeButton />} />
+        <div className="page-body">
+          <OnboardingFlow onDone={loadBots} />
+        </div>
+        {toastView}
+      </div>
+    );
+  }
+
   return (
     <div className="page v2">
       <TopBar actions={<ThemeButton />} />
@@ -541,7 +558,7 @@ export default function V2() {
                   aria-current={b.id === bot?.id ? "true" : undefined}
                 >
                   <span className="mascot-wrap">
-                    <BotFace mascot={avatarFor(b.id).mascot} size={44} color={avatarFor(b.id).color} cheer={hoverId === b.id} />
+                    <BotFace mascot={avatarFor(b.id).mascot} size={44} color={avatarFor(b.id).color} cheer={hoverId === b.id} duration={240} />
                   </span>
                   <span className="bot-row-text">
                     <b>{b.name}</b>
