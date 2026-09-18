@@ -41,6 +41,12 @@ const BODY_LABELS: Record<string, string> = Object.fromEntries(
   bodies.map((b) => [b.id, b.label]),
 );
 
+const AGENT_OPTIONS = [
+  { id: "claude-code", label: "Claude Code" },
+  { id: "codex", label: "Codex" },
+  { id: "opencode", label: "OpenCode" },
+];
+
 function fallbackPref(id: string): AvatarPref {
   return {
     mascot: defaultMascotFor(id),
@@ -75,7 +81,7 @@ export default function BotForm({
   const [repoPath, setRepoPath] = useState(bot ? bot.repoPath || "" : "");
   const [model, setModel] = useState(bot ? bot.model || "" : "");
   const [permissionMode, setPermissionMode] = useState(
-    bot ? bot.permissionMode : "ask-permissions",
+    bot ? bot.permissionMode : "auto-approve",
   );
   const [allowedTools, setAllowedTools] = useState(
     bot && bot.allowedTools ? bot.allowedTools.join(", ") : "",
@@ -239,11 +245,20 @@ export default function BotForm({
             />
           </Field>
           <Field label="Agent" tip="the coding harness that runs this bot">
-            <select value={agent} onChange={(e) => setAgent(e.target.value)}>
-              <option value="claude-code">Claude Code</option>
-              <option value="codex">Codex</option>
-              <option value="opencode">OpenCode</option>
-            </select>
+            <div className="seg-row" role="radiogroup" aria-label="Agent">
+              {AGENT_OPTIONS.map((a) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={a.id === agent}
+                  className={a.id === agent ? "seg-btn selected" : "seg-btn"}
+                  onClick={() => setAgent(a.id)}
+                >
+                  {a.label}
+                </button>
+              ))}
+            </div>
           </Field>
           <Field label="Instructions" tip="appended to the selected agent's system prompt">
             <textarea
@@ -259,37 +274,34 @@ export default function BotForm({
               <option value="plan">Plan only (no edits)</option>
             </select>
           </Field>
-          <details className="advanced">
-            <summary>Advanced</summary>
-            <Field label="Setup instructions" tip="run once per machine — blank means no setup">
-              <textarea
-                value={setupInstructions}
-                onChange={(e) => setSetupInstructions(e.target.value)}
-                placeholder="This bot needs ffmpeg on PATH. Check for it and install it with the machine's package manager if it is missing."
-              />
-            </Field>
-            <Field label="Working directory" tip="default for new threads">
-              <input
-                value={repoPath}
-                onChange={(e) => setRepoPath(e.target.value)}
-                placeholder="blank uses the server's directory"
-              />
-            </Field>
-            <Field label="Model" tip="optional">
-              <input
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder="claude-sonnet-4-6"
-              />
-            </Field>
-            <Field label="Allowed tools" tip="comma-separated; blank means all">
-              <input
-                value={allowedTools}
-                onChange={(e) => setAllowedTools(e.target.value)}
-                placeholder="Read, Grep, Edit, Bash"
-              />
-            </Field>
-          </details>
+          <Field label="Setup instructions" tip="run once per machine — blank means no setup">
+            <textarea
+              value={setupInstructions}
+              onChange={(e) => setSetupInstructions(e.target.value)}
+              placeholder="This bot needs ffmpeg on PATH. Check for it and install it with the machine's package manager if it is missing."
+            />
+          </Field>
+          <Field label="Working directory" tip="default for new threads">
+            <input
+              value={repoPath}
+              onChange={(e) => setRepoPath(e.target.value)}
+              placeholder="blank uses the server's directory"
+            />
+          </Field>
+          <Field label="Model" tip="optional">
+            <input
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder="claude-sonnet-4-6"
+            />
+          </Field>
+          <Field label="Allowed tools" tip="comma-separated; blank means all">
+            <input
+              value={allowedTools}
+              onChange={(e) => setAllowedTools(e.target.value)}
+              placeholder="Read, Grep, Edit, Bash"
+            />
+          </Field>
           {error && <p className="chat-error">{error}</p>}
           <div className="acts">
             {editing && bot && (
