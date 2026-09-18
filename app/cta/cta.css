@@ -1,0 +1,269 @@
+/* CTA state matrix. Class-only selectors; page-scoped. */
+
+.cta-page {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--text);
+  padding: 48px 32px 64px;
+}
+
+.cta-head {
+  max-width: 880px;
+  margin: 0 auto 8px;
+}
+
+.cta-eyebrow {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cta-head h1 {
+  margin: 0 0 8px;
+  font-size: var(--text-2xl);
+  letter-spacing: -0.02em;
+}
+
+.cta-sub {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.cta-group {
+  max-width: 880px;
+  margin: 32px auto 16px;
+  font-size: var(--text-sm);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  max-width: 880px;
+  margin: 0 auto;
+}
+
+.cta-card {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  padding: 32px 20px 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
+
+.cta-stage {
+  display: grid;
+  place-items: center;
+  min-height: 56px;
+  margin-bottom: 8px;
+}
+
+.cta-card b {
+  font-size: var(--text-sm);
+}
+
+.cta-card small {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+/* Primary: theme-flipped — near-black on light, white on dark */
+.cta-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 22px;
+  background: var(--text);
+  color: var(--bg);
+  border: 0;
+  border-radius: 12px;
+  font-size: var(--text-md);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    transform 160ms var(--ease-out),
+    box-shadow 160ms var(--ease-out),
+    opacity 160ms var(--ease-out);
+}
+
+.cta-primary:hover,
+.cta-primary.force-hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.22);
+}
+
+.cta-primary:active {
+  transform: scale(0.97);
+  box-shadow: none;
+}
+
+.cta-primary:focus-visible,
+.cta-primary.force-focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.cta-primary:disabled {
+  opacity: 0.45;
+  cursor: default;
+  transform: none;
+  box-shadow: none;
+}
+
+.cta-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation:
+    cta-spin 0.7s linear infinite,
+    cta-pop 200ms var(--ease-out);
+}
+
+@keyframes cta-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes cta-pop {
+  from {
+    opacity: 0;
+    scale: 0.5;
+  }
+}
+
+/* Loading demo: width breathes via max-width, content crossfades */
+.cta-loading-demo {
+  justify-content: center;
+  overflow: hidden;
+  white-space: nowrap;
+  max-width: 170px;
+  transition:
+    max-width 250ms var(--ease-out),
+    transform 160ms var(--ease-out),
+    box-shadow 160ms var(--ease-out),
+    opacity 160ms var(--ease-out);
+}
+
+.cta-loading-demo:disabled {
+  opacity: 1;
+  cursor: wait;
+  max-width: 250px;
+}
+
+.cta-loading-demo .cta-spinner {
+  animation:
+    cta-spin 0.7s linear infinite,
+    cta-slide-in 250ms var(--ease-out);
+}
+
+.cta-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  animation: cta-fade 200ms var(--ease-out);
+}
+
+@keyframes cta-fade {
+  from {
+    opacity: 0;
+    translate: 0 4px;
+  }
+}
+
+@keyframes cta-slide-in {
+  from {
+    opacity: 0;
+    translate: -8px 0;
+  }
+}
+
+.cta-secondary {
+  padding: 11px 22px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: var(--text-md);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color 140ms var(--ease-out),
+    transform 160ms var(--ease-out);
+}
+
+.cta-secondary:hover {
+  border-color: var(--faint);
+}
+
+.cta-secondary:active {
+  transform: scale(0.97);
+}
+
+.cta-ghost {
+  padding: 11px 22px;
+  background: transparent;
+  border: 0;
+  border-radius: 12px;
+  color: var(--muted);
+  font-size: var(--text-md);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 140ms var(--ease-out),
+    color 140ms var(--ease-out),
+    transform 160ms var(--ease-out);
+}
+
+.cta-ghost:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.cta-ghost:active {
+  transform: scale(0.97);
+}
+
+.cta-danger {
+  padding: 11px 22px;
+  background: var(--danger);
+  color: #fff;
+  border: 0;
+  border-radius: 12px;
+  font-size: var(--text-md);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    filter 140ms var(--ease-out),
+    transform 160ms var(--ease-out);
+}
+
+.cta-danger:hover {
+  filter: brightness(1.08);
+}
+
+.cta-danger:active {
+  transform: scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cta-spinner {
+    animation: none;
+    border-top-color: currentColor;
+    opacity: 0.6;
+  }
+}

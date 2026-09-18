@@ -67,18 +67,42 @@ function RichText({ text }: { text: string }) {
 
 // Live chat: history in, SSE turn streaming, approvals inline.
 // Talks to the server only through app/lib/api.ts.
+
+// Loading state shaped like the conversation replacing it: user bubbles
+// right, assistant lines left. Bars reuse .skel i (shimmer +
+// reduced-motion handling) — only the exchange layout lives here.
+function ChatSkeleton({ label }: { label: string }) {
+  return (
+    <div className="skel chat-skel" aria-label={label} aria-hidden="true">
+      <i className="chat-skel-user" style={{ width: "38%" }} />
+      <i style={{ width: "96%" }} />
+      <i style={{ width: "82%" }} />
+      <i style={{ width: "64%" }} />
+      <i className="chat-skel-user" style={{ width: "27%" }} />
+      <i style={{ width: "91%" }} />
+      <i style={{ width: "57%" }} />
+    </div>
+  );
+}
 export default function Chat({
   thread,
   botName,
   autoSend,
   onAutoSent,
   onTurnDone,
+  onWorkingChange,
+  booting,
 }: {
   thread: ThreadFull | null;
   botName: string;
   autoSend: string | null;
   onAutoSent: () => void;
   onTurnDone: () => void;
+  onWorkingChange?: (working: boolean) => void;
+  /** True while the app is still loading bots/threads on boot. Shows a
+   *  skeleton instead of the empty-thread copy, so the first paint never
+   *  flashes placeholder text. Defaults to false (old behavior). */
+  booting?: boolean;
 }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [loading, setLoading] = useState(false);
@@ -207,6 +231,11 @@ export default function Chat({
     sendPrompt(autoSend);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread?.id, autoSend, loading, streaming, msgs.length]);
+
+  // Report turn activity upward so avatars can react to work.
+  useEffect(() => {
+    onWorkingChange?.(streaming);
+  }, [streaming, onWorkingChange]);
 
   // Typewriter: reveal the live bubble a few chars at a time.
   useEffect(() => {
@@ -394,7 +423,11 @@ export default function Chat({
     return (
       <main className="chat" aria-label="Chat">
         <section className="chat-body">
-          <p className="chat-empty">Select a thread — or start one with +.</p>
+          {booting ? (
+            <ChatSkeleton label="Loading chat" />
+          ) : (
+            <p className="chat-empty">Select a thread — or start one with +.</p>
+          )}
         </section>
       </main>
     );
@@ -474,13 +507,7 @@ export default function Chat({
             ))}
           </article>
         )}
-        {loading && (
-          <div className="skel" aria-label="Loading history">
-            <i style={{ width: "88%" }} />
-            <i style={{ width: "64%" }} />
-            <i style={{ width: "76%" }} />
-          </div>
-        )}
+        {loading && <ChatSkeleton label="Loading history" />}
         {!loading && msgs.length === 0 && !historyError && (
           <p className="chat-empty">New thread. Say hello below.</p>
         )}
@@ -489,14 +516,14 @@ export default function Chat({
             <div key={p.toolUseID} className="perm-card">
               <b>Allow {p.toolName}?</b>
               <pre>{JSON.stringify(p.input, null, 2)}</pre>
-              <div className="perm-acts">
-                <button type="button" className="primary" onClick={() => answerPerm(p, true)}>
-                  Allow
-                </button>
-                <button type="button" onClick={() => answerPerm(p, false)}>
-                  Deny
-                </button>
-              </div>
+            <div className="perm-acts">
+              <button type="button" className="btn-primary" onClick={() => answerPerm(p, true)}>
+                Allow
+              </button>
+              <button type="button" className="btn-secondary" onClick={() => answerPerm(p, false)}>
+                Deny
+              </button>
+            </div>
             </div>
           ) : (
             <p key={p.toolUseID} className="perm-note">

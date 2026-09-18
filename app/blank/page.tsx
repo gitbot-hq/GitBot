@@ -4,28 +4,29 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   IconArrowBarToLeft,
   IconArrowBarToRight,
+  IconDownload,
   IconPencil,
   IconPlus,
 } from "@tabler/icons-react";
 import Chat from "../components/chat";
 import NewBotButton from "../components/new-bot-button";
 import BotForm from "../components/bot-form";
+import ThreadPanel from "../components/thread-panel";
 import { ImportModal, ShareModal } from "../components/share-modals";
 import { useToast } from "../components/toast";
-import StudioMascot, { STUDIO_VARIANTS } from "../components/studio-mascots";
-import { botColorIndex, botTile } from "../components/bot-avatar";
+import BotFace from "../components/bot-face";
+import { botTile } from "../components/bot-avatar";
 import TopBar from "../components/top-bar";
 import {
-  ApiError,
   botSetupAction,
   createBot,
-  createThread,
   getBots,
   getThreads,
 } from "../lib/api";
+import { getAvatarPref, setAvatarPref, resolveAvatar, defaultMascotFor, type AvatarPref } from "../lib/avatar-prefs";
 import type { Bot, ThreadFull } from "../lib/gitbot";
 
-const DEFAULT_WIDTH = 220;
+const DEFAULT_WIDTH = 260;
 const COLLAPSED_WIDTH = 84;
 const MIN_WIDTH = 180;
 const MAX_WIDTH = 420;
@@ -33,8 +34,11 @@ const THREADS_WIDTH = 248;
 const THREADS_MIN = 200;
 const THREADS_MAX = 480;
 
-function variantFor(id: string) {
-  return STUDIO_VARIANTS[botColorIndex(id) % STUDIO_VARIANTS.length];
+function avatarFor(id: string): AvatarPref {
+  return resolveAvatar(getAvatarPref(id), {
+    mascot: defaultMascotFor(id),
+    color: botTile(id),
+  });
 }
 
 function needsSetup(bot: Bot) {
@@ -51,9 +55,12 @@ export default function Blank() {
   const [threadsLoading, setThreadsLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [threadByBot, setThreadByBot] = useState<Record<string, string>>({});
+  const [hoverId, setHoverId] = useState<string | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   // Inline bot studio: replaces threads + chat while open.
   const [editing, setEditing] = useState<Bot | "new" | null>(null);
+  // New-thread folder picker: slides over the chat column only.
+  const [threadPanel, setThreadPanel] = useState(false);
   const [autoSend, setAutoSend] = useState<string | null>(null);
   const { toast, view: toastView } = useToast();
 
@@ -62,8 +69,10 @@ export default function Blank() {
   const [threadsDragging, setThreadsDragging] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [settled, setSettled] = useState(false);
-  // The + appears only after expand lands, never mid-flight.
-  const [plusVisible, setPlusVisible] = useState(true);
+  // Header icons fade in place and swap sets only while invisible, so
+  // rows never shift: nothing mounts/unmounts mid-travel.
+  const [iconSet, setIconSet] = useState<"full" | "solo">("full");
+  const [iconsDim, setIconsDim] = useState(false);
   const [dragging, setDragging] = useState(false);
   const startX = useRef(0);
   const startWidth = useRef(DEFAULT_WIDTH);
@@ -120,22 +129,33 @@ export default function Blank() {
     const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (!collapsed) {
       setCollapsed(true);
-      setPlusVisible(false);
+      setIconsDim(true);
       // Must match the sidebar travel duration (--duration-slow, 450ms).
-      // Settle only unmounts the (already faded) title — positions land
+      // Settle only swaps already-invisible structure — positions land
       // during the single width+padding motion, so nothing moves after.
       if (reduced) {
         setSettled(true);
+        setIconSet("solo");
+        setIconsDim(false);
       } else {
-        settleTimer.current = window.setTimeout(() => setSettled(true), 450);
+        settleTimer.current = window.setTimeout(() => {
+          setSettled(true);
+          setIconSet("solo");
+          setIconsDim(false);
+        }, 450);
       }
     } else {
       setSettled(false);
       setCollapsed(false);
+      setIconsDim(true);
       if (reduced) {
-        setPlusVisible(true);
+        setIconSet("full");
+        setIconsDim(false);
       } else {
-        settleTimer.current = window.setTimeout(() => setPlusVisible(true), 450);
+        settleTimer.current = window.setTimeout(() => {
+          setIconSet("full");
+          setIconsDim(false);
+        }, 450);
       }
     }
   }
@@ -201,27 +221,33 @@ export default function Blank() {
   );
 
   function newThread() {
-    if (!bot) return;
+    if (!bot || threadPanel) return;
     if (needsSetup(bot)) {
       toast(`Set up ${bot.name} on this machine first`);
       openSetup(bot.id);
       return;
     }
-    createThread(bot.id)
-      .then(({ thread }) => {
-        setThreads((prev) => [thread, ...prev]);
-        setThreadByBot((prev) => ({ ...prev, [bot.id]: thread.id }));
-      })
-      .catch((e) => {
-        // The server has the last word on whether setup is done.
-        if (e instanceof ApiError && e.extra?.setupRequired) {
-          toast(e.message);
-          refreshThreads(bot.id);
-          openSetup(bot.id);
-          return;
-        }
-        setThreadsError(e instanceof Error ? e.message : "Failed to create thread");
-      });
+    setThreadPanel(true);
+  }
+
+  function threadCreated(thread: ThreadFull) {
+    if (!bot) return;
+    setThreads((prev) => [thread, ...prev]);
+    setThreadByBot((prev) => ({ ...prev, [bot.id]: thread.id }));
+    setThreadPanel(false);
+  }
+
+  function threadSetupNeeded(message: string) {
+    if (!bot) return;
+    setThreadPanel(false);
+    toast(message);
+    refreshThreads(bot.id);
+    openSetup(bot.id);
+  }
+
+  function threadFailed(message: string) {
+    setThreadPanel(false);
+    toast(message);
   }
 
   /** Opens the setup thread (making one first if missing) and auto-sends
@@ -258,7 +284,8 @@ export default function Blank() {
   }
 
   /** Called right after a bot lands here, whether created or imported. */
-  function afterBotAdded(added: Bot) {
+  function afterBotAdded(added: Bot, pref: AvatarPref) {
+    setAvatarPref(added.id, pref);
     loadBots();
     setSelectedId(added.id);
     getThreads(added.id)
@@ -287,29 +314,47 @@ export default function Blank() {
             {!(collapsed && settled) && (
               <h2 className="side-title">Your bots</h2>
             )}
-            {plusVisible && (
+            <span className={iconsDim ? "head-icons dim" : "head-icons"}>
+            {iconSet === "solo" ? (
               <button
                 type="button"
-                className="collapse-btn fade-in"
+                className="collapse-btn fade-in-slow"
+                onClick={toggleCollapse}
+                aria-expanded={!collapsed}
+                aria-label="Expand sidebar"
+              >
+                <IconArrowBarToRight size={18} stroke={2} aria-hidden="true" />
+              </button>
+            ) : (
+              <>
+              <button
+                type="button"
+                className="collapse-btn"
+                onClick={toggleCollapse}
+                aria-expanded={!collapsed}
+                aria-label="Collapse sidebar"
+              >
+                <IconArrowBarToLeft size={18} stroke={2} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className="collapse-btn"
+                onClick={() => setModal({ kind: "import" })}
+                aria-label="Import a bot"
+              >
+                <IconDownload size={18} stroke={2} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className="collapse-btn"
                 aria-label="Add new bot"
                 onClick={() => setEditing("new")}
               >
                 <IconPlus size={18} stroke={2} aria-hidden="true" />
               </button>
+              </>
             )}
-            <button
-              type="button"
-              className="collapse-btn"
-              onClick={toggleCollapse}
-              aria-expanded={!collapsed}
-              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            >
-              {collapsed ? (
-                <IconArrowBarToRight size={18} stroke={2} aria-hidden="true" />
-              ) : (
-                <IconArrowBarToLeft size={18} stroke={2} aria-hidden="true" />
-              )}
-            </button>
+            </span>
           </div>
           {botsError ? (
             <p className="threads-empty">
@@ -326,10 +371,12 @@ export default function Blank() {
                   type="button"
                   className={b.id === bot?.id ? "bot-row selected" : "bot-row"}
                   onClick={() => setSelectedId(b.id)}
+                  onMouseEnter={() => setHoverId(b.id)}
+                  onMouseLeave={() => setHoverId((prev) => (prev === b.id ? null : prev))}
                   aria-current={b.id === bot?.id ? "true" : undefined}
                 >
                   <span className="mascot-wrap">
-                    <StudioMascot variant={variantFor(b.id)} size={44} color={botTile(b.id)} />
+                    <BotFace mascot={avatarFor(b.id).mascot} size={44} color={avatarFor(b.id).color} cheer={hoverId === b.id} />
                   </span>
                   <span className="bot-row-text">
                     <b>{b.name}</b>
@@ -353,15 +400,6 @@ export default function Blank() {
               {bots.length === 0 && <p className="threads-empty">Loading bots…</p>}
             </div>
           )}
-          {!(collapsed && settled) && (
-            <button
-              type="button"
-              className="ghost-row"
-              onClick={() => setModal({ kind: "import" })}
-            >
-              Import
-            </button>
-          )}
           {collapsed && settled && (
             <NewBotButton onClick={() => setEditing("new")} />
           )}
@@ -377,12 +415,13 @@ export default function Blank() {
             <BotForm
               bot={editing === "new" ? null : editing}
               onClose={() => setEditing(null)}
-              onSaved={(saved) => {
+              onSaved={(saved, pref) => {
                 if (editing === "new") {
                   setEditing(null);
-                  afterBotAdded(saved);
+                  afterBotAdded(saved, pref);
                 } else {
                   setEditing(null);
+                  setAvatarPref(saved.id, pref);
                   setBots((prev) => prev.map((b) => (b.id === saved.id ? saved : b)));
                 }
               }}
@@ -459,6 +498,7 @@ export default function Blank() {
             aria-hidden="true"
           />
         </aside>
+        <div className={threadPanel ? "chat-col panel-open" : "chat-col"}>
         <Chat
           thread={activeThread}
           botName={bot?.name ?? "bot"}
@@ -475,6 +515,19 @@ export default function Blank() {
             }
           }}
         />
+          <div className="thread-overlay" aria-hidden={!threadPanel}>
+            {threadPanel && bot && (
+              <ThreadPanel
+                key={bot.id}
+                bot={bot}
+                onClose={() => setThreadPanel(false)}
+                onCreated={threadCreated}
+                onSetupNeeded={threadSetupNeeded}
+                onError={threadFailed}
+              />
+            )}
+          </div>
+        </div>
           </>
         )}
       </div>
@@ -500,7 +553,7 @@ export default function Blank() {
                 ? (parsed.allowedTools as string[])
                 : undefined,
             }).then(
-              ({ bot: added }) => afterBotAdded(added),
+              ({ bot: added }) => afterBotAdded(added, { mascot: "ghost", color: "var(--brand-sun)" }),
               (e) => toast(e instanceof Error ? e.message : String(e)),
             );
           }}
@@ -546,12 +599,12 @@ function SetupBanner({
         )}
       </div>
       <div className="acts">
-        <button type="button" className="btn primary" onClick={onOpen}>
+        <button type="button" className="btn-primary" onClick={onOpen}>
           {setupThread && setupThread.messageCount ? "Open setup" : "Run setup"}
         </button>
         <button
           type="button"
-          className="btn"
+          className="btn-secondary"
           title="Use this if you sorted it out yourself"
           onClick={onDone}
         >

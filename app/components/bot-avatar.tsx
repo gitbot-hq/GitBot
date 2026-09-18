@@ -3,7 +3,7 @@ import MascotFigure, { EXPRESSION_KEYS } from "./mascot-art";
 
 // Brand tiles in BRANDING.md order. Assigned by stable hash of bot id —
 // color is identity, so it must be the same on every render and reload.
-const BRAND_TILES = [
+export const BRAND_TILES = [
   "var(--brand-sun)",
   "var(--brand-candy)",
   "var(--brand-ember)",

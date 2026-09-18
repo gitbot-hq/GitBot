@@ -50,11 +50,29 @@ export function getMessages(threadId: string) {
   );
 }
 
-export function createThread(botId: string) {
+export function createThread(botId: string, repoPath?: string) {
   return req<{ thread: import("./gitbot").ThreadFull }>("/threads", {
     method: "POST",
-    body: JSON.stringify({ botId }),
+    body: JSON.stringify(
+      repoPath ? { botId, repoPath } : { botId },
+    ),
   });
+}
+
+export type BrowseResult = {
+  path: string;
+  parent: string | null;
+  workspace: string;
+  home: string;
+  dirs: { name: string; path: string }[];
+};
+
+/** Subdirectories of `path` for the folder picker. Omit it to start at
+ *  the server's directory. Mirrors GET /browse on the live server. */
+export function browse(path?: string | null) {
+  return req<BrowseResult>(
+    path ? `/browse?path=${encodeURIComponent(path)}` : "/browse",
+  );
 }
 
 /** Starts a turn. Returns the session id to stream + abort + approve on. */

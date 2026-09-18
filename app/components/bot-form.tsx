@@ -1,31 +1,57 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { IconQuestionMark } from "@tabler/icons-react";
 import { createBot, deleteBot, patchBot, type BotInput } from "../lib/api";
 import type { Bot } from "../lib/gitbot";
+import { getAvatarPref, resolveAvatar, defaultMascotFor, type AvatarMascot, type AvatarPref } from "../lib/avatar-prefs";
+import { bodies } from "./bot-maker/registry";
+import { botTile, BRAND_TILES } from "./bot-avatar";
+import BotFace from "./bot-face";
 
 function Field({
   label,
-  hint,
+  tip,
   children,
 }: {
   label: string;
-  hint?: string | null;
+  tip?: string | null;
   children: React.ReactNode;
 }) {
   return (
     <div className="field">
       <label>
         {label}
-        {hint ? <span className="hint"> {hint}</span> : null}
+        {tip ? (
+          <span className="tip" tabIndex={0} aria-label={tip}>
+            <IconQuestionMark size={10} stroke={2.5} aria-hidden="true" />
+            <span className="tip-bubble" role="tooltip">
+              {tip}
+            </span>
+          </span>
+        ) : null}
       </label>
       {children}
     </div>
   );
 }
 
-// New bot / Edit bot as an inline studio pane (not a modal).
-// Labels, hints, and placeholders are the original's words verbatim.
+const MASCOT_OPTIONS = bodies.map((b) => b.id);
+const BODY_LABELS: Record<string, string> = Object.fromEntries(
+  bodies.map((b) => [b.id, b.label]),
+);
+
+function fallbackPref(id: string): AvatarPref {
+  return {
+    mascot: defaultMascotFor(id),
+    color: botTile(id),
+  };
+}
+
+// New bot / Edit bot as a two-panel studio: live preview with mascot +
+// color pickers on the left, a progressive form on the right (essentials
+// first, power settings behind Advanced). Labels, hints, and
+// placeholders are the original's words verbatim.
 export default function BotForm({
   bot,
   onClose,
@@ -35,7 +61,7 @@ export default function BotForm({
 }: {
   bot: Bot | null;
   onClose: () => void;
-  onSaved: (bot: Bot) => void;
+  onSaved: (bot: Bot, pref: AvatarPref) => void;
   onDeleted: (id: string) => void;
   onShare: (bot: Bot) => void;
 }) {
@@ -54,8 +80,48 @@ export default function BotForm({
   const [allowedTools, setAllowedTools] = useState(
     bot && bot.allowedTools ? bot.allowedTools.join(", ") : "",
   );
+  const [mascot, setMascot] = useState<AvatarMascot>(
+    () => (bot ? resolveAvatar(getAvatarPref(bot.id), fallbackPref(bot.id)).mascot : "ghost"),
+  );
+  const [color, setColor] = useState<string>(
+    () => (bot ? resolveAvatar(getAvatarPref(bot.id), fallbackPref(bot.id)).color : "var(--brand-sun)"),
+  );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const studioRef = useRef<HTMLDivElement | null>(null);
+
+  // Studio mascots watch the cursor: each followed face steers toward
+  // the pointer (capped travel, eased). Reduced-motion users never opt in.
+  useEffect(() => {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    let raf = 0;
+    let cx = window.innerWidth / 2;
+    let cy = window.innerHeight / 2;
+    const apply = () => {
+      raf = 0;
+      studioRef.current
+        ?.querySelectorAll(".bot-avatar.follow .bot-mascot")
+        .forEach((el) => {
+          const r = el.getBoundingClientRect();
+          const dx = (cx - (r.left + r.width / 2)) / r.width;
+          const dy = (cy - (r.top + r.height / 2)) / r.height;
+          const len = Math.hypot(dx, dy) || 1;
+          const mag = Math.min(1, len * 1.5) * 3;
+          (el as HTMLElement).style.setProperty("--px", `${((dx / len) * mag).toFixed(2)}px`);
+          (el as HTMLElement).style.setProperty("--py", `${((dy / len) * mag).toFixed(2)}px`);
+        });
+    };
+    const onMove = (e: MouseEvent) => {
+      cx = e.clientX;
+      cy = e.clientY;
+      if (!raf) raf = requestAnimationFrame(apply);
+    };
+    window.addEventListener("mousemove", onMove);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, []);
 
   useEffect(() => {
     function esc(ev: KeyboardEvent) {
@@ -88,9 +154,10 @@ export default function BotForm({
     if (!name.trim()) return;
     setBusy(true);
     setError(null);
+    const pref = { mascot, color };
     const req = editing && bot ? patchBot(bot.id, body()) : createBot(body());
     req.then(
-      (d) => onSaved(d.bot),
+      (d) => onSaved(d.bot, pref),
       (e) => {
         setBusy(false);
         setError(e instanceof Error ? e.message : "Save failed");
@@ -116,103 +183,140 @@ export default function BotForm({
       <div className="modal-head">
         <h2>{editing ? "Edit bot" : "New bot"}</h2>
       </div>
-        <Field label="Name">
-          <div className="row2">
-            <input
-              value={emoji}
-              onChange={(e) => setEmoji(e.target.value)}
-              aria-label="Emoji"
-              className="emoji"
-            />
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Doc Spot"
-              aria-label="Name"
-            />
+      <div className="studio" ref={studioRef}>
+        <div className="studio-side">
+          <div className="studio-preview">
+            <BotFace mascot={mascot} size={112} color={color} ambient={false} follow />
+            <b>{name.trim() || "Name your bot"}</b>
+            <small>{description.trim() || "One line about what it does"}</small>
           </div>
-        </Field>
-        <Field label="Description" hint="one line, shown on the card">
-          <input
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Keeps documentation in sync with the code"
-          />
-        </Field>
-        <Field label="Agent" hint="the coding harness that runs this bot">
-          <select value={agent} onChange={(e) => setAgent(e.target.value)}>
-            <option value="claude-code">Claude Code</option>
-            <option value="codex">Codex</option>
-            <option value="opencode">OpenCode</option>
-          </select>
-        </Field>
-        <Field label="Instructions" hint="appended to the selected agent's system prompt">
-          <textarea
-            value={instructions}
-            onChange={(e) => setInstructions(e.target.value)}
-            placeholder="You keep documentation in sync with the code. On each run, read the latest commit and update the docs it affects."
-          />
-        </Field>
-        <Field label="Setup instructions" hint="run once per machine — blank means no setup">
-          <textarea
-            value={setupInstructions}
-            onChange={(e) => setSetupInstructions(e.target.value)}
-            placeholder="This bot needs ffmpeg on PATH. Check for it and install it with the machine's package manager if it is missing."
-          />
-        </Field>
-        <Field label="Working directory" hint="default for new threads">
-          <input
-            value={repoPath}
-            onChange={(e) => setRepoPath(e.target.value)}
-            placeholder="blank uses the server's directory"
-          />
-        </Field>
-        <Field label="Model" hint="optional">
-          <input
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            placeholder="claude-sonnet-4-6"
-          />
-        </Field>
-        <Field label="Permissions">
-          <select value={permissionMode} onChange={(e) => setPermissionMode(e.target.value)}>
-            <option value="ask-permissions">Ask before each tool</option>
-            <option value="auto-approve">Auto-approve tools</option>
-            <option value="plan">Plan only (no edits)</option>
-          </select>
-        </Field>
-        <Field label="Allowed tools" hint="comma-separated; blank means all">
-          <input
-            value={allowedTools}
-            onChange={(e) => setAllowedTools(e.target.value)}
-            placeholder="Read, Grep, Edit, Bash"
-          />
-        </Field>
-        {error && <p className="chat-error">{error}</p>}
-        <div className="acts">
-          {editing && bot && (
-            <button type="button" className="btn" disabled={busy} onClick={() => onShare(bot)}>
-              Share
-            </button>
-          )}
-          {editing && (
-            <button type="button" className="btn danger" disabled={busy} onClick={remove}>
-              Delete
-            </button>
-          )}
-          <div className="spacer" />
-          <button type="button" className="btn" disabled={busy} onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn primary"
-            disabled={busy || !name.trim()}
-            onClick={save}
-          >
-            {editing ? "Save" : "Create bot"}
-          </button>
+          <p className="pick-label">Mascot</p>
+          <div className="pick-grid" role="radiogroup" aria-label="Mascot">
+            {MASCOT_OPTIONS.map((m) => (
+              <button
+                key={m}
+                type="button"
+                role="radio"
+                aria-checked={m === mascot}
+                aria-label={`Mascot ${BODY_LABELS[m] ?? m}`}
+                className={m === mascot ? "pick-tile selected" : "pick-tile"}
+                onClick={() => setMascot(m)}
+              >
+                <BotFace mascot={m} size={44} color={color} ambient={false} follow still />
+              </button>
+            ))}
+          </div>
+          <p className="pick-label">Color</p>
+          <div className="swatches" role="radiogroup" aria-label="Color">
+            {BRAND_TILES.map((tile) => (
+              <button
+                key={tile}
+                type="button"
+                role="radio"
+                aria-checked={tile === color}
+                aria-label={tile}
+                className={tile === color ? "swatch selected" : "swatch"}
+                style={{ background: tile }}
+                onClick={() => setColor(tile)}
+              />
+            ))}
+          </div>
         </div>
+        <div className="studio-main">
+        <Field label="Name">
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Doc Spot"
+            aria-label="Name"
+          />
+        </Field>
+          <Field label="Description" tip="one line, shown on the card">
+            <input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Keeps documentation in sync with the code"
+            />
+          </Field>
+          <Field label="Agent" tip="the coding harness that runs this bot">
+            <select value={agent} onChange={(e) => setAgent(e.target.value)}>
+              <option value="claude-code">Claude Code</option>
+              <option value="codex">Codex</option>
+              <option value="opencode">OpenCode</option>
+            </select>
+          </Field>
+          <Field label="Instructions" tip="appended to the selected agent's system prompt">
+            <textarea
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              placeholder="You keep documentation in sync with the code. On each run, read the latest commit and update the docs it affects."
+            />
+          </Field>
+          <Field label="Permissions">
+            <select value={permissionMode} onChange={(e) => setPermissionMode(e.target.value)}>
+              <option value="ask-permissions">Ask before each tool</option>
+              <option value="auto-approve">Auto-approve tools</option>
+              <option value="plan">Plan only (no edits)</option>
+            </select>
+          </Field>
+          <details className="advanced">
+            <summary>Advanced</summary>
+            <Field label="Setup instructions" tip="run once per machine — blank means no setup">
+              <textarea
+                value={setupInstructions}
+                onChange={(e) => setSetupInstructions(e.target.value)}
+                placeholder="This bot needs ffmpeg on PATH. Check for it and install it with the machine's package manager if it is missing."
+              />
+            </Field>
+            <Field label="Working directory" tip="default for new threads">
+              <input
+                value={repoPath}
+                onChange={(e) => setRepoPath(e.target.value)}
+                placeholder="blank uses the server's directory"
+              />
+            </Field>
+            <Field label="Model" tip="optional">
+              <input
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder="claude-sonnet-4-6"
+              />
+            </Field>
+            <Field label="Allowed tools" tip="comma-separated; blank means all">
+              <input
+                value={allowedTools}
+                onChange={(e) => setAllowedTools(e.target.value)}
+                placeholder="Read, Grep, Edit, Bash"
+              />
+            </Field>
+          </details>
+          {error && <p className="chat-error">{error}</p>}
+          <div className="acts">
+            {editing && bot && (
+              <button type="button" className="btn-ghost" disabled={busy} onClick={() => onShare(bot)}>
+                Share
+              </button>
+            )}
+            {editing && (
+              <button type="button" className="btn-danger" disabled={busy} onClick={remove}>
+                Delete
+              </button>
+            )}
+            <div className="spacer" />
+            <button type="button" className="btn-secondary" disabled={busy} onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={busy || !name.trim()}
+              onClick={save}
+            >
+              {editing ? "Save" : "Create bot"}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

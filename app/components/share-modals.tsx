@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { IconX } from "@tabler/icons-react";
 import { parseShare, shareCode, sharePrefix } from "../lib/share";
 import type { Bot } from "../lib/gitbot";
 
@@ -26,7 +27,7 @@ function Shell({
         <div className="modal-head">
           <h2>{title}</h2>
           <button type="button" className="modal-x" onClick={onClose} aria-label="Close">
-            ×
+            <IconX size={18} stroke={2} aria-hidden="true" />
           </button>
         </div>
         {children}
@@ -60,7 +61,7 @@ export function ShareModal({ bot, onClose }: { bot: Bot; onClose: () => void }) 
       </div>
       <div className="acts">
         <div className="spacer" />
-        <button type="button" className="btn primary" onClick={onClose}>
+        <button type="button" className="btn-primary" onClick={onClose}>
           Done
         </button>
       </div>
@@ -105,12 +106,12 @@ export function ImportModal({
       {bad && <div className="preview"><div className="bad">That does not look like a bot share code.</div></div>}
       <div className="acts">
         <div className="spacer" />
-        <button type="button" className="btn" onClick={onClose}>
+        <button type="button" className="btn-secondary" onClick={onClose}>
           Cancel
         </button>
         <button
           type="button"
-          className="btn primary"
+          className="btn-primary"
           disabled={!parsed}
           onClick={() => parsed && onAdd(parsed)}
         >

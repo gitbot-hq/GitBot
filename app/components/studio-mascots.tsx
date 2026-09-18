@@ -3,7 +3,7 @@
 // Kept in original colors. Pick with `variant`.
 export const STUDIO_VARIANTS = [53, 54, 55, 57, 58, 59] as const;
 
-export type StudioVariant = (typeof STUDIO_VARIANTS)[number];
+export type StudioVariant = 53 | 54 | 55 | 57 | 58 | 59;
 
 function Body53({ color }: { color: string }) {
   return (
@@ -105,13 +105,14 @@ export default function StudioMascot({
   color?: string;
 }) {
   const Body = BODIES[variant] ?? Body53;
+  const viewBox = VIEWBOX[variant] ?? VIEWBOX[53];
   return (
     <span
       className="bot-avatar"
       style={{ width: size, height: size }}
       aria-hidden="true"
     >
-      <svg viewBox={VIEWBOX[variant]} role="img" aria-hidden="true">
+      <svg viewBox={viewBox} role="img" aria-hidden="true">
         <Body color={color} />
       </svg>
     </span>

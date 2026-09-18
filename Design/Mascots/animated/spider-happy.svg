@@ -1,0 +1,17 @@
+<svg width="161" height="156" viewBox="0 0 161 156" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Spider mascot, happy">
+  <style>
+    .m-spider-happy .mascot-body{fill:var(--mascot-body,#ffffff);}
+    .m-spider-happy .eye-white{fill:#fff;}
+    .m-spider-happy .pupil{fill:var(--mascot-ink,#24211f);}
+    .m-spider-happy .ink{fill:var(--mascot-ink,#24211f);stroke:none;}
+    .m-spider-happy .mouth{fill:none;stroke:var(--mascot-ink,#24211f);stroke-linecap:round;}
+    .m-spider-happy .eye-arc{fill:none;stroke:var(--mascot-ink,#24211f);stroke-linecap:round;}
+    .m-spider-happy .mascot-idle{transform-box:fill-box;transform-origin:center;animation:m-spider-happy-float 4.8s cubic-bezier(.37,0,.22,1) infinite;}
+    .m-spider-happy .pupil{transform-box:fill-box;transform-origin:center;animation:m-spider-happy-gaze 6.8s cubic-bezier(.37,0,.22,1) infinite;}
+    @keyframes m-spider-happy-float{0%,100%{translate:0 0;}45%,55%{translate:0 -4px;}}
+    @keyframes m-spider-happy-gaze{0%,16%,100%{translate:0 0;}31%,48%{translate:3px -1px;}64%,80%{translate:-3px 1px;}}
+    @media (prefers-reduced-motion:reduce){.m-spider-happy .mascot-idle,.m-spider-happy .mascot-blink,.m-spider-happy .pupil,.m-spider-happy .mascot-travelface{animation:none;}}
+  </style>
+  <title>Spider mascot (happy)</title><desc>Animated Spider mascot, happy expression.</desc>
+  <g class="m-spider-happy"><g class="mascot-idle"><g class="mascot-body"><path class="mascot-body" d="M5.24005 127.504C-9.73329 113.793 10.8571 92.6057 23.6218 83.241C24.0091 82.9569 24.5357 83.0006 24.8835 83.3319L48.0167 105.373C48.3601 105.701 48.4323 106.216 48.1768 106.616C39.8103 119.703 20.2127 141.214 5.24005 127.504Z"/><path class="mascot-body" d="M46.2571 147.343C27.895 138.682 41.2867 112.347 50.7053 99.6221C50.9911 99.2359 51.507 99.1217 51.9373 99.3352L80.5605 113.537C80.9854 113.747 81.207 114.218 81.0814 114.676C76.9661 129.653 64.6185 156.004 46.2571 147.343Z"/><path class="mascot-body" d="M100.679 148.906C81.4109 155.303 72.9387 126.999 70.9791 111.289C70.9196 110.813 71.2143 110.374 71.6731 110.232L102.192 100.768C102.645 100.627 103.13 100.815 103.355 101.233C110.708 114.915 119.946 142.509 100.679 148.906Z"/><path class="mascot-body" d="M141.907 137.171C123.521 145.777 108.249 121.319 104.342 106.038C104.223 105.572 104.464 105.101 104.903 104.906L134.106 91.9367C134.539 91.7442 135.043 91.8747 135.318 92.2606C144.344 104.897 160.294 128.565 141.907 137.171Z"/><ellipse class="mascot-body" cx="80.382" cy="64.4336" rx="66.5695" ry="64.4336"/></g><g class="mascot-blink"><g class="mascot-eyes"><g><path class="eye-arc" d="M51 63Q80.4 33 110 63" stroke-width="10"/></g></g></g></g></g>
+</svg>

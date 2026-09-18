@@ -1,0 +1,17 @@
+<svg width="138" height="198" viewBox="0 0 138 198" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Bunny mascot, sleepy">
+  <style>
+    .m-bunny-sleepy .mascot-body{fill:var(--mascot-body,#ffffff);}
+    .m-bunny-sleepy .eye-white{fill:#fff;}
+    .m-bunny-sleepy .pupil{fill:var(--mascot-ink,#24211f);}
+    .m-bunny-sleepy .ink{fill:var(--mascot-ink,#24211f);stroke:none;}
+    .m-bunny-sleepy .mouth{fill:none;stroke:var(--mascot-ink,#24211f);stroke-linecap:round;}
+    .m-bunny-sleepy .eye-arc{fill:none;stroke:var(--mascot-ink,#24211f);stroke-linecap:round;}
+    .m-bunny-sleepy .mascot-idle{transform-box:fill-box;transform-origin:center;animation:m-bunny-sleepy-float 4.8s cubic-bezier(.37,0,.22,1) infinite;}
+    .m-bunny-sleepy .pupil{transform-box:fill-box;transform-origin:center;animation:m-bunny-sleepy-gaze 6.8s cubic-bezier(.37,0,.22,1) infinite;}
+    @keyframes m-bunny-sleepy-float{0%,100%{translate:0 0;}45%,55%{translate:0 -4px;}}
+    @keyframes m-bunny-sleepy-gaze{0%,16%,100%{translate:0 0;}31%,48%{translate:3px -1px;}64%,80%{translate:-3px 1px;}}
+    @media (prefers-reduced-motion:reduce){.m-bunny-sleepy .mascot-idle,.m-bunny-sleepy .mascot-blink,.m-bunny-sleepy .pupil,.m-bunny-sleepy .mascot-travelface{animation:none;}}
+  </style>
+  <title>Bunny mascot (sleepy)</title><desc>Animated Bunny mascot, sleepy expression.</desc>
+  <g class="m-bunny-sleepy"><g class="mascot-idle"><g class="mascot-body"><path class="mascot-body" d="M90.5 15.3888C104.5 -5.11099 126 -10.1107 128.5 31.8888C130.183 60.1598 121.598 84.5127 114.962 97.3839C129.1 108.188 138 123.899 138 141.389C138 173.974 107.108 197.889 69 197.889C30.8924 197.889 0 173.974 0 141.389C0 124.318 8.47873 108.939 22.0322 98.1661C15.781 84.7377 8.02535 62.1563 9 40.3888C10.2 13.5888 23.5002 5.22211 30 4.38877C37.6667 3.05544 53.6 8.58877 56 41.3888C57.4121 60.6869 57.7383 74.3541 57.6328 83.1847C61.3308 82.6605 65.1282 82.3888 69 82.3888C73.41 82.3888 77.7233 82.7429 81.9033 83.419C80.3879 63.5914 80.4965 30.0367 90.5 15.3888Z"/></g><g class="mascot-face"><path class="ink" d="M77.3329 151.389C79.358 151.389 80.9999 153.031 80.9999 155.056C80.9997 158.705 78.3334 161.73 74.8427 162.293C74.9923 162.819 75.1961 163.348 75.4667 163.84C76.1674 165.114 77.2907 166.162 79.4218 166.413C81.3414 166.639 82.714 168.378 82.4882 170.298C82.2622 172.217 80.5231 173.59 78.6034 173.364C75.226 172.967 72.7425 171.486 71.0058 169.568C69.269 171.486 66.7862 172.967 63.4091 173.364C61.4894 173.59 59.7503 172.217 59.5243 170.298C59.2985 168.378 60.6711 166.639 62.5907 166.413C64.7218 166.162 65.8451 165.114 66.5458 163.84C66.816 163.348 67.0183 162.82 67.1679 162.295C63.6719 161.737 61.0001 158.709 60.9999 155.056C60.9999 153.031 62.6418 151.389 64.6669 151.389H77.3329Z"/></g><g class="mascot-blink"><g class="mascot-eyes"><g><path class="eye-arc" d="M24 150Q34.5 162 45 150" stroke-width="8"/></g><g><path class="eye-arc" d="M96 146Q106.5 158 117 146" stroke-width="8"/></g></g></g></g></g>
+</svg>
