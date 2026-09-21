@@ -20,15 +20,19 @@ import {
   botNeedsSetup,
   ensureSetupThread,
   setSetupStatus,
+  isBotAgent,
+  BOT_AGENTS,
   type Bot,
 } from "./bot-store";
 import { existsSync, statSync } from "fs";
 import { loadTranscript } from "./start-claude-code";
+import { loadTranscript as loadCodexTranscript } from "./start-codex";
+import { getSessionHistory as loadOpencodeHistory } from "./start-opencode";
 
 /**
  * REST surface for the bot hub: bots, their threads, and a thread's messages.
- * Messages are not stored here — they are read back from Claude Code's own
- * transcript using the thread's sdkSessionId.
+ * Messages are not stored here — they are read back from the transcript of the
+ * agent the thread runs on, using the thread's sdkSessionId.
  *
  * Returns true when the request was handled.
  */
@@ -53,6 +57,10 @@ export async function handleBotRoutes(
       const body = await readBody(req);
       if (typeof body.name !== "string" || !body.name.trim()) {
         jsonError(res, 400, "name is required");
+        return true;
+      }
+      if (body.agent !== undefined && !isBotAgent(body.agent)) {
+        jsonError(res, 400, `agent must be one of: ${BOT_AGENTS.join(", ")}`);
         return true;
       }
       const bot = createBot({ ...body, name: body.name.trim() });
@@ -94,6 +102,10 @@ export async function handleBotRoutes(
     }
     if (method === "PATCH") {
       const body = await readBody(req);
+      if (body.agent !== undefined && !isBotAgent(body.agent)) {
+        jsonError(res, 400, `agent must be one of: ${BOT_AGENTS.join(", ")}`);
+        return true;
+      }
       const bot = updateBot(botId, body as Partial<Bot>);
       if (!bot) { jsonError(res, 404, "Bot not found"); return true; }
       // Setup instructions can arrive on an edit, not just at creation.
@@ -147,9 +159,13 @@ export async function handleBotRoutes(
     const thread = getThread(messagesId);
     if (!thread) { jsonError(res, 404, "Thread not found"); return true; }
     // A thread that has not had a turn yet has no transcript on disk.
-    const messages = thread.sdkSessionId
-      ? await loadTranscript(thread.sdkSessionId, thread.repoPath)
-      : [];
+    const messages = !thread.sdkSessionId
+      ? []
+      : thread.agent === "codex"
+        ? await loadCodexTranscript(thread.sdkSessionId, thread.repoPath)
+        : thread.agent === "opencode"
+          ? await loadOpencodeHistory(thread.sdkSessionId, thread.repoPath)
+          : await loadTranscript(thread.sdkSessionId, thread.repoPath);
     jsonOk(res, { messages });
     return true;
   }

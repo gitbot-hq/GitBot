@@ -9,6 +9,7 @@ const SHARE_FIELDS = [
   "emoji",
   "description",
   "instructions",
+  "agent",
   "setupInstructions",
   "model",
   "permissionMode",
@@ -78,6 +79,9 @@ export function parseShare(text: string): Record<string, unknown> | null {
   ["emoji", "description", "instructions", "setupInstructions", "model"].forEach((k) => {
     if (typeof obj[k] === "string") bot[k] = obj[k];
   });
+  if (["claude-code", "opencode", "codex"].indexOf(obj.agent as string) !== -1) {
+    bot.agent = obj.agent;
+  }
   if (["ask-permissions", "auto-approve", "plan"].indexOf(obj.permissionMode as string) !== -1) {
     bot.permissionMode = obj.permissionMode;
   }

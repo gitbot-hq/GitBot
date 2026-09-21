@@ -8,6 +8,17 @@ import { homedir } from "os";
 /** Machine-local: setup is about this computer, not about the bot's definition. */
 export type SetupStatus = "pending" | "complete" | "failed";
 
+/** The coding harnesses a bot can run on. */
+export const BOT_AGENTS = ["claude-code", "opencode", "codex"] as const;
+export type BotAgent = (typeof BOT_AGENTS)[number];
+
+/** Bots and threads saved before the field existed all ran on Claude Code. */
+export const DEFAULT_BOT_AGENT: BotAgent = "claude-code";
+
+export function isBotAgent(value: unknown): value is BotAgent {
+  return typeof value === "string" && (BOT_AGENTS as readonly string[]).includes(value);
+}
+
 export interface Bot {
   id: string;
   name: string;
@@ -15,6 +26,8 @@ export interface Bot {
   emoji: string;
   /** Appended to Claude Code's own system prompt. This is the bot's job description. */
   instructions: string;
+  /** The harness this bot runs on. Undefined on older records: Claude Code. */
+  agent?: BotAgent;
   /**
    * What this bot needs on a machine before it can work — "ffmpeg must be on
    * PATH", "run npm install in the repo". Travels with the bot when shared, and
@@ -41,7 +54,13 @@ export interface Thread {
   botId: string;
   /** A setup thread prepares the machine; it runs before any chat thread may. */
   kind?: "chat" | "setup";
-  /** Claude Code session id — the resume handle. Null until the first turn completes. */
+  /**
+   * The harness this thread's conversation lives in, fixed by its first turn. A
+   * session id only means something to the agent that issued it, so a thread
+   * keeps its agent even if the bot is later switched to another one.
+   */
+  agent?: BotAgent;
+  /** The agent's own session id — the resume handle. Null until the first turn completes. */
   sdkSessionId: string | null;
   title: string;
   /** True while the title is still auto-derived, so a later turn may improve it. */
@@ -118,6 +137,7 @@ export function createBot(input: NewBot): Bot {
     description: input.description ?? "",
     emoji: input.emoji ?? "🤖",
     instructions: input.instructions ?? "",
+    agent: input.agent,
     setupInstructions: input.setupInstructions,
     setupStatus: input.setupInstructions?.trim() ? "pending" : undefined,
     model: input.model,

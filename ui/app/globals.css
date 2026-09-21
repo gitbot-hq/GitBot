@@ -408,6 +408,163 @@ pre {
   padding-inline: var(--space-2);
 }
 
+/* Rich thread row: a container holding the open button and a delete button.
+   (The plain `button.thread-row` above is still what the demo pages render.) */
+div.thread-row {
+  position: relative;
+  padding: 0;
+  overflow: visible;
+  white-space: normal;
+  cursor: default;
+}
+
+.thread-open {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-2) var(--space-6) var(--space-2) var(--space-2);
+  background: none;
+  border: 0;
+  border-radius: inherit;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.thread-name,
+.thread-prev {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-prev,
+.thread-meta {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.thread-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--faint);
+}
+
+.thread-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.thread-path::before {
+  content: "· ";
+}
+
+.thread-tag {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.thread-tag.complete {
+  color: var(--ok);
+  border-color: currentColor;
+}
+
+.thread-tag.failed {
+  color: var(--danger);
+  border-color: currentColor;
+}
+
+.thread-live,
+.bot-row-text small.working,
+.threads-bot small.working {
+  color: var(--ok);
+}
+
+.thread-live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.thread-live i,
+.bot-row-text small.working i,
+.threads-bot small.working i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--brand-leaf);
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-live i,
+  .bot-row-text small.working i,
+  .threads-bot small.working i {
+    animation: none;
+  }
+}
+
+/* Delete: out of the way until the row is hovered or focused. Always
+   visible on touch screens, where there is no hover. */
+.thread-kill {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  color: var(--faint);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.thread-row:hover .thread-kill,
+.thread-row:focus-within .thread-kill {
+  opacity: 1;
+}
+
+.thread-kill:hover,
+.thread-kill:focus-visible {
+  background: var(--surface-2);
+  color: var(--danger);
+}
+
+@media (hover: none) {
+  .thread-kill {
+    opacity: 1;
+  }
+}
+
 /* Selected-bot header in the threads panel (collapsed bots only).
    The wrapper glides open (grid-rows), siblings ride along smoothly. */
 .threads-bot-wrap {
@@ -2501,4 +2658,12 @@ pre {
 
 .pick-acts .spacer {
   flex: 1;
+}
+
+/* Inline caution under a form field (e.g. an agent that is not installed). */
+.field-warn {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--brand-ember);
+  font-size: var(--text-xs);
 }

@@ -36,6 +36,12 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+// The agents actually installed on the machine gitbot runs on, in the
+// server's order of preference.
+export function getAgents() {
+  return req<{ agents: string[] }>("/agents");
+}
+
 export function getBots() {
   return req<{ bots: import("./gitbot").Bot[] }>("/bots");
 }
@@ -135,6 +141,8 @@ export type BotInput = {
   model?: string;
   permissionMode?: string;
   allowedTools?: string[];
+  // No form field: only arrives through an imported share code.
+  disallowedTools?: string[];
 };
 
 export function createBot(body: BotInput) {
@@ -149,6 +157,13 @@ export function patchBot(id: string, body: BotInput) {
     `/bots/${encodeURIComponent(id)}`,
     { method: "PATCH", body: JSON.stringify(body) },
   );
+}
+
+// The agent's own transcript stays on disk; only the hub's record goes.
+export function deleteThread(id: string) {
+  return req<{ deleted: boolean }>(`/threads/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }
 
 export function deleteBot(id: string) {

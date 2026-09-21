@@ -33,7 +33,7 @@ import { initAgent as initOpencode, runAgent as runOpencode, listSessions as lis
 import { initAgent as initCodex, runAgent as runCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
 import { startRelayMode } from "./relay-client";
 import { handleBotRoutes } from "./bot-routes";
-import { getBot, getThread, touchThread, botNeedsSetup } from "./bot-store";
+import { getBot, getThread, touchThread, updateThread, botNeedsSetup, DEFAULT_BOT_AGENT } from "./bot-store";
 import { botPermissionToSession } from "./server-common";
 import { uiFileFor } from "./static-ui";
 
@@ -246,7 +246,19 @@ export async function handleRequest(
         const bot = getBot(thread.botId);
         if (!bot) { jsonError(res, 404, "Bot not found"); return; }
         repoPath = thread.repoPath;
-        agent = "claude-code";
+        // A thread that has had a turn stays on the agent that holds its
+        // conversation; until then it follows the bot, so switching a bot's
+        // agent applies to every thread that has not started yet.
+        agent = thread.sdkSessionId
+          ? thread.agent ?? DEFAULT_BOT_AGENT
+          : bot.agent ?? DEFAULT_BOT_AGENT;
+        if (!availableAgents.includes(agent)) {
+          jsonError(res, 400, `${bot.name} runs on ${agent}, which is not installed on this machine`, {
+            agentUnavailable: agent,
+          });
+          return;
+        }
+        if (thread.agent !== agent) updateThread(threadId, { agent });
         existingId = thread.sdkSessionId ?? undefined;
         model = model ?? bot.model;
         // Bot presets speak their own vocabulary ("auto-approve", "plan"); the
@@ -268,7 +280,9 @@ export async function handleRequest(
           id: bot.id,
           name: bot.name,
           instructions: bot.instructions,
-          allowedTools: bot.allowedTools,
+          // The allow-list fences the bot's work. Its setup run prepares the
+          // machine, which can need tools the job itself never uses.
+          allowedTools: isSetup ? undefined : bot.allowedTools,
           disallowedTools: bot.disallowedTools,
           ...(isSetup ? { setup: true, setupInstructions: bot.setupInstructions } : {}),
         };

@@ -95,6 +95,7 @@ export default function Chat({
   onAutoSent,
   onTurnDone,
   onWorkingChange,
+  onLiveSession,
   booting,
 }: {
   thread: ThreadFull | null;
@@ -106,6 +107,10 @@ export default function Chat({
   onAutoSent: () => void;
   onTurnDone: () => void;
   onWorkingChange?: (working: boolean) => void;
+  /** Reports the session a thread's turn runs in, and null once that turn
+   *  ends here. Switching threads mid-turn reports nothing: the turn keeps
+   *  running server-side and the caller checks on it. */
+  onLiveSession?: (threadId: string, sessionId: string | null) => void;
   /** True while the app is still loading bots/threads on boot. Shows a
    *  skeleton instead of the empty-thread copy, so the first paint never
    *  flashes placeholder text. Defaults to false (old behavior). */
@@ -221,6 +226,7 @@ export default function Chat({
               pendingFilter.current = pending;
               catchupRef.current = true;
               sessionRef.current = sid;
+              onLiveSession?.(tid, sid);
               setStreaming(true);
               setActivity("Thinking…");
               openStream(sid);
@@ -280,6 +286,7 @@ export default function Chat({
   function finish(refetch: boolean) {
     closeStream();
     const tid = threadRef.current;
+    if (tid) onLiveSession?.(tid, null);
     setStreaming(false);
     setActivity(null);
     liveIdRef.current = null;
@@ -348,6 +355,12 @@ export default function Chat({
           : [...prev, { toolUseID: d.toolUseID, toolName: String(d.toolName ?? "tool"), input: d.input }],
       );
     });
+    // The agent itself failed (provider refused, bad model, crashed CLI). The
+    // turn still ends with its own `done`/`error`; this only keeps the reason,
+    // which would otherwise show as an empty reply.
+    es.addEventListener("agent_error", (ev) => {
+      setTurnError(String(data(ev).message ?? "The agent reported an error"));
+    });
     es.addEventListener("aborted", () => {
       setMsgs((prev) => [...prev, { id: nid(), role: "assistant", text: "_Stopped._", tools: [] }]);
       catchupRef.current = false;
@@ -394,6 +407,7 @@ export default function Chat({
       const { sessionId } = await postChat(thread.id, prompt, modeOverride ?? undefined);
       if (threadRef.current !== thread.id) return;
       sessionRef.current = sessionId;
+      onLiveSession?.(thread.id, sessionId);
       openStream(sessionId);
     } catch (e) {
       if (threadRef.current !== thread.id) return;

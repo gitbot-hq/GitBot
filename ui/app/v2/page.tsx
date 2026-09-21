@@ -9,6 +9,7 @@ import {
   IconPencil,
   IconPlus,
   IconSearch,
+  IconX,
 } from "@tabler/icons-react";
 import Chat from "../components/chat";
 import NewBotButton from "../components/new-bot-button";
@@ -23,12 +24,48 @@ import TopBar from "../components/top-bar";
 import {
   botSetupAction,
   createBot,
+  deleteThread,
   getBots,
+  getSessionStatus,
   getThreads,
 } from "../lib/api";
 import { getAvatarPref, setAvatarPref, resolveAvatar, defaultMascotFor, type AvatarPref } from "../lib/avatar-prefs";
 import type { Bot, ThreadFull } from "../lib/gitbot";
 import "./v2-theme.css";
+
+// "just now", "5m ago", "3h ago", "2d ago", then a short date.
+function relTime(iso: string) {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return "";
+  const mins = Math.floor((Date.now() - then) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(then).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// The folder most of a bot's threads run in. Rows only name their folder
+// when they broke from it.
+function commonPath(threads: ThreadFull[]) {
+  const counts = new Map<string, number>();
+  for (const t of threads) counts.set(t.repoPath, (counts.get(t.repoPath) ?? 0) + 1);
+  let best = "";
+  let bestCount = 0;
+  for (const [path, n] of counts) {
+    if (n > bestCount) {
+      best = path;
+      bestCount = n;
+    }
+  }
+  return best;
+}
+
+function folderName(path: string) {
+  return path.split("/").filter(Boolean).pop() ?? path;
+}
 
 const DEFAULT_WIDTH = 260;
 const COLLAPSED_WIDTH = 96;
@@ -72,6 +109,9 @@ export default function V2() {
   const [threadsLoading, setThreadsLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [threadByBot, setThreadByBot] = useState<Record<string, string>>({});
+  // Turns known to be running: thread id → its bot and session. Chat reports
+  // starts and finishes; turns left behind by a thread switch are polled.
+  const [live, setLive] = useState<Record<string, { botId: string; sessionId: string }>>({});
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   // Inline bot studio: slides over threads + chat.
@@ -201,6 +241,71 @@ export default function V2() {
     threads.find((t) => t.id === (bot ? threadByBot[bot.id] : undefined)) ??
     threads[0] ??
     null;
+
+  const botId = bot?.id;
+  const onLiveSession = useCallback(
+    (threadId: string, sessionId: string | null) => {
+      setLive((prev) => {
+        if (sessionId) return botId ? { ...prev, [threadId]: { botId, sessionId } } : prev;
+        if (!prev[threadId]) return prev;
+        const next = { ...prev };
+        delete next[threadId];
+        return next;
+      });
+    },
+    [botId],
+  );
+
+  // Drop turns that finished while nobody was watching them.
+  const liveKey = Object.keys(live).sort().join(",");
+  useEffect(() => {
+    if (!liveKey) return;
+    const timer = window.setInterval(() => {
+      for (const [threadId, { sessionId }] of Object.entries(live)) {
+        if (threadId === activeThread?.id) continue; // Chat reports this one itself.
+        getSessionStatus(sessionId)
+          .then(({ streaming }) => streaming)
+          .catch(() => false)
+          .then((streaming) => {
+            if (streaming) return;
+            setLive((prev) => {
+              if (!prev[threadId]) return prev;
+              const next = { ...prev };
+              delete next[threadId];
+              return next;
+            });
+            if (bot) refreshThreads(bot.id);
+          });
+      }
+    }, 4000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveKey, activeThread?.id]);
+
+  const botIsWorking = (id: string) => Object.values(live).some((l) => l.botId === id);
+  const threadsHome = commonPath(threads);
+
+  function removeThread(t: ThreadFull) {
+    if (!bot) return;
+    if (live[t.id]) {
+      toast("Stop the running turn before deleting this thread");
+      return;
+    }
+    if (!confirm(`Delete "${t.title}"? The agent's transcript stays on disk.`)) return;
+    deleteThread(t.id)
+      .then(() => {
+        setThreads((prev) => prev.filter((x) => x.id !== t.id));
+        setThreadByBot((prev) => {
+          if (prev[bot.id] !== t.id) return prev;
+          const next = { ...prev };
+          delete next[bot.id];
+          return next;
+        });
+        // Deleting a setup thread changes the bot's setup state.
+        if (t.kind === "setup") getBots().then(({ bots }) => setBots(bots), () => {});
+      })
+      .catch((e) => toast(e instanceof Error ? e.message : String(e)));
+  }
 
   function toggleCollapse() {
     if (settleTimer.current) {
@@ -545,9 +650,9 @@ export default function V2() {
                   </span>
                   <span className="bot-row-text">
                     <b>{b.name}</b>
-                    <small>
+                    <small className={botIsWorking(b.id) ? "working" : undefined}>
                       <i aria-hidden="true" />
-                      Idle
+                      {botIsWorking(b.id) ? "Working" : "Idle"}
                     </small>
                   </span>
                   <span
@@ -600,9 +705,9 @@ export default function V2() {
               <div className={collapsed ? "threads-bot-wrap open" : "threads-bot-wrap"}>
                 <div className="threads-bot">
                   <b>{bot?.name ?? ""}</b>
-                  <small>
+                  <small className={bot && botIsWorking(bot.id) ? "working" : undefined}>
                     <i aria-hidden="true" />
-                    Idle
+                    {bot && botIsWorking(bot.id) ? "Working" : "Idle"}
                   </small>
                 </div>
               </div>
@@ -654,18 +759,53 @@ export default function V2() {
                 ) : (
                   <>
                 {threadsError && <p className="threads-empty">{threadsError}</p>}
-                {visibleThreads.map((t) => (
-                    <button
+                {visibleThreads.map((t) => {
+                  const setupState = t.kind === "setup" ? bot?.setupStatus ?? "pending" : null;
+                  return (
+                    <div
                       key={t.id}
-                      type="button"
                       className={`${t.id === activeThread?.id ? "thread-row active" : "thread-row"}${threadSearchText ? "" : " msg-in"}`}
-                      onClick={() =>
-                        bot && setThreadByBot((prev) => ({ ...prev, [bot.id]: t.id }))
-                      }
                     >
-                      {t.title}
-                    </button>
-                  ))}
+                      <button
+                        type="button"
+                        className="thread-open"
+                        onClick={() =>
+                          bot && setThreadByBot((prev) => ({ ...prev, [bot.id]: t.id }))
+                        }
+                      >
+                        <span className="thread-title">
+                          <span className="thread-name">{t.title}</span>
+                          {setupState && <span className={`thread-tag ${setupState}`}>setup</span>}
+                        </span>
+                        <span className="thread-prev">{t.preview || "No messages yet"}</span>
+                        <span className="thread-meta">
+                          {live[t.id] ? (
+                            <span className="thread-live">
+                              <i aria-hidden="true" />
+                              running
+                            </span>
+                          ) : (
+                            <span>{relTime(t.updatedAt)}</span>
+                          )}
+                          {t.repoPath !== threadsHome && (
+                            <span className="thread-path" title={t.repoPath}>
+                              {folderName(t.repoPath)}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="thread-kill"
+                        aria-label={`Delete thread ${t.title}`}
+                        title="Delete thread"
+                        onClick={() => removeThread(t)}
+                      >
+                        <IconX size={14} aria-hidden="true" />
+                      </button>
+                    </div>
+                  );
+                })}
                 {!threadsError && threads.length === 0 && (
                   <p className="threads-empty">No threads yet — start one with +.</p>
                 )}
@@ -689,6 +829,7 @@ export default function V2() {
                 botPermission={bot?.permissionMode}
                 autoSend={autoSend}
                 onAutoSent={() => setAutoSend(null)}
+                onLiveSession={onLiveSession}
               onTurnDone={refreshAfterTurn}
                 booting={botsLoading || threadsLoading}
             />
@@ -746,6 +887,10 @@ export default function V2() {
               allowedTools: Array.isArray(parsed.allowedTools)
                 ? (parsed.allowedTools as string[])
                 : undefined,
+              disallowedTools: Array.isArray(parsed.disallowedTools)
+                ? (parsed.disallowedTools as string[])
+                : undefined,
+              agent: typeof parsed.agent === "string" ? parsed.agent : undefined,
             }).then(
               ({ bot: added }) => afterBotAdded(added, { mascot: "ghost", color: "var(--brand-sun)" }),
               (e) => toast(e instanceof Error ? e.message : String(e)),

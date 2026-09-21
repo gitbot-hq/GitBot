@@ -182,7 +182,7 @@ gitbot exposes a REST + SSE API. All endpoints return JSON unless noted.
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/bots` | List all bots |
-| `POST` | `/bots` | Create a bot. Body: `{ name, description?, emoji?, instructions?, setupInstructions?, model?, repoPath?, permissionMode?, allowedTools?, disallowedTools? }`. Returns `{ bot, setupThread? }` |
+| `POST` | `/bots` | Create a bot. Body: `{ name, description?, emoji?, agent?, instructions?, setupInstructions?, model?, repoPath?, permissionMode?, allowedTools?, disallowedTools? }`. `agent` is `claude-code` (default), `opencode` or `codex`. Returns `{ bot, setupThread? }` |
 | `GET` | `/bots/:id` | Fetch one bot |
 | `PATCH` | `/bots/:id` | Update a bot. Returns `{ bot, setupThread? }` |
 | `DELETE` | `/bots/:id` | Delete a bot |
@@ -300,9 +300,23 @@ Sessions are the core abstraction. A session is created when a `/chat` POST is r
 
 gitbot detects which harnesses are available at startup by checking for the `claude` CLI, the `@opencode-ai/sdk` package, and the `codex` CLI. It reports the available agents at `/agents`. A bot's `model` and `permissionMode` are applied to whichever harness runs its threads.
 
+**Each bot picks its agent.** A bot's `agent` decides which harness runs its threads; the form defaults to the first one installed. A thread stays on the agent that ran its first turn, because a session id only means something to the agent that issued it — switching a bot's agent applies to threads that have not started yet. Chatting with a bot whose agent is not installed returns a 400 with `agentUnavailable`. All three harnesses get the same bot framing (instructions, setup prompt, `SETUP_COMPLETE` / `SETUP_FAILED` markers) from `src/bot-prompt.ts`.
+
+| Bot feature | Claude Code | Opencode | Codex |
+|---|---|---|---|
+| Instructions | appended to the system prompt | per-message `system` | `developer_instructions` config |
+| Resume + thread history | yes | yes | yes |
+| Setup runs | yes | yes | yes |
+| `allowedTools` — the only tools the bot can use | yes, MCP tools included | yes | **not supported** |
+| `disallowedTools` | yes | yes | **not supported** |
+
+`allowedTools` is a restriction, not an auto-approve list: whether a tool needs approval is decided by the permission mode alone. It does not apply to a bot's setup run, which may need tools the job itself never uses. Opencode bots need a `model` in `provider/model` form (e.g. `anthropic/claude-haiku-4-5`); Opencode's free default model refuses requests made through the SDK.
+
 **Claude Code** (`claude-code`): Uses the `@anthropic-ai/claude-agent-sdk` `query()` function. Runs the `claude-opus-4-6` model in `default` permission mode. Supports `canUseTool` for per-tool permission prompts. Session transcripts are stored at `~/.claude/projects/<cwd>/<session-id>.jsonl`.
 
 **Opencode** (`opencode`): Uses the `@opencode-ai/sdk`. gitbot spawns an Opencode server process at startup (or connects to one already running on port 4096). Per-directory clients are maintained so sessions can be scoped to different repos simultaneously. Events are received via a persistent Opencode event stream (`client.event.subscribe()`). If the stream fails, it reconnects automatically after 2 seconds.
+
+**Codex** (`codex`): Uses `@openai/codex-sdk`, which runs the Codex binary bundled with it rather than the `codex` on your PATH; your own install only supplies the login (`codex login`). If the bundled binary cannot be found, gitbot falls back to the `codex` on PATH and logs a warning, since the two versions may differ. Session transcripts are read from `~/.codex/sessions`.
 
 ### Repo Details
 
@@ -346,6 +360,7 @@ GitBot/
 │   ├── start-claude-code.ts  # Claude Code harness integration
 │   ├── start-opencode.ts  # Opencode harness integration
 │   ├── start-codex.ts     # Codex harness integration
+│   ├── bot-prompt.ts      # Bot + setup prompts and setup verdict, shared by all harnesses
 │   ├── workspace.ts       # Repo listing, file browser, git details, clone
 │   ├── bot-store.ts       # Bot + thread persistence (JSON store)
 │   ├── bot-routes.ts      # REST surface for /bots and /threads
@@ -368,7 +383,7 @@ GitBot/
 | Transport | HTTP + Server-Sent Events (SSE) |
 | Claude Code | `@anthropic-ai/claude-agent-sdk` |
 | Opencode | `@opencode-ai/sdk` |
-| Codex | `codex` CLI |
+| Codex | `@openai/codex-sdk` (bundled binary) |
 | UI | Next.js 16 static export, React 19, Tailwind v4 |
 | Markdown | react-markdown + remark-gfm |
 | QR codes | qrcode-terminal |

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { IconQuestionMark } from "@tabler/icons-react";
-import { createBot, deleteBot, patchBot, type BotInput } from "../lib/api";
+import { createBot, deleteBot, getAgents, patchBot, type BotInput } from "../lib/api";
 import type { Bot } from "../lib/gitbot";
 import { getAvatarPref, resolveAvatar, defaultMascotFor, type AvatarMascot, type AvatarPref } from "../lib/avatar-prefs";
 import { bodies } from "./bot-maker/registry";
@@ -41,6 +41,18 @@ const BODY_LABELS: Record<string, string> = Object.fromEntries(
   bodies.map((b) => [b.id, b.label]),
 );
 
+const MODEL_PLACEHOLDER: Record<string, string> = {
+  "claude-code": "claude-sonnet-4-6",
+  opencode: "anthropic/claude-haiku-4-5",
+  codex: "blank uses Codex's default",
+};
+
+const AGENT_OPTIONS = [
+  { value: "claude-code", label: "Claude Code" },
+  { value: "opencode", label: "OpenCode" },
+  { value: "codex", label: "Codex" },
+];
+
 function fallbackPref(id: string): AvatarPref {
   return {
     mascot: defaultMascotFor(id),
@@ -69,7 +81,26 @@ export default function BotForm({
   const [emoji, setEmoji] = useState(bot ? bot.emoji : "🤖");
   const [name, setName] = useState(bot ? bot.name : "");
   const [description, setDescription] = useState(bot ? bot.description : "");
-  const [agent, setAgent] = useState(bot ? bot.agent || "claude-code" : "codex");
+  const [agent, setAgent] = useState(bot ? bot.agent || "claude-code" : "claude-code");
+  // Agents installed on this machine; null until the server answers. A new
+  // bot starts on the first one, unless the user already picked.
+  const [installed, setInstalled] = useState<string[] | null>(null);
+  const agentTouched = useRef(false);
+  useEffect(() => {
+    let alive = true;
+    getAgents()
+      .then(({ agents }) => {
+        if (!alive) return;
+        setInstalled(agents);
+        if (!bot && !agentTouched.current && agents.length > 0) setAgent(agents[0]);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const agentMissing = installed !== null && installed.indexOf(agent) === -1;
   const [instructions, setInstructions] = useState(bot ? bot.instructions : "");
   const [setupInstructions, setSetupInstructions] = useState(bot ? bot.setupInstructions || "" : "");
   const [repoPath, setRepoPath] = useState(bot ? bot.repoPath || "" : "");
@@ -239,11 +270,36 @@ export default function BotForm({
             />
           </Field>
           <Field label="Agent" tip="the coding harness that runs this bot">
-            <select value={agent} onChange={(e) => setAgent(e.target.value)}>
-              <option value="claude-code">Claude Code</option>
-              <option value="codex">Codex</option>
-              <option value="opencode">OpenCode</option>
+            <select
+              value={agent}
+              onChange={(e) => {
+                agentTouched.current = true;
+                setAgent(e.target.value);
+              }}
+            >
+              {AGENT_OPTIONS.map((a) => {
+                const missing = installed !== null && installed.indexOf(a.value) === -1;
+                return (
+                  // A missing agent stays selectable only while it is the current
+                  // value, so an imported bot shows what it was built for.
+                  <option key={a.value} value={a.value} disabled={missing && a.value !== agent}>
+                    {missing ? `${a.label} (not installed)` : a.label}
+                  </option>
+                );
+              })}
             </select>
+            {agent === "opencode" && model.trim().indexOf("/") === -1 && (
+              <small className="field-warn">
+                OpenCode needs a model as provider/model (under Advanced), e.g.
+                anthropic/claude-haiku-4-5. Without one it uses its free model, which
+                refuses requests from gitbot.
+              </small>
+            )}
+            {agentMissing && (
+              <small className="field-warn">
+                Not installed on this machine — this bot cannot run until it is.
+              </small>
+            )}
           </Field>
           <Field label="Instructions" tip="appended to the selected agent's system prompt">
             <textarea
@@ -279,15 +335,24 @@ export default function BotForm({
               <input
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                placeholder="claude-sonnet-4-6"
+                placeholder={MODEL_PLACEHOLDER[agent] ?? ""}
               />
             </Field>
-            <Field label="Allowed tools" tip="comma-separated; blank means all">
+            <Field
+              label="Allowed tools"
+              tip="comma-separated; the only tools this bot can use — blank means all. Setup runs are not limited."
+            >
               <input
                 value={allowedTools}
                 onChange={(e) => setAllowedTools(e.target.value)}
                 placeholder="Read, Grep, Edit, Bash"
               />
+              {agent === "codex" && allowedTools.trim() && (
+                <small className="field-warn">
+                  Codex cannot limit its tools, so this list is ignored for this bot. Use
+                  Claude Code or OpenCode if the limit matters.
+                </small>
+              )}
             </Field>
           </details>
           {error && <p className="chat-error">{error}</p>}

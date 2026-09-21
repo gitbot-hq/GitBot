@@ -23,7 +23,8 @@ import {
   type SessionStore,
   type PermissionMode,
 } from "./server-common";
-import { dataDir } from "./bot-store";
+import { bindSession, dataDir } from "./bot-store";
+import { presetSystemPrompt, recordSetupOutcomeFromEvents } from "./bot-prompt";
 
 let CodexCtor: typeof CodexClass | null = null;
 
@@ -51,6 +52,34 @@ export async function initAgent(): Promise<boolean> {
     return false;
   }
   return true;
+}
+
+/** Absolute path of the `codex` on PATH, or null when there is none. */
+function codexOnPath(): string | null {
+  try {
+    const cmd = process.platform === "win32" ? "where codex" : "command -v codex";
+    const out = execSync(cmd, { stdio: ["ignore", "pipe", "ignore"], encoding: "utf8" });
+    return out.split(/\r?\n/)[0].trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The SDK runs the Codex binary bundled with it, never the one on PATH. When
+ * that bundled binary cannot be found (optional dependency skipped, or removed
+ * by the OS), fall back to the user's own install rather than failing the turn.
+ * The two may be different versions, hence the warning.
+ */
+function createCodex(ctor: typeof CodexClass, options: ConstructorParameters<typeof CodexClass>[0]): CodexClass {
+  try {
+    return new ctor(options);
+  } catch (err: any) {
+    const fallback = codexOnPath();
+    if (!fallback) throw err;
+    console.warn(`[codex] bundled binary unavailable (${err?.message ?? err}); using ${fallback} — its version may differ from the SDK's`);
+    return new ctor({ ...options, codexPathOverride: fallback });
+  }
 }
 
 interface PendingAttachment {
@@ -138,7 +167,11 @@ export async function runAgent(store: SessionStore): Promise<void> {
 
   let thread: Thread;
   try {
-    const codex = new ctor({});
+    // A bot is a preset: its instructions ride on top of Codex's own system
+    // prompt as developer instructions. Sent on every turn, resumed or not, so
+    // the thread's instructions never differ from one turn to the next.
+    const system = presetSystemPrompt(store.botPreset);
+    const codex = createCodex(ctor, system ? { config: { developer_instructions: system } } : {});
     thread = store.sdkSessionId ? codex.resumeThread(store.sdkSessionId, threadOpts) : codex.startThread(threadOpts);
   } catch (err: any) {
     emitEvent(store, "error", { message: `Failed to start codex thread: ${err?.message ?? "unknown"}` });
@@ -222,6 +255,7 @@ export async function runAgent(store: SessionStore): Promise<void> {
     return;
   }
 
+  recordSetupOutcomeFromEvents(store);
   store.status = "done";
   notifyPermissionsChanged();
   emitEvent(store, "done", {});
@@ -232,6 +266,9 @@ export async function runAgent(store: SessionStore): Promise<void> {
 function handleEvent(ev: ThreadEvent, store: SessionStore): void {
   switch (ev.type) {
     case "thread.started": {
+      // Bind the hub thread to its conversation the first time we learn the id,
+      // so the thread's next turn resumes it instead of starting over.
+      if (store.threadId && !store.sdkSessionId) bindSession(store.threadId, ev.thread_id);
       store.sdkSessionId = ev.thread_id;
       emitEvent(store, "system", { subtype: "init", session_id: ev.thread_id });
       return;

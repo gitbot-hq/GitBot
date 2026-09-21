@@ -44,7 +44,7 @@
   "type": "commonjs",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.42",
-    "@openai/codex-sdk": "^0.130.0",
+    "@openai/codex-sdk": "^0.155.1",
     "@opencode-ai/sdk": "^1.2.15",
     "cli-progress": "^3.12.0",
     "commander": "^14.0.3",

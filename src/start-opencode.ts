@@ -1,4 +1,6 @@
 import { basename } from "path";
+import { bindSession } from "./bot-store";
+import { presetSystemPrompt, recordSetupOutcomeFromEvents } from "./bot-prompt";
 import {
   emitEvent,
   scheduleCleanup,
@@ -97,6 +99,8 @@ export async function runAgent(store: SessionStore): Promise<void> {
       });
       const sdkId = (sessionResult.data as any).id as string;
       store.sdkSessionId = sdkId;
+      // Bind the hub thread to its conversation, so its next turn resumes it.
+      if (store.threadId) bindSession(store.threadId, sdkId);
       emitEvent(store, "system", { subtype: "init", session_id: sdkId });
     }
     // Always register the mapping so event stream can find the store
@@ -115,6 +119,11 @@ export async function runAgent(store: SessionStore): Promise<void> {
       }
     }
 
+    const system = presetSystemPrompt(store.botPreset);
+    // A bot's disallowed tools are switched off for the message. Bots name
+    // tools the Claude Code way ("Bash"); OpenCode's ids are lowercase.
+    const tools = await presetTools(client, store);
+
     // Use promptAsync so the request returns immediately; completion signaled via event stream
     const promptResult = await client.session.promptAsync({
       path: { id: store.sdkSessionId! },
@@ -125,12 +134,18 @@ export async function runAgent(store: SessionStore): Promise<void> {
         ],
         ...(modelParam ? { model: modelParam } : {}),
         ...(store.mode ? { agent: store.mode } : {}),
+        // A bot is a preset: its instructions ride along as the system prompt.
+        // OpenCode takes it per message, so it is sent on every turn.
+        ...(system ? { system } : {}),
+        ...(tools ? { tools } : {}),
       },
     });
     if (promptResult.error) {
       const errMsg = (promptResult.error as any)?.detail || (promptResult.error as any)?.message || "Prompt failed";
       console.error("[query] promptAsync error:", errMsg);
       emitEvent(store, "agent_error", { message: errMsg });
+      // The turn never started, so no idle event will follow: close the stream.
+      emitEvent(store, "error", { message: errMsg });
       store.status = "error";
       notifyPermissionsChanged();
       scheduleCleanup(store);
@@ -140,10 +155,39 @@ export async function runAgent(store: SessionStore): Promise<void> {
   } catch (err: any) {
     console.error("[query] error:", err.message);
     emitEvent(store, "agent_error", { message: err?.message ?? "Unknown error" });
+    // The turn never started, so no idle event will follow: close the stream.
+    emitEvent(store, "error", { message: err?.message ?? "Unknown error" });
     store.status = "error";
     notifyPermissionsChanged();
     scheduleCleanup(store);
   }
+}
+
+/**
+ * A bot's tool lists as OpenCode's per-message switch map. Allowed tools are the
+ * only tools the bot has, so every other tool OpenCode knows is switched off.
+ * If the tool list cannot be read the turn fails rather than run unfenced.
+ */
+async function presetTools(
+  client: Awaited<ReturnType<typeof getClientForDir>>,
+  store: SessionStore,
+): Promise<Record<string, boolean> | undefined> {
+  const norm = (names?: string[]) => (names ?? []).map((n) => n.trim().toLowerCase()).filter(Boolean);
+  const allowed = norm(store.botPreset?.allowedTools);
+  const disallowed = norm(store.botPreset?.disallowedTools);
+  if (!allowed.length && !disallowed.length) return undefined;
+
+  const tools: Record<string, boolean> = {};
+  if (allowed.length) {
+    const result = await client.tool.ids({ query: { directory: store.repoPath } });
+    const ids = result.data;
+    if (!Array.isArray(ids) || !ids.length) {
+      throw new Error("Could not read OpenCode's tool list, so this bot's allowed tools cannot be enforced");
+    }
+    for (const id of ids) tools[id] = allowed.includes(id.toLowerCase());
+  }
+  for (const name of disallowed) tools[name] = false;
+  return tools;
 }
 
 export async function getSessionHistory(sdkSessionId: string, directory: string = ""): Promise<{ role: string; content: any[] }[]> {
@@ -416,6 +460,7 @@ async function startEventStream(client: any, directory: string) {
 
       if (type === "session.idle" || (type === "session.status" && props?.status?.type === "idle")) {
         if (store.status === "done") continue;
+        recordSetupOutcomeFromEvents(store);
         store.status = "done";
         store.pendingPermissions.clear();
         notifyPermissionsChanged();
