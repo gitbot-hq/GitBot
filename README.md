@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="assets/logo.png" alt="gitbot" width="420" />
-
 # gitbot
 
 **Build your bots. Run them on your machine. Talk to them from any device on your network.**
