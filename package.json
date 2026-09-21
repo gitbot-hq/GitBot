@@ -1,6 +1,6 @@
 {
   "name": "@gitbot-hq/gitbot",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Run Claude Code, Codex, or OpenCode from any device on your network — a local server that puts an AI coding agent in your browser, with reusable bots, threads, and per-bot setup instructions.",
   "main": "dist/index.js",
   "bin": {
@@ -35,13 +35,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sj9911/GitBot.git"
+    "url": "git+https://github.com/gitbot-hq/GitBot.git"
   },
-  "homepage": "https://github.com/sj9911/GitBot#readme",
+  "homepage": "https://github.com/gitbot-hq/GitBot#readme",
   "bugs": {
-    "url": "https://github.com/sj9911/GitBot/issues"
+    "url": "https://github.com/gitbot-hq/GitBot/issues"
   },
-  "author": "anildukkipatty",
+  "author": "gitbot-hq",
   "license": "MIT",
   "type": "commonjs",
   "dependencies": {

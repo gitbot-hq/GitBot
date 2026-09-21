@@ -1,72 +1,63 @@
 <div align="center">
 
-<img src="assets/logo.png" alt="gitbot" width="500" />
-
-[![npm version](https://img.shields.io/npm/v/@gitbot-hq/gitbot)](https://www.npmjs.com/package/@gitbot-hq/gitbot)
+<img src="assets/logo.png" alt="gitbot" width="420" />
 
 # gitbot
 
-**Build your bots. Run them on your machine. Talk to them from anywhere.**
+**Build your bots. Run them on your machine. Talk to them from any device on your network.**
 
-Run one command. Scan a QR code. Create bots with their own instructions, setup steps and permissions — then put them to work in your local project directories from any device.
+[![npm version](https://img.shields.io/npm/v/@gitbot-hq/gitbot)](https://www.npmjs.com/package/@gitbot-hq/gitbot)
+[![node](https://img.shields.io/node/v/@gitbot-hq/gitbot)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/@gitbot-hq/gitbot)](LICENSE)
 
----
+[Install](#install) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Agents](#agents) · [Security](#security) · [API](docs/API.md) · [Contributing](#contributing)
 
-[Installation](#installation) · [Quick Start](#quick-start) · [How It Works](#how-it-works) · [Commands](#commands) · [API Reference](#api-reference) · [Contributing](#contributing)
+<img src="assets/screenshots/hub.png" alt="The gitbot hub: bots on the left, threads in the middle, a live chat with a bot on the right" width="900" />
 
 </div>
 
 ## What is gitbot?
 
-gitbot is a **bot creation and running program** built on top of Claude Code and other coding harnesses (Opencode, Codex).
+gitbot is a local server that puts an AI coding agent — **Claude Code, Codex or OpenCode** — in your browser, and lets you turn it into reusable **bots**.
 
-A *bot* is a named, reusable agent you define once: a job description that is appended to the harness's own system prompt, an emoji and a name, setup instructions for what it needs on a machine, a default repo, a model, and a permission mode. Once a bot exists, you give it work in *threads* — each thread is a live agent session scoped to a folder, and a bot can have as many as you want.
-
-gitbot spins up a local server that serves the bot hub UI and bridges every thread to a real agent session on your machine — one that reads your files, writes code, and runs commands. The hub runs in your browser, on any device on your network. Your phone, your tablet, whatever.
+A bot is an agent you define once: a name, a job description, the agent it runs on, a permission mode, and optionally what it needs installed on a machine. You then give it work in **threads**, each one a live agent session in a folder you choose. The agent runs on your machine with your own login, reads your files, edits code and runs commands — and you watch, approve and steer it from a browser tab on your laptop, or from another device on the same network.
 
 ```
-You on the couch          Your laptop
-  (phone browser)  <--->  (gitbot server)
-       WiFi                bots → threads → Claude Code / Opencode / Codex
-                           running in your local project directories
+   Browser, any device              Your machine
+   on your network        <--->     gitbot server
+                          HTTP      bots → threads → Claude Code / Codex / OpenCode
+                                    working in your local folders
 ```
 
-No copy-pasting. Just scan and go.
+- **Reusable bots** — write the instructions once, run them in as many threads and folders as you like.
+- **Three agents, one hub** — pick Claude Code, Codex or OpenCode per bot. gitbot uses the CLIs and logins you already have.
+- **You stay in control** — approve or deny each tool call from the chat (Claude Code, OpenCode), or switch a thread to auto-approve when you trust it.
+- **Bots set themselves up** — a bot can state what it needs on a machine and prepare it once, in a thread of its own.
+- **Shareable** — export a bot as a share code; whoever imports it gets the same bot, setup steps included.
+- **Local by design** — one Node.js process, no account, no cloud service, no database.
 
-## Installation
+## Install
 
 ```bash
 npm install -g @gitbot-hq/gitbot
 ```
 
-That's it. `gitbot` is now available everywhere.
+Requires **Node.js 18 or newer**, and at least one agent that is installed and logged in:
 
-> [!NOTE]
-> gitbot requires **Node.js 18+**. The Claude Code agent requires the `claude` CLI to be installed and authenticated on your machine. The Opencode agent requires the `@opencode-ai/sdk` package. The Codex agent requires the `codex` CLI.
+| Agent | What you need |
+|---|---|
+| Claude Code | The [`claude`](https://docs.claude.com/en/docs/claude-code/overview) CLI, logged in |
+| Codex | The [`codex`](https://github.com/openai/codex) CLI, logged in with `codex login` |
+| OpenCode | The [`opencode`](https://opencode.ai) CLI with a provider configured (`opencode auth login`) |
 
-### Build from source
+gitbot detects what is installed when it starts, and only offers those agents.
 
-```bash
-git clone https://github.com/gitbot-hq/GitBot
-cd GitBot
-
-npm install
-npm run build      # compiles the CLI and bundles the web UI into dist/ui
-npm install -g .
-```
-
-
-## Quick Start
+## Quick start
 
 ```bash
-# Navigate to a workspace directory (parent of your repos, or a specific project)
-cd ~/projects
-
-# Start the bot hub
-gitbot start -p 3000
+cd ~/projects        # the folder that holds your repos — this becomes the workspace
+gitbot start
 ```
-
-That's it. You'll see something like:
 
 ```
 gitbot — starting workspace server in /Users/you/projects
@@ -75,57 +66,57 @@ gitbot — starting workspace server in /Users/you/projects
   port: 3000 (specified)
 
   Local Network  http://192.168.1.42:3000
-
-  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-  █ ▄▄▄▄▄ █ █ █ █
-  █ █   █ █▄█ █ █
-  █ ▄▄▄▄▄ █ ▄▄█ █
-  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-  Scan to open on your phone
 ```
 
-Open the URL or scan the QR code. From the hub, create a bot (or pick one of the presets), let it run its setup thread once on this machine, then open a thread against a folder and start prompting.
+Open `http://localhost:3000` (a QR code for the network address is printed too). Then:
 
-## How It Works
+1. **Make a bot.** Give it a name and instructions — its standing job, e.g. *"Review the diff against main. Flag bugs and missing tests. Never modify files."* Pick its agent.
+2. **Open a thread.** Choose the folder it should work in.
+3. **Say hi.** The bot starts its job on your first message. Approve tool calls as they come up.
 
-gitbot runs a single HTTP server that handles everything:
+<div align="center">
+<img src="assets/screenshots/bot-studio.png" alt="The bot studio: name, description, agent, instructions and permissions, with a mascot picker" width="760" />
+</div>
 
-1. **Serves the bot hub UI** — A full-featured React app, embedded directly in the binary. No separate frontend to deploy.
-2. **Stores your bots** — Bots and their threads live in a JSON store under your home directory, so they survive restarts and are shared by every workspace on the machine.
-3. **Manages a workspace** — gitbot treats the directory where you run `gitbot start` as a workspace. It can list the subdirectories as repos, browse their file trees, read files, and clone new repos into the workspace.
-4. **Bridges bots to harnesses** — Each thread creates a real agent session via the Claude Agent SDK (Claude Code), the Opencode SDK, or the Codex CLI, with the bot's instructions appended to the harness's own system prompt. The agent sees your project files, can edit code, run commands — everything it normally does.
-5. **Streams events to the UI** — Agent output is delivered via Server-Sent Events (SSE), so the UI receives a live stream of assistant messages, tool calls, permission requests, and status updates.
+## How it works
 
-By default the connection is local: your prompts go from your browser, over your WiFi, to the gitbot server on your machine. Nothing leaves your network (except the agent's own API calls to Anthropic or its configured provider). To reach it from outside your LAN, put it on a private network such as Tailscale.
+`gitbot start` runs one HTTP server on your machine. It serves the hub UI, stores your bots and threads, and bridges each thread to a real agent session running in the folder you picked. Agent output streams to the browser over Server-Sent Events.
 
-### Bots carry their own setup
+### Bots
 
-A bot can declare what it needs from a machine — "ffmpeg must be on PATH", "run `npm install` in the repo". The first time that bot lands on a machine, gitbot opens a **setup thread** and lets the bot prepare the machine itself, once. Until that setup is marked complete, the bot will not accept work threads. Setup travels with the bot definition, so a bot shared with someone else knows how to set itself up on their machine too.
+A bot's **instructions** are sent to the agent on top of its own system prompt, framed as a standing job — so a bare "hi" starts the work instead of getting a greeting back. A bot also carries its agent, an optional model, a default folder, a permission mode and optional tool lists. Bots live on the machine, not in a workspace: every folder you start gitbot in sees the same bots.
 
-### Threads are where the work happens
+### Threads
 
-A thread belongs to one bot and runs in one folder — the folder you pick, else the bot's default repo, else the directory you started gitbot in. Threads are listed, renamed, rejoined and deleted from the hub, and their messages are read back from the harness's own transcript on disk rather than duplicated into gitbot's store.
+A thread is one conversation between a bot and a folder. It runs in the folder you pick, else the bot's default folder, else the workspace. Threads resume where they left off, and gitbot does not copy your conversations: a thread's history is read back from the agent's own transcript on disk.
 
-### Sessions are persistent
+Turns keep running if you close the tab or lose the connection. Come back and the hub reattaches to the live turn.
 
-Close your browser tab. Your phone dies. The WiFi drops. It doesn't matter — your agent session keeps running on your machine. When you reconnect, you pick up right where you left off. Claude Code session history is loaded from its transcript files on disk; Opencode history is fetched from its local server.
+### Approvals
 
-### Permissions are forwarded to you
+When the agent wants to run a command, edit a file or fetch a URL, an approval card appears in the chat. Nothing happens until you answer.
 
-When the agent wants to do something that needs approval (run a bash command, edit a file, fetch a URL), you'll see a permission prompt right in the chat UI. You approve or deny from your phone. You stay in control.
+<div align="center">
+<img src="assets/screenshots/approval.png" alt="An approval card asking to allow a file write, with Allow, Deny and Allow all edits buttons" width="620" />
+</div>
 
-### Ports
+Each bot has a default permission mode — **Ask before each tool**, **Auto-approve tools**, or **Plan only (no edits)**. Within a thread you can switch at any time, even mid-turn, between *Ask every time*, *Auto-approve edits* and *Auto-approve all*.
 
-`gitbot start` runs locally and binds port `3000` by default. Pass `-p <port>` to use a different one — handy when several instances run at once in different directories.
+Codex works differently: it has no approval cards. Its permission mode picks a sandbox instead — see [Agents](#agents).
 
----
+### Allowed tools
+
+A bot's **Allowed tools** list is a fence: the listed tools are the only ones the bot can use, MCP tools included. Leave it blank to allow everything. Whether a tool needs your approval is a separate question, decided by the permission mode. The fence is not applied to a bot's setup run, and Codex cannot enforce it (see [Agents](#agents)).
+
+### Bots set themselves up
+
+A bot can declare what it needs from a machine — *"ffmpeg must be on PATH"*, *"run `npm install` in the repo"*. The first time that bot lands on a machine, gitbot opens a **setup thread** where the bot checks or prepares the machine itself, once, asking for approval like any other thread. Until setup is complete the bot accepts no work. Setup instructions travel with the bot, so a shared bot knows how to set itself up on someone else's machine too. You can also mark setup as done yourself.
+
+### Sharing
+
+**Share** on a bot produces a code like `gitbot:v1:…`. **Import** on another machine recreates the bot: its instructions, agent, model, permissions, tool lists and setup steps. Machine-specific state — its default folder, whether setup has run — stays behind. If the bot has setup steps, its setup run starts right after import; see [Security](#security) before importing a code you did not write.
 
 ## Commands
-
-### `gitbot start`
-
-The only command. Starts the bot hub — an HTTP server with SSE event streaming.
 
 ```bash
 gitbot start [options]
@@ -133,293 +124,106 @@ gitbot start [options]
 
 | Flag | Description |
 |---|---|
-| `-p, --port <number>` | Bind this local port and serve the UI at `http://localhost:<port>` (default `3000`) |
-| `-l, --local` | Bind a local port. This is the default; the flag is accepted for compatibility |
-| `-c, --caffeinate` | Prevent macOS sleep for 8 hours while the server is running |
-
-**Examples:**
+| `-p, --port <number>` | Port to listen on. Default `3000` |
+| `-c, --caffeinate` | Keep macOS awake for 8 hours while bots work |
+| `-l, --local` | Accepted for compatibility; local is the only mode |
 
 ```bash
-# Default — local server on port 3000, great for a phone on the same WiFi
-gitbot start
-
-# A different local port
-gitbot start -p 4000
-
-# Keep your Mac awake while your bots work
-gitbot start -p 3000 --caffeinate
+gitbot start                 # port 3000
+gitbot start -p 4000         # another port — run several workspaces side by side
+gitbot start --caffeinate    # long jobs on a laptop
 ```
 
----
+The folder you run `gitbot start` in is the **workspace**: its subfolders show up first in the folder picker. A thread can still run in any folder you can read.
 
-## API Reference
+## Agents
 
-gitbot exposes a REST + SSE API. All endpoints return JSON unless noted.
-
-### Workspace & Infrastructure
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/health` | Returns `{ status: "ok", cwd }` |
-| `GET` | `/agents` | Returns `{ agents: string[] }` — list of available agents |
-| `GET` | `/repos` | List subdirectories of the workspace as `{ name, path, isGit }[]` |
-| `GET` | `/repos/details?repoPath=<path>` | Returns `{ branch, lastCommit, dominantLanguage }` for a specific repo |
-| `POST` | `/repos/clone` | Clone a git repo into the workspace. Body: `{ url }`. Returns `{ path, name }` |
-| `POST` | `/folders` | Create an empty folder in the workspace. Body: `{ name }`. Returns `{ path, name }` |
-| `GET` | `/dir?repoPath=<path>&path=<subpath>` | List directory entries (files and folders) within a repo. Path is validated to stay inside `repoPath`. |
-| `GET` | `/file?repoPath=<path>&path=<filePath>` | Read a file. Path is validated to stay inside `repoPath`. 5 MB max. |
-| `GET` | `/diffs?repoPath=<path>` | Returns `git diff HEAD` output for a repo as `{ diff }` |
-
-### Bots & Threads
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/bots` | List all bots |
-| `POST` | `/bots` | Create a bot. Body: `{ name, description?, emoji?, agent?, instructions?, setupInstructions?, model?, repoPath?, permissionMode?, allowedTools?, disallowedTools? }`. `agent` is `claude-code` (default), `opencode` or `codex`. Returns `{ bot, setupThread? }` |
-| `GET` | `/bots/:id` | Fetch one bot |
-| `PATCH` | `/bots/:id` | Update a bot. Returns `{ bot, setupThread? }` |
-| `DELETE` | `/bots/:id` | Delete a bot |
-| `POST` | `/bots/:id/setup` | Mark this machine's setup. Body: `{ action: "complete" \| "reset" \| "fail" }` |
-| `GET` | `/threads?botId=<id>` | List threads, optionally filtered to one bot |
-| `POST` | `/threads` | Open a thread. Body: `{ botId, repoPath?, title? }`. Returns `409` with `setupRequired` if the bot has not set up this machine yet |
-| `GET` | `/threads/:id` | Fetch one thread |
-| `PATCH` | `/threads/:id` | Update a thread (e.g. rename) |
-| `DELETE` | `/threads/:id` | Delete a thread |
-| `GET` | `/threads/:id/messages` | Message history for a thread, read from the harness transcript |
-
-### Sessions
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/sessions?agent=<agent>&repoPath=<path>` | List past sessions for a repo and agent |
-| `GET` | `/sessions/:id/history?agent=<agent>&repoPath=<path>` | Load message history for a session |
-| `GET` | `/sessions/:id/status` | Returns `{ streaming: boolean }` |
-| `POST` | `/sessions/:id/abort` | Cancel an in-progress session |
-| `POST` | `/sessions/:id/permission` | Respond to a permission request. Body: `{ toolUseID, approved: boolean }` |
-
-### Chat
-
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/chat` | Start or continue a session. Body: `{ repoPath, agent, prompt, sessionId? }`. Returns `{ sessionId }` |
-
-### Streaming Events
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/events?sessionId=<id>` | SSE stream for a specific session. Supports `Last-Event-ID` for reconnect/replay. |
-| `GET` | `/permissions/events` | Global SSE stream of all pending permission requests across all active sessions |
-
-#### SSE Event Types (`/events`)
-
-| Event type | Payload fields | Description |
-|---|---|---|
-| `user_prompt` | `prompt` | The prompt that was sent to the agent |
-| `system` | `subtype`, `data` | Agent session initialized |
-| `assistant` | `content` | Streaming assistant text |
-| `tool_use` | `tool_name`, `tool_input` | Agent is calling a tool |
-| `status` | `status`, `tool_name?` | Activity indicator ("thinking", "tool") |
-| `permission_request` | `toolUseID`, `toolName`, `input` | Agent is requesting permission |
-| `result` | `subtype`, `cost`, `duration_ms`, `num_turns` | Query complete (success or error) |
-| `done` | — | Session finished |
-| `aborted` | `message` | Session was cancelled |
-| `error` | `message` | An error occurred |
-| `agent_error` | `message` | Agent-side error (opencode) |
-
-Events include a `seq` field and are delivered with SSE `id:` headers so clients can use `Last-Event-ID` to resume a stream without missing events.
-
-#### SSE Event Types (`/permissions/events`)
-
-| Event type | Payload fields | Description |
-|---|---|---|
-| `permissions` | `permissions[]` | Full snapshot of all pending permissions across all sessions |
-
-Each permission entry includes `sessionId`, `agent`, `repoPath`, `repoName`, `toolUseID`, `toolName`, and `input`.
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────┐
-│  Browser (any device)       │
-│  React bot hub UI           │
-│  ─ bots + threads           │
-│  ─ repo + folder picker     │
-│  ─ markdown rendering       │
-│  ─ syntax highlighting      │
-│  ─ permission modals        │
-│  ─ diff viewer              │
-│  ─ file browser             │
-└──────────┬──────────────────┘
-           │ HTTP + SSE
-           │ (local port)
-┌──────────▼──────────────────┐
-│  gitbot Server              │
-│  ─ bot + thread store       │
-│  ─ workspace management     │
-│  ─ session management       │
-│  ─ tool permission relay    │
-│  ─ SSE event streaming      │
-│  ─ repo details + file API  │
-└──────┬───────────┬──────────┘
-       │           │            │
-  Claude SDK   Opencode SDK   Codex CLI
-┌──────▼──────┐ ┌──▼──────────┐ ┌▼────────────┐
-│ Claude Code │ │  Opencode   │ │   Codex     │
-│  harness    │ │  harness    │ │   harness   │
-└─────────────┘ └─────────────┘ └─────────────┘
-```
-
-### Transport: SSE instead of WebSocket
-
-gitbot uses **Server-Sent Events (SSE)** for streaming, not WebSockets. The client sends requests via regular HTTP POST and receives the response stream via a GET `/events` connection. This means:
-
-- Standard HTTP — works through proxies and most network configurations
-- The `Last-Event-ID` header lets clients reconnect and replay any buffered events they missed
-- The `/permissions/events` endpoint provides a single global stream for all pending permissions, useful for building dashboard-style UIs that manage multiple sessions at once
-
-### Session Management
-
-Sessions are the core abstraction. A session is created when a `/chat` POST is received, and lives in memory on the server.
-
-- **Persistence** — Sessions survive client disconnects. If the browser closes mid-query, the agent keeps running. When the client reconnects, it can replay buffered events using `Last-Event-ID`.
-- **Resumption** — Clients can resume prior sessions by passing `sessionId` to `/chat`. For Claude Code, the SDK resumes from the `.jsonl` transcript file on disk. For Opencode, the SDK resumes from its local session store.
-- **Multi-repo** — Each session is scoped to a `repoPath`. The agent runs with that directory as its working directory.
-- **Idle cleanup** — Automatic cleanup is currently disabled. Sessions are kept in memory indefinitely (cleanup will be re-enabled once a race-condition-free implementation is ready).
-- **Abort** — `POST /sessions/:id/abort` cancels a running session. For Claude Code, this signals an `AbortController`. For Opencode, it calls the SDK abort endpoint and immediately marks the session done.
-
-### Multi-Agent Support
-
-gitbot detects which harnesses are available at startup by checking for the `claude` CLI, the `@opencode-ai/sdk` package, and the `codex` CLI. It reports the available agents at `/agents`. A bot's `model` and `permissionMode` are applied to whichever harness runs its threads.
-
-**Each bot picks its agent.** A bot's `agent` decides which harness runs its threads; the form defaults to the first one installed. A thread stays on the agent that ran its first turn, because a session id only means something to the agent that issued it — switching a bot's agent applies to threads that have not started yet. Chatting with a bot whose agent is not installed returns a 400 with `agentUnavailable`. All three harnesses get the same bot framing (instructions, setup prompt, `SETUP_COMPLETE` / `SETUP_FAILED` markers) from `src/bot-prompt.ts`.
-
-| Bot feature | Claude Code | Opencode | Codex |
+| Bot feature | Claude Code | OpenCode | Codex |
 |---|---|---|---|
-| Instructions | appended to the system prompt | per-message `system` | `developer_instructions` config |
-| Resume + thread history | yes | yes | yes |
-| Setup runs | yes | yes | yes |
-| `allowedTools` — the only tools the bot can use | yes, MCP tools included | yes | **not supported** |
-| `disallowedTools` | yes | yes | **not supported** |
+| Instructions, resume, thread history, setup runs | ✅ | ✅ | ✅ |
+| Approve / deny each tool call | ✅ | ✅ | ❌ sandbox instead |
+| Switch permission mode mid-turn | ✅ | ✅ | from the next turn |
+| Allowed / disallowed tools | ✅ incl. MCP tools | ✅ | ❌ not supported |
+| Model | optional, default `claude-sonnet-4-6` | **required**, as `provider/model` | optional |
 
-`allowedTools` is a restriction, not an auto-approve list: whether a tool needs approval is decided by the permission mode alone. It does not apply to a bot's setup run, which may need tools the job itself never uses. Opencode bots need a `model` in `provider/model` form (e.g. `anthropic/claude-haiku-4-5`); Opencode's free default model refuses requests made through the SDK.
+- **Claude Code** loads your Claude settings, so bots can use the MCP servers you have configured.
+- **OpenCode** bots need a model such as `anthropic/claude-haiku-4-5`. OpenCode's free default model refuses requests that do not come from OpenCode itself.
+- **Codex** runs the Codex binary bundled with its SDK and uses your `codex login`. It never asks for approval; the permission mode sets its sandbox: *Ask* → read-only, *Auto-approve edits* → may write inside the thread's folder, *Auto-approve all* → full access. It cannot restrict tools either, so use another agent when a bot's tool fence or per-call approval matters.
 
-**Claude Code** (`claude-code`): Uses the `@anthropic-ai/claude-agent-sdk` `query()` function. Runs the `claude-opus-4-6` model in `default` permission mode. Supports `canUseTool` for per-tool permission prompts. Session transcripts are stored at `~/.claude/projects/<cwd>/<session-id>.jsonl`.
+A thread stays on the agent that ran its first turn. Changing a bot's agent applies to threads that have not started yet.
 
-**Opencode** (`opencode`): Uses the `@opencode-ai/sdk`. gitbot spawns an Opencode server process at startup (or connects to one already running on port 4096). Per-directory clients are maintained so sessions can be scoped to different repos simultaneously. Events are received via a persistent Opencode event stream (`client.event.subscribe()`). If the stream fails, it reconnects automatically after 2 seconds.
+## Configuration
 
-**Codex** (`codex`): Uses `@openai/codex-sdk`, which runs the Codex binary bundled with it rather than the `codex` on your PATH; your own install only supplies the login (`codex login`). If the bundled binary cannot be found, gitbot falls back to the `codex` on PATH and logs a warning, since the two versions may differ. Session transcripts are read from `~/.codex/sessions`.
+| Setting | Default | Notes |
+|---|---|---|
+| `GITBOT_DATA_DIR` | `~/.gitbot` | Where bots and threads are stored, as two JSON files |
 
-### Repo Details
+There is no config file. Everything else is set per bot, in the hub.
 
-`GET /repos/details?repoPath=<path>` returns metadata about a git repository without loading its full file tree:
+## Security
 
-- **`branch`** — current HEAD branch name
-- **`lastCommit`** — message, hash, and timestamp of the most recent commit
-- **`dominantLanguage`** — the most common file extension in the repo (determined by `git ls-files`, so it respects `.gitignore`)
+> [!WARNING]
+> **gitbot has no authentication.** It listens on all network interfaces, so anyone who can reach the port can use your bots — which means running an AI agent with your logins on your machine, in any folder your user can read.
 
-### File System API
+Read this before you run it:
 
-`GET /dir` and `GET /file` provide a sandboxed file browser. Both endpoints validate that the requested path is inside the given `repoPath` before serving anything, preventing path traversal. `readFile` enforces a 5 MB cap.
+- **Trusted networks only.** Do not run gitbot on public or shared WiFi, and never expose the port to the internet. To reach it from elsewhere, use a private network such as Tailscale or an SSH tunnel.
+- **Any website can call it.** The API allows requests from every origin. While gitbot is running, a web page open in a browser on your network could send requests to it. Stop gitbot when you are not using it.
+- **Bots act as you.** An agent has your user's file access and shell. In an auto-approve mode it acts without asking. Prefer *ask* mode, and use **Allowed tools** to fence bots that should only read.
+- **Treat a share code like a script from the internet.** The import dialog shows only a bot's name and description — not its instructions or setup steps — and a bot that has setup steps starts its setup run as soon as it is imported, in the permission mode the code carries. Only import codes from people you trust.
 
-### Session Titles
+**Privacy.** gitbot has no telemetry, no account and no server of its own. Your prompts and code go only where your chosen agent sends them (Anthropic, OpenAI, or the provider you configured in OpenCode). gitbot itself makes one outbound request: a lookup of your public IP at `api.ipify.org` on startup, used for the address it prints.
 
-When listing Claude Code sessions, gitbot first looks for a `custom-title` entry in the session's `.jsonl` transcript. If found, that title is used as the session preview. Otherwise, it collects text from the first few user and assistant messages to build a ~80-character preview string.
+To report a vulnerability, please open a [GitHub issue](https://github.com/gitbot-hq/GitBot/issues) without exploit details and ask for a private channel.
 
-### Web UI
+## Troubleshooting
 
-The UI is a Next.js app that lives in [`ui/`](ui/). `npm run build` exports it to static HTML/CSS/JS and copies it into `dist/ui`, so the published package ships a ready-built UI and users need no build step. `gitbot start` serves it from the same port as the API.
-
-Opening `/` sends first-time users (no bots on this machine yet) to `/onboarding`; everyone else lands on the bot hub at `/v2`.
-
-- **Bot hub** — create, edit and delete bots, each with its own mascot and color; per-bot thread lists
-- **Onboarding** — first-run flow to make your first bot or import one
-- **Bot sharing** — export a bot as a share code and import it on another machine
-- **Setup threads** — a bot prepares this machine once, in a thread of its own, before it takes work
-- **Folder picker** — choose where a thread runs
-- **Live chat** — SSE streaming with activity status, a Stop button, and markdown rendering (`react-markdown` + GFM)
-- **Permission prompts** — approve/deny the agent's tool usage from the chat
-- **Light/dark theme** toggle (persisted in `localStorage`)
-
-## Project Structure
-
-```
-GitBot/
-├── src/
-│   ├── index.ts           # CLI entrypoint (commander setup)
-│   ├── server.ts          # HTTP request routing, session lifecycle
-│   ├── server-common.ts   # Shared: HTTP server, SSE, session store, workspace routes
-│   ├── start-claude-code.ts  # Claude Code harness integration
-│   ├── start-opencode.ts  # Opencode harness integration
-│   ├── start-codex.ts     # Codex harness integration
-│   ├── bot-prompt.ts      # Bot + setup prompts and setup verdict, shared by all harnesses
-│   ├── workspace.ts       # Repo listing, file browser, git details, clone
-│   ├── bot-store.ts       # Bot + thread persistence (JSON store)
-│   ├── bot-routes.ts      # REST surface for /bots and /threads
-│   └── static-ui.ts       # Serves the built web UI from dist/ui
-├── ui/                    # Web UI source (Next.js, static export) — not published
-├── scripts/
-│   └── build-ui.mjs       # Builds ui/ and copies the export into dist/ui
-├── dist/                  # Compiled CLI (CommonJS) + dist/ui (built web UI)
-├── package.json
-└── tsconfig.json
-```
-
-## Tech Stack
-
-| Component | Technology |
+| Symptom | Cause and fix |
 |---|---|
-| Language | TypeScript (CommonJS, ES2020) |
-| CLI | Commander v14 |
-| Transport | HTTP + Server-Sent Events (SSE) |
-| Claude Code | `@anthropic-ai/claude-agent-sdk` |
-| Opencode | `@opencode-ai/sdk` |
-| Codex | `@openai/codex-sdk` (bundled binary) |
-| UI | Next.js 16 static export, React 19, Tailwind v4 |
-| Markdown | react-markdown + remark-gfm |
-| QR codes | qrcode-terminal |
+| An agent is missing from the Agent menu | Its CLI is not installed or not on `PATH`. Install it, log in, restart gitbot |
+| *"…runs on codex, which is not installed on this machine"* | The bot (often an imported one) uses an agent you do not have. Install it or edit the bot's agent |
+| OpenCode bot fails with *"free tier can only be used from within OpenCode"* | Set the bot's **Model** to a `provider/model` you are logged in to |
+| macOS blocks `codex` as malware | You are on an old gitbot. Its bundled Codex was signed with a certificate that has since been revoked. Upgrade: `npm i -g @gitbot-hq/gitbot@latest` |
+| Warning about `CLAUDECODE` at startup; Claude bots will not start | You launched gitbot from inside a Claude Code session. Start it from a plain terminal |
+| *"The gitbot web UI has not been built"* | Only when running from source: run `npm run build` |
+| Port already in use | `gitbot start -p <another port>` |
+
+**Known limitations.** The hub is laid out for desktop and tablet widths; there is no phone layout yet. Finished sessions are kept in memory until gitbot stops.
+
+## Documentation
+
+- [API reference](docs/API.md) — the REST + SSE API the hub uses, for building your own client
+- [Architecture](docs/ARCHITECTURE.md) — how the server, sessions and agent integrations fit together
+- [Web UI](ui/README.md) — the Next.js app in `ui/`
 
 ## Development
 
 ```bash
-# Full build: CLI (tsc) + web UI (Next.js export -> dist/ui)
-npm run build
+git clone https://github.com/gitbot-hq/GitBot
+cd GitBot
+npm install
 
-# CLI only — fast, when you haven't touched ui/
-npm run build:cli
+npm run build        # CLI (tsc) + web UI (Next.js static export → dist/ui)
+npm run build:cli    # CLI only — fast, when you have not touched ui/
+npm run build:ui     # web UI only
 
-# Web UI only
-npm run build:ui
-
-# Run the CLI from source (serves the UI from ui/out — run build:ui once first)
-npm run dev -- start -p 3000
-
-# Run built version
-./dist/index.js start -p 3000
+node dist/index.js start -p 3000     # run the build
+npm run dev -- start -p 3000         # run the CLI from source (build the UI once first)
+npm install -g .                     # install your build as `gitbot`
 ```
 
-The working directory where you run `gitbot start` is treated as the workspace root. Repos are the subdirectories of that workspace. You can run gitbot from any directory — the hub lets you pick the folder a thread runs in. Bots themselves are stored per-machine, not per-workspace.
-
-## Security Considerations
-
-> [!IMPORTANT]
-> gitbot has **no authentication**. Anyone who can reach the gitbot port on your network can run your bots on your machine, browse your project files, and read file contents. Bots can be given `auto-approve` permission mode, in which case they act without asking you first.
->
-> Run it on trusted networks only, and do not expose the port to the internet.
+Only `dist/` is published to npm. `ui/` installs its own dependencies the first time you build.
 
 ## Contributing
 
-Contributions are welcome. If you want to help:
+Contributions are welcome.
 
-1. Fork the repo
-2. Create a branch (`git checkout -b my-feature`)
-3. Make your changes
-4. Run `npm run build` to verify compilation
-5. Open a PR
-
-Please keep changes focused and avoid unnecessary refactoring. If you're unsure whether a change fits, open an issue first.
+1. For anything beyond a small fix, [open an issue](https://github.com/gitbot-hq/GitBot/issues) first so we can agree on the approach.
+2. Fork, branch, and keep the change focused.
+3. Make sure `npm run build` passes, and `npx tsc --noEmit` in both the repo root and `ui/`.
+4. If you change behaviour a user can see, update the README or the docs in the same PR.
+5. Open a pull request describing what changed and how you tested it.
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+[MIT](LICENSE)
