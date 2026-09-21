@@ -554,6 +554,168 @@ pre {
   color: #f5f5f5;
 }
 
+/* Queued-message tray: compact cap docked above the composer pill.
+   Narrower than the pill (24px inset each side), top corners rounded.
+   A 1px gap below lets the pill's own border remain visible, creating
+   the stacked connected-cap look. min-width:0 prevents it from
+   stretching the grid when text is long. */
+.queue-tray {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 5px var(--space-2) 5px var(--space-3);
+  margin-inline: 24px;
+  margin-bottom: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px 14px 0 0;
+  z-index: 2;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.queue-tray.leaving {
+  opacity: 0;
+  translate: 0 6px;
+  transition:
+    opacity 160ms var(--ease-out),
+    translate 160ms var(--ease-out);
+}
+
+.queue-tray-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.queue-tray-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.queue-tray-acts {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.queue-steer {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.queue-steer:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.queue-icon-btn {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.queue-icon-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.queue-tray button:focus-visible,
+.queue-menu button:focus-visible {
+  outline: 2px solid var(--brand-sky);
+  outline-offset: 2px;
+}
+
+.menu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: default;
+}
+
+.queue-menu {
+  position: absolute;
+  right: var(--space-2);
+  bottom: calc(100% + 6px);
+  z-index: 60;
+  display: grid;
+  min-width: 190px;
+  padding: 4px;
+  background: var(--surface-active);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+}
+
+.queue-menu button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  border-radius: 6px;
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.queue-menu button:hover {
+  background: var(--surface-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .queue-tray.leaving {
+    translate: none;
+    transition: none;
+  }
+}
+
+/* Stop reads as the secondary action next to the queue-send. */
+.send-btn.stop-btn {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
 .bubble.assistant {
   align-self: stretch;
   background: none;
@@ -760,13 +922,14 @@ pre {
 
 .composer {
   display: grid;
-  gap: var(--space-2);
+  gap: 0;
   padding: var(--space-3) var(--space-6) var(--space-5);
 }
 
 .composer-pill {
   display: flex;
-  align-items: center;
+  /* Keep the composer actions docked to the lower edge as the textarea grows. */
+  align-items: flex-end;
   gap: var(--space-2);
   padding: var(--space-2);
   background: var(--surface);
@@ -1832,6 +1995,7 @@ pre {
 .page-body .composer {
   width: 100%;
   max-width: 806px;
+  min-width: 0;
   margin-inline: auto;
   /* overlap the scroll area so chat glides behind the bar */
   margin-top: -64px;

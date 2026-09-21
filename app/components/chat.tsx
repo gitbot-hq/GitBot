@@ -16,8 +16,10 @@ import {
   streamUrl,
 } from "../lib/api";
 import type { HistoryMsg, PermRequest, ThreadFull } from "../lib/gitbot";
+import { useStatusFavicon } from "../lib/status-favicon";
 import { groupTools, type ToolChip } from "../lib/tool-ui";
 import RunSummary, { ActionRow } from "./run-summary";
+import QueueTray from "./queue-tray";
 
 // Ordered segments: text and tool calls interleave exactly as they
 // arrived, so a turn reads text → tool → text → tool instead of all
@@ -173,6 +175,13 @@ export default function Chat({
   const [activity, setActivity] = useState<string | null>(null);
   const [perms, setPerms] = useState<(PermRequest & { verdict?: boolean })[]>([]);
   const [turnError, setTurnError] = useState<string | null>(null);
+  // Single "up next" slot: the server runs one turn per thread (a second
+  // POST /chat mid-turn is a 409), so follow-ups sent while streaming wait
+  // here and flush when the turn ends. One slot — a newer send replaces it.
+  const [queue, setQueue] = useState<string | null>(null);
+  const queueRef = useRef<string | null>(null);
+  // Steer: abort the running turn and send this text the moment it ends.
+  const pendingSteer = useRef<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
 
@@ -222,6 +231,14 @@ export default function Chat({
 
   function resetBox() {
     if (boxRef.current) boxRef.current.style.height = "auto";
+  }
+
+  function fitBox() {
+    const box = boxRef.current;
+    if (box) {
+      box.style.height = "auto";
+      box.style.height = `${Math.min(box.scrollHeight, 160)}px`;
+    }
   }
 
   function closeStream() {
@@ -296,9 +313,10 @@ export default function Chat({
   useEffect(() => {
     closeStream();
     if (reloadTimer.current) clearTimeout(reloadTimer.current);
-    // Stash this thread's draft, restore the next one's.
+    // Stash this thread's draft, restore the next one's. A queued
+    // follow-up rides back into the draft — never silently dropped.
     const prevId = threadRef.current;
-    if (prevId) drafts.current[prevId] = draftRef.current;
+    if (prevId) drafts.current[prevId] = queueRef.current ?? draftRef.current;
     sessionRef.current = null;
     liveIdRef.current = null;
     setLive(null);
@@ -315,6 +333,9 @@ export default function Chat({
     pendingFilter.current = null;
     pendingTools.current = [];
     pendingRun.current = null;
+    queueRef.current = null;
+    setQueue(null);
+    pendingSteer.current = null;
     const nextDraft = thread?.id ? (drafts.current[thread.id] ?? "") : "";
     draftRef.current = nextDraft;
     setDraft(nextDraft);
@@ -374,6 +395,20 @@ export default function Chat({
   useEffect(() => {
     onActivityChange?.(streaming ? activity : null);
   }, [streaming, activity, onActivityChange]);
+
+  // Tab alerts: badged favicon + standout title while hidden.
+  // Unverdict permission requests outrank everything — the bot is
+  // waiting on the user.
+  const awaitingApproval = perms.some((p) => p.verdict === undefined);
+  useStatusFavicon(
+    awaitingApproval
+      ? "attention"
+      : turnError
+        ? "error"
+        : streaming
+          ? "working"
+          : "idle",
+  );
 
   // Typewriter: reveal the live bubble a few chars at a time.
   // Reduced motion completes instantly instead of animating.
@@ -461,6 +496,19 @@ export default function Chat({
     }
   }
 
+  /** A turn just ended: start whatever is waiting (steer wins over the
+   *  queue) as the next turn on the same thread. */
+  function maybeFlush(tid: string | null) {
+    if (!tid || threadRef.current !== tid) return;
+    const next = pendingSteer.current ?? queueRef.current;
+    pendingSteer.current = null;
+    if (queueRef.current) {
+      queueRef.current = null;
+      setQueue(null);
+    }
+    if (next) startTurn(next);
+  }
+
   function finish(refetch: boolean, stopped = false) {
     closeStream();
     const tid = threadRef.current;
@@ -514,6 +562,7 @@ export default function Chat({
             applyOverlays(tid, flat);
             setLive(null);
             setMsgs(flat);
+            maybeFlush(tid);
           })
           .catch(() => {});
       }, 300);
@@ -521,6 +570,7 @@ export default function Chat({
     } else {
       setLive(null);
       requestAnimationFrame(scrollDown);
+      maybeFlush(tid);
       onTurnDone();
     }
   }
@@ -598,8 +648,32 @@ export default function Chat({
     });
   }
 
+  // The composer never locks: sending mid-turn parks the message in the
+  // queue (flushed by finish()), sending while idle starts a turn.
   async function sendPrompt(prompt: string) {
-    if (!thread || streaming || !prompt.trim()) return;
+    if (!thread || !prompt.trim()) return;
+    if (streaming) {
+      enqueue(prompt.trim());
+      return;
+    }
+    startTurn(prompt);
+  }
+
+  function enqueue(text: string) {
+    queueRef.current = text;
+    setQueue(text);
+    setDraft("");
+    draftRef.current = "";
+    if (threadRef.current) drafts.current[threadRef.current] = "";
+    resetBox();
+    stick.current = true;
+    requestAnimationFrame(scrollDown);
+  }
+
+  async function startTurn(prompt: string) {
+    // No streaming check: callers own that (sendPrompt enqueues mid-turn,
+    // maybeFlush only runs once the previous turn fully ended).
+    if (!thread || !prompt.trim()) return;
     lastPrompt.current = prompt;
     catchupRef.current = false;
     pendingFilter.current = null;
@@ -633,7 +707,7 @@ export default function Chat({
     }
   }
 
-  function stop() {
+  function abortCurrent() {
     const sid = sessionRef.current;
     if (sid) postAbort(sid).catch(() => {});
     // The `aborted` event finishes the turn; safety net below.
@@ -643,6 +717,53 @@ export default function Chat({
         finish(true);
       }
     }, 8000);
+  }
+
+  function stop() {
+    // Halting means halting: a queued follow-up rides back into the draft
+    // instead of firing the moment the turn dies.
+    const q = queueRef.current;
+    if (q) {
+      queueRef.current = null;
+      setQueue(null);
+      pendingSteer.current = null;
+      setDraft(q);
+      draftRef.current = q;
+      if (threadRef.current) drafts.current[threadRef.current] = q;
+      fitBox();
+    }
+    abortCurrent();
+  }
+
+  /** Steer: abort this turn and send the queued message the moment it ends.
+   *  Falls back to staying queued if the turn hasn't reached the server. */
+  function steerNow() {
+    const q = queueRef.current;
+    if (!q || !thread) return;
+    if (!sessionRef.current && !esRef.current) return;
+    queueRef.current = null;
+    setQueue(null);
+    pendingSteer.current = q;
+    abortCurrent();
+  }
+
+  /** Drop the queued message back into the composer for editing. */
+  function editQueue() {
+    const q = queueRef.current;
+    queueRef.current = null;
+    setQueue(null);
+    if (!q) return;
+    setDraft(q);
+    draftRef.current = q;
+    if (threadRef.current) drafts.current[threadRef.current] = q;
+    fitBox();
+    boxRef.current?.focus({ preventScroll: true });
+  }
+
+  /** Discard the queued message entirely. */
+  function discardQueue() {
+    queueRef.current = null;
+    setQueue(null);
   }
 
   function copyText(id: string, text: string) {
@@ -840,6 +961,12 @@ export default function Chat({
           resetBox();
         }}
       >
+        <QueueTray
+          text={queue}
+          onSteer={steerNow}
+          onEdit={editQueue}
+          onDiscard={discardQueue}
+        />
         <div className="composer-pill">
           <textarea
             ref={boxRef}
@@ -869,14 +996,32 @@ export default function Chat({
                 resetBox();
               }
             }}
-            placeholder={streaming ? "Working…" : `Ask ${botName}…`}
+            placeholder={streaming ? "Add a follow-up…" : `Ask ${botName}…`}
             aria-label="Message"
-            disabled={streaming}
           />
           {streaming ? (
-            <button type="button" className="send-btn" onClick={stop} aria-label="Stop" data-tip="Stop" data-tip-pos="above">
-              <IconPlayerStop size={16} aria-hidden="true" />
-            </button>
+            <>
+              <button
+                type="button"
+                className="send-btn stop-btn"
+                onClick={stop}
+                aria-label="Stop"
+                data-tip="Stop"
+                data-tip-pos="above"
+              >
+                <IconPlayerStop size={16} aria-hidden="true" />
+              </button>
+              <button
+                type="submit"
+                className="send-btn"
+                disabled={!draft.trim()}
+                aria-label="Queue for next"
+                data-tip="Queue for next"
+                data-tip-pos="above"
+              >
+                <IconArrowUp size={16} aria-hidden="true" />
+              </button>
+            </>
           ) : (
             <button type="submit" className="send-btn" disabled={!draft.trim()} aria-label="Send" data-tip="Send" data-tip-pos="above">
               <IconArrowUp size={16} aria-hidden="true" />
