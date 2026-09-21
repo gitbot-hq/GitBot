@@ -9,13 +9,16 @@ import {
   ApiError,
   getMessages,
   getPendingPermissions,
+  getSessionConfig,
   getSessionStatus,
+  patchPermissionMode,
   postAbort,
   postChat,
   postPermission,
   streamUrl,
 } from "../lib/api";
-import type { HistoryMsg, PermRequest, ThreadFull } from "../lib/gitbot";
+import { EDIT_TOOLS, PERMISSION_MODES, botPermissionToSession } from "../lib/gitbot";
+import type { HistoryMsg, PermRequest, SessionPermissionMode, ThreadFull } from "../lib/gitbot";
 
 type ToolChip = { name: string; input: unknown };
 type Msg = {
@@ -87,6 +90,7 @@ function ChatSkeleton({ label }: { label: string }) {
 export default function Chat({
   thread,
   botName,
+  botPermission,
   autoSend,
   onAutoSent,
   onTurnDone,
@@ -95,6 +99,9 @@ export default function Chat({
 }: {
   thread: ThreadFull | null;
   botName: string;
+  /** The bot's saved permission setting — the default until the user
+   *  switches modes for this thread. */
+  botPermission?: string;
   autoSend: string | null;
   onAutoSent: () => void;
   onTurnDone: () => void;
@@ -113,6 +120,9 @@ export default function Chat({
   const [turnError, setTurnError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  // Permission mode the user picked for this thread; null = bot default.
+  const [modeOverride, setModeOverride] = useState<SessionPermissionMode | null>(null);
+  const permMode = modeOverride ?? botPermissionToSession(botPermission);
 
   const esRef = useRef<EventSource | null>(null);
   const sessionRef = useRef<string | null>(null);
@@ -188,6 +198,7 @@ export default function Chat({
     threadRef.current = thread?.id ?? null;
     setMsgs([]);
     setPerms([]);
+    setModeOverride(null);
     setTurnError(null);
     setActivity(null);
     setStreaming(false);
@@ -213,6 +224,12 @@ export default function Chat({
               setStreaming(true);
               setActivity("Thinking…");
               openStream(sid);
+              // The running turn may be in a mode the user switched to earlier.
+              getSessionConfig(sid)
+                .then(({ permissionMode }) => {
+                  if (threadRef.current === tid) setModeOverride(permissionMode);
+                })
+                .catch(() => {});
             });
         })
         .catch(() => {});
@@ -330,7 +347,6 @@ export default function Chat({
           ? prev
           : [...prev, { toolUseID: d.toolUseID, toolName: String(d.toolName ?? "tool"), input: d.input }],
       );
-      setActivity("Waiting for your approval…");
     });
     es.addEventListener("aborted", () => {
       setMsgs((prev) => [...prev, { id: nid(), role: "assistant", text: "_Stopped._", tools: [] }]);
@@ -375,7 +391,7 @@ export default function Chat({
     stick.current = true;
     requestAnimationFrame(scrollDown);
     try {
-      const { sessionId } = await postChat(thread.id, prompt);
+      const { sessionId } = await postChat(thread.id, prompt, modeOverride ?? undefined);
       if (threadRef.current !== thread.id) return;
       sessionRef.current = sessionId;
       openStream(sessionId);
@@ -418,6 +434,33 @@ export default function Chat({
       )
       .catch((e) => setTurnError(errText(e)));
   }
+
+  // Switch permission mode. Between turns it just rides along on the next
+  // /chat; mid-turn the server applies it at once and resolves any waiting
+  // approvals the new mode covers — re-read the pending set to mirror that.
+  function changeMode(mode: SessionPermissionMode) {
+    const before = modeOverride;
+    setModeOverride(mode);
+    const sid = sessionRef.current;
+    if (!sid) return;
+    patchPermissionMode(sid, mode)
+      .then(() => getPendingPermissions(sid))
+      .then(({ pending }) =>
+        setPerms((prev) =>
+          prev.map((x) =>
+            x.verdict === undefined && pending.indexOf(x.toolUseID) === -1 ? { ...x, verdict: true } : x,
+          ),
+        ),
+      )
+      .catch((e) => {
+        setModeOverride(before);
+        setTurnError(errText(e));
+      });
+  }
+
+  // Shown while any approval card is unanswered; otherwise the last status.
+  const awaitingApproval = perms.some((p) => p.verdict === undefined);
+  const activityLabel = awaitingApproval ? "Waiting for your approval…" : activity;
 
   if (!thread) {
     return (
@@ -523,6 +566,25 @@ export default function Chat({
               <button type="button" className="btn-secondary" onClick={() => answerPerm(p, false)}>
                 Deny
               </button>
+              {EDIT_TOOLS.indexOf(p.toolName) !== -1 && permMode === "ask-permissions" ? (
+                <button
+                  type="button"
+                  className="btn-secondary perm-all"
+                  title="Stop asking about file edits in this thread"
+                  onClick={() => changeMode("allow-all-edits")}
+                >
+                  Allow all edits
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-secondary perm-all"
+                  title="Stop asking in this thread — auto-approve every tool"
+                  onClick={() => changeMode("yolo")}
+                >
+                  Allow all
+                </button>
+              )}
             </div>
             </div>
           ) : (
@@ -541,9 +603,9 @@ export default function Chat({
             )}
           </p>
         )}
-        {activity && (
+        {activityLabel && (
           <div className="thinking-row">
-            <LoadingState label={activity} variant="Drive" />
+            <LoadingState label={activityLabel} variant="Drive" />
           </div>
         )}
       </section>
@@ -586,6 +648,20 @@ export default function Chat({
             </button>
           )}
         </div>
+        <label className="perm-mode">
+          <span>Permissions</span>
+          <select
+            value={permMode}
+            onChange={(e) => changeMode(e.target.value as SessionPermissionMode)}
+            aria-label="Permission mode for this thread"
+          >
+            {PERMISSION_MODES.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </label>
       </form>
     </main>
   );

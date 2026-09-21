@@ -686,6 +686,7 @@ export default function V2() {
               <Chat
                 thread={activeThread}
                 botName={bot?.name ?? "bot"}
+                botPermission={bot?.permissionMode}
                 autoSend={autoSend}
                 onAutoSent={() => setAutoSend(null)}
               onTurnDone={refreshAfterTurn}

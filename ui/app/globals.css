@@ -743,9 +743,43 @@ pre {
   gap: var(--space-2);
 }
 
+.perm-acts {
+  flex-wrap: wrap;
+}
+
+/* "Allow all" sits apart from the per-request answers. */
+.perm-acts .perm-all {
+  margin-left: auto;
+}
+
 .perm-note {
   color: var(--muted);
   font-size: var(--text-sm);
+}
+
+/* Permission mode switcher under the composer. Stays live mid-turn. */
+.perm-mode {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.perm-mode select {
+  padding: 2px var(--space-2);
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  cursor: pointer;
+}
+
+.perm-mode select:hover,
+.perm-mode select:focus-visible {
+  background: var(--surface-2);
 }
 
 .composer {

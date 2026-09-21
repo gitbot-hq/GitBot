@@ -502,6 +502,7 @@ export default function Blank() {
         <Chat
           thread={activeThread}
           botName={bot?.name ?? "bot"}
+          botPermission={bot?.permissionMode}
           autoSend={autoSend}
           onAutoSent={() => setAutoSend(null)}
           onTurnDone={() => {

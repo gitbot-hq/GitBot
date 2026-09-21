@@ -12,7 +12,7 @@ export default function TopBar({ actions }: { actions?: ReactNode }) {
         <Logo height={24} />
       </span>
       {actions}
-      <UserChip name="Sunny" />
+      <UserChip name="Revise" />
     </header>
   );
 }

@@ -64,3 +64,20 @@ export type Message = {
   role: "user" | "assistant";
   text: string;
 };
+
+// A running session's permission mode (server: PermissionMode). Bots store
+// their own vocabulary ("ask-permissions" | "auto-approve" | "plan"); this
+// mirrors the server's botPermissionToSession translation.
+export type SessionPermissionMode = "ask-permissions" | "allow-all-edits" | "yolo";
+
+export const PERMISSION_MODES: { value: SessionPermissionMode; label: string }[] = [
+  { value: "ask-permissions", label: "Ask every time" },
+  { value: "allow-all-edits", label: "Auto-approve edits" },
+  { value: "yolo", label: "Auto-approve all" },
+];
+
+export const EDIT_TOOLS = ["Edit", "Write", "NotebookEdit"];
+
+export function botPermissionToSession(botMode: string | undefined): SessionPermissionMode {
+  return botMode === "auto-approve" || botMode === "plan" ? "yolo" : "ask-permissions";
+}

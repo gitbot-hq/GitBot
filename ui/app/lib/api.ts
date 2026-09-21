@@ -1,6 +1,8 @@
 // HTTP adapter for the live GitBot server. Components never import this;
 // blank/page.tsx calls it and passes plain data down as props.
 
+import type { SessionPermissionMode } from "./gitbot";
+
 // Same origin: the gitbot server serves this UI and the API from one port,
 // so every path below is relative to wherever the page was loaded from.
 const BASE = "";
@@ -76,11 +78,32 @@ export function browse(path?: string | null) {
 }
 
 /** Starts a turn. Returns the session id to stream + abort + approve on. */
-export function postChat(threadId: string, prompt: string) {
+// permissionMode is only sent when the user overrode the bot's default for
+// this thread; otherwise the server applies the bot's own setting.
+export function postChat(
+  threadId: string,
+  prompt: string,
+  permissionMode?: SessionPermissionMode,
+) {
   return req<{ sessionId: string }>("/chat", {
     method: "POST",
-    body: JSON.stringify({ threadId, prompt }),
+    body: JSON.stringify({ threadId, prompt, ...(permissionMode ? { permissionMode } : {}) }),
   });
+}
+
+// Switch a session's permission mode. Works mid-turn: the server also
+// resolves any approvals already waiting that the new mode covers.
+export function patchPermissionMode(sessionId: string, permissionMode: SessionPermissionMode) {
+  return req<{ sessionId: string; permissionMode: SessionPermissionMode }>(
+    `/sessions/${encodeURIComponent(sessionId)}`,
+    { method: "PATCH", body: JSON.stringify({ permissionMode }) },
+  );
+}
+
+export function getSessionConfig(sessionId: string) {
+  return req<{ permissionMode: SessionPermissionMode }>(
+    `/sessions/${encodeURIComponent(sessionId)}/config`,
+  );
 }
 
 export function postPermission(
