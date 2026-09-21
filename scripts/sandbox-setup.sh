@@ -37,9 +37,9 @@ mkdir -p "$GITBOT_WORKSPACE"
 
 # --- Install gitbot -----------------------------------------------------------
 echo ""
-echo "==> Installing gitbot-ai globally"
+echo "==> Installing @gitbot-hq/gitbot globally"
 if ! gitbot -V &>/dev/null; then
-  npm install -g gitbot-ai
+  npm install -g @gitbot-hq/gitbot
   if ! gitbot -V &>/dev/null; then
     echo "ERROR: gitbot not found after install." >&2
     exit 1

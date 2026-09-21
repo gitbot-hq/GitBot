@@ -2,7 +2,7 @@
 
 <img src="assets/logo.png" alt="gitbot" width="500" />
 
-[![npm version](https://img.shields.io/npm/v/gitbot-ai)](https://www.npmjs.com/package/gitbot-ai)
+[![npm version](https://img.shields.io/npm/v/@gitbot-hq/gitbot)](https://www.npmjs.com/package/@gitbot-hq/gitbot)
 
 # gitbot
 
@@ -36,7 +36,7 @@ No copy-pasting. Just scan and go.
 ## Installation
 
 ```bash
-npm install -g gitbot-ai
+npm install -g @gitbot-hq/gitbot
 ```
 
 That's it. `gitbot` is now available everywhere.
@@ -47,7 +47,7 @@ That's it. `gitbot` is now available everywhere.
 ### Build from source
 
 ```bash
-git clone https://github.com/sj9911/GitBot.git
+git clone https://github.com/gitbot-hq/GitBot
 cd GitBot
 
 npm install

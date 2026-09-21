@@ -1,7 +1,7 @@
 # GitBot UI
 
 Next.js (v16 + React + Tailwind v4 + TypeScript) web UI for GitBot. It
-lives in `ui/` of the GitBot repo and ships inside the `gitbot-ai` npm
+lives in `ui/` of the GitBot repo and ships inside the `@gitbot-hq/gitbot` npm
 package as a static build. (Originally developed on the
 `codex/gitbot-ui-concepts` branch.)
 

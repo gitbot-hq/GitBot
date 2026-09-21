@@ -1,5 +1,5 @@
 {
-  "name": "gitbot-ai",
+  "name": "@gitbot-hq/gitbot",
   "version": "0.0.4",
   "description": "Run Claude Code, Codex, or OpenCode from any device on your network — a local server that puts an AI coding agent in your browser, with reusable bots, threads, and per-bot setup instructions.",
   "main": "dist/index.js",
@@ -9,6 +9,9 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=18"
   },
