@@ -76,6 +76,7 @@ export default function V2() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [threadByBot, setThreadByBot] = useState<Record<string, string>>({});
   const [hoverId, setHoverId] = useState<string | null>(null);
+  const [botActivity, setBotActivity] = useState<string | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   // Inline bot studio: slides over threads + chat.
   const [editing, setEditing] = useState<Bot | "new" | null>(null);
@@ -169,6 +170,31 @@ export default function V2() {
   // The profile stays mounted under the studio: opening edit slides the
   // studio over it, closing slides back to it.
   const showProfile = profileBot != null;
+
+  // Live rail status: the chat's activity sentence shortened to one word.
+  // Anything unrecognized is honestly just "Working".
+  function shortActivity(a: string | null): string | null {
+    if (!a) return null;
+    if (a === "Thinking…") return "Thinking";
+    if (a === "Waiting for your approval…") return "Waiting";
+    const m = a.match(/^Running (.+?)…$/);
+    if (m) {
+      return (
+        (
+          {
+            Read: "Reading",
+            Edit: "Editing",
+            Write: "Writing",
+            Bash: "Running",
+            Grep: "Searching",
+            Glob: "Finding",
+          } as Record<string, string>
+        )[m[1]] ?? "Working"
+      );
+    }
+    return "Working";
+  }
+  const activeLabel = bot ? shortActivity(botActivity) : null;
 
   const searchText = query.trim().toLowerCase();
   const visibleBots = searchText
@@ -560,7 +586,7 @@ export default function V2() {
                 <button
                   key={b.id}
                   type="button"
-                  className={`${b.id === bot?.id ? "bot-row selected" : "bot-row"}${searchText ? "" : " msg-in"}`}
+                  className={`${b.id === bot?.id ? "bot-row selected" : "bot-row"}${b.id === bot?.id && activeLabel ? " live" : ""}${searchText ? "" : " msg-in"}`}
                   onClick={() => {
                     if (b.id === bot?.id) setProfileId(b.id);
                     else setSelectedId(b.id);
@@ -570,13 +596,14 @@ export default function V2() {
                   aria-current={b.id === bot?.id ? "true" : undefined}
                 >
                   <span className="mascot-wrap">
-                    <BotFace mascot={avatarFor(b.id).mascot} size={44} color={avatarFor(b.id).color} cheer={hoverId === b.id} duration={240} phase={i} />
+                    <BotFace mascot={avatarFor(b.id).mascot} size={44} color={avatarFor(b.id).color} cheer={hoverId === b.id || (b.id === bot?.id && activeLabel != null)} duration={240} phase={i} />
+                    <span className="presence" aria-hidden="true" />
                   </span>
                   <span className="bot-row-text">
                     <b>{b.name}</b>
                     <small>
                       <i aria-hidden="true" />
-                      Idle
+                      {b.id === bot?.id && activeLabel ? activeLabel : "Idle"}
                     </small>
                   </span>
                   <span
@@ -627,13 +654,13 @@ export default function V2() {
                 />
               )}
               <div className={collapsed ? "threads-bot-wrap open" : "threads-bot-wrap"}>
-                <div className="threads-bot">
-                  <b>{bot?.name ?? ""}</b>
-                  <small>
-                    <i aria-hidden="true" />
-                    Idle
-                  </small>
-                </div>
+              <div className={activeLabel ? "threads-bot live" : "threads-bot"}>
+                <b>{bot?.name ?? ""}</b>
+                <small>
+                  <i aria-hidden="true" />
+                  {activeLabel ?? "Idle"}
+                </small>
+              </div>
               </div>
               <div className={threadSearchOpen ? "side-head threads-head-row searching" : "side-head threads-head-row"}>
                 <h2 className="side-title">Threads</h2>
@@ -717,6 +744,7 @@ export default function V2() {
                 botName={bot?.name ?? "bot"}
                 autoSend={autoSend}
                 onAutoSent={() => setAutoSend(null)}
+                onActivityChange={setBotActivity}
               onTurnDone={refreshAfterTurn}
                 booting={botsLoading || threadsLoading}
             />

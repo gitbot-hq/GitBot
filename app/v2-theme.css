@@ -170,6 +170,39 @@
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.09);
 }
 
+/* Live status: a working bot reads green, text and dot. */
+.v2 .bot-row.live small,
+.v2 .threads-bot.live small {
+  color: var(--brand-leaf);
+}
+
+.v2 .bot-row.live small i,
+.v2 .threads-bot.live small i {
+  background: var(--brand-leaf);
+}
+
+/* Collapsed rail: presence dot on the mascot's bottom corner. Gray idle,
+   green working — same language as the text status it replaces. */
+.v2 .presence {
+  display: none;
+}
+
+.v2 .side.closing .presence {
+  display: block;
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--faint);
+  border: 2px solid var(--surface);
+}
+
+.v2 .side.closing .bot-row.live .presence {
+  background: var(--brand-leaf);
+}
+
 /* Right-side tray: the bot form slides in OVER the chat panel */
 .v2 .page-body .tray {
   flex: 1;

@@ -149,6 +149,7 @@ export default function Chat({
   onAutoSent,
   onTurnDone,
   onWorkingChange,
+  onActivityChange,
   booting,
 }: {
   thread: ThreadFull | null;
@@ -157,6 +158,9 @@ export default function Chat({
   onAutoSent: () => void;
   onTurnDone: () => void;
   onWorkingChange?: (working: boolean) => void;
+  /** Live activity sentence ("Thinking…", "Running Bash…", null when idle).
+   *  Lets the shell show what the bot is doing outside the chat. */
+  onActivityChange?: (activity: string | null) => void;
   /** True while the app is still loading bots/threads on boot. Shows a
    *  skeleton instead of the empty-thread copy, so the first paint never
    *  flashes placeholder text. Defaults to false (old behavior). */
@@ -365,6 +369,11 @@ export default function Chat({
   useEffect(() => {
     onWorkingChange?.(streaming);
   }, [streaming, onWorkingChange]);
+
+  // Live activity sentence for the shell rail (null = idle).
+  useEffect(() => {
+    onActivityChange?.(streaming ? activity : null);
+  }, [streaming, activity, onActivityChange]);
 
   // Typewriter: reveal the live bubble a few chars at a time.
   // Reduced motion completes instantly instead of animating.
