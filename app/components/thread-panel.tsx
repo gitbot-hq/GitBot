@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { IconArrowLeft } from "@tabler/icons-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { IconX } from "@tabler/icons-react";
 import {
   ApiError,
   browse,
@@ -9,6 +9,12 @@ import {
   type BrowseResult,
 } from "../lib/api";
 import type { Bot, ThreadFull } from "../lib/gitbot";
+
+const AGENT_OPTIONS = [
+  { id: "claude-code", label: "Claude Code" },
+  { id: "codex", label: "Codex" },
+  { id: "opencode", label: "OpenCode" },
+] as const;
 
 // New-thread folder picker as a slide-over panel. This mirrors
 // openFolderPicker from the original client verbatim — same order, same
@@ -40,6 +46,8 @@ export default function ThreadPanel({
 }) {
   const [current, setCurrent] = useState<BrowseResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [agent, setAgent] = useState(bot.agent || "claude-code");
+  const paneRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback((path: string | null) => {
     browse(path)
@@ -57,6 +65,11 @@ export default function ThreadPanel({
     load(bot.repoPath || null);
   }, [bot.repoPath, load]);
 
+  // The overlay is scrollable; always start a new thread at step one.
+  useEffect(() => {
+    paneRef.current?.parentElement?.scrollTo({ top: 0 });
+  }, []);
+
   useEffect(() => {
     function esc(ev: KeyboardEvent) {
       if (ev.key === "Escape") onClose();
@@ -68,7 +81,7 @@ export default function ThreadPanel({
   function pick(repoPath: string | null) {
     // "Run here" with nowhere loaded is a no-op in the original.
     if (repoPath && !current) return;
-    createThread(bot.id, repoPath ?? undefined).then(
+    createThread(bot.id, repoPath ?? undefined, agent).then(
       ({ thread }) => onCreated(thread),
       (e) => {
         if (e instanceof ApiError && e.extra?.setupRequired) {
@@ -81,74 +94,110 @@ export default function ThreadPanel({
   }
 
   return (
-    <div className="thread-pane" aria-label="Where should this thread run?">
-      <button type="button" className="back-btn" onClick={onClose}>
-        <IconArrowLeft size={16} stroke={2} aria-hidden="true" />
-        Back
-      </button>
+    <div ref={paneRef} className="thread-pane" aria-label="Create thread">
       <div className="thread-pane-inner">
-      <h2>Where should this thread run?</h2>
-      {current && (
-        <div className="jump-row" aria-label="Jump to">
-          <JumpChip label="Workspace" path={current.workspace} onJump={load} />
-          <JumpChip label="Home" path={current.home} onJump={load} />
-          <JumpChip label="/" path="/" onJump={load} />
-        </div>
-      )}
-      <p className="pathbar" title={current?.path ?? ""}>
-        {current ? current.path : "…"}
-      </p>
-      <div className="pick-list">
-        {error && <p className="chat-error">{error}</p>}
-        {!error &&
-          current &&
-          current.parent && (
-            <button
-              type="button"
-              className="thread-row pick-row"
-              onClick={() => load(current.parent)}
-            >
-              <span aria-hidden="true">{"\u2191"}</span>
-              <span>..</span>
-            </button>
+        <header className="thread-pane-head">
+          <div>
+            <h2>Create thread</h2>
+            <p>Choose a workspace and agent.</p>
+          </div>
+          <button
+            type="button"
+            className="thread-close"
+            onClick={onClose}
+            aria-label="Close create thread"
+          >
+            <IconX size={22} stroke={1.8} aria-hidden="true" />
+          </button>
+        </header>
+
+        <section className="thread-step" aria-labelledby="thread-workspace-title">
+          <div className="thread-step-head">
+            <span className="thread-step-number" aria-hidden="true">1</span>
+            <h3 id="thread-workspace-title">Choose workspace</h3>
+          </div>
+          {current && (
+            <div className="jump-row" aria-label="Jump to">
+              <JumpChip label="Workspace" path={current.workspace} active={current.path === current.workspace} onJump={load} />
+              <JumpChip label="Home" path={current.home} active={current.path === current.home} onJump={load} />
+              <JumpChip label="/" path="/" active={current.path === "/"} onJump={load} />
+            </div>
           )}
-        {!error &&
-          current?.dirs.map((d) => (
-            <button
-              key={d.path}
-              type="button"
-              className="thread-row pick-row"
-              onClick={() => load(d.path)}
-            >
-              <span aria-hidden="true">{"\u{1F4C1}"}</span>
-              <span>{d.name}</span>
-            </button>
-          ))}
-        {!error && current && !current.dirs.length && !current.parent && (
-          <p className="threads-empty">No subfolders here.</p>
-        )}
-      </div>
-      <div className="pick-acts">
-        <button
-          type="button"
-          className="btn-ghost"
-          title="Run where the CLI was started (or the bot's directory)"
-          onClick={() => pick(null)}
-        >
-          Use default
-        </button>
-        <div className="spacer" />
-        <button type="button" className="btn-secondary" onClick={onClose}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={() => current && pick(current.path)}
-        >
-          Run here
-        </button>
-      </div>
+          <p className="pathbar" title={current?.path ?? ""}>
+            {current ? current.path : "…"}
+          </p>
+          <div className="pick-list">
+            {error && <p className="chat-error">{error}</p>}
+            {!error &&
+              current &&
+              current.parent && (
+                <button
+                  type="button"
+                  className="thread-row pick-row"
+                  onClick={() => load(current.parent)}
+                >
+                  ..
+                </button>
+              )}
+            {!error &&
+              current?.dirs.map((d) => (
+                <button
+                  key={d.path}
+                  type="button"
+                  className="thread-row pick-row"
+                  onClick={() => load(d.path)}
+                >
+                  {d.name}
+                </button>
+              ))}
+            {!error && current && !current.dirs.length && !current.parent && (
+              <p className="threads-empty">No subfolders here.</p>
+            )}
+          </div>
+        </section>
+
+        <section className="thread-agent thread-step" aria-labelledby="thread-agent-title">
+          <div className="thread-step-head">
+            <span className="thread-step-number" aria-hidden="true">2</span>
+            <h3 id="thread-agent-title">Choose AI</h3>
+          </div>
+          <div className="seg-row thread-agent-options" role="radiogroup" aria-labelledby="thread-agent-title">
+            {AGENT_OPTIONS.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                role="radio"
+                aria-checked={option.id === agent}
+                className={option.id === agent ? "seg-btn selected" : "seg-btn"}
+                onClick={() => setAgent(option.id)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <footer className="pick-acts">
+          <button
+            type="button"
+            className="btn-ghost"
+            title="Run where the CLI was started (or the bot's directory)"
+            onClick={() => pick(null)}
+          >
+            Use default
+          </button>
+          <div className="spacer" />
+          <button type="button" className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => current && pick(current.path)}
+          >
+            Create thread
+          </button>
+        </footer>
       </div>
     </div>
   );
@@ -157,17 +206,20 @@ export default function ThreadPanel({
 function JumpChip({
   label,
   path,
+  active,
   onJump,
 }: {
   label: string;
   path: string;
+  active: boolean;
   onJump: (path: string) => void;
 }) {
   return (
     <button
       type="button"
-      className="jump-chip"
+      className={active ? "jump-chip selected" : "jump-chip"}
       title={path}
+      aria-pressed={active}
       onClick={() => onJump(path)}
     >
       {label}

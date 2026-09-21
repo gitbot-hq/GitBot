@@ -50,12 +50,14 @@ export function getMessages(threadId: string) {
   );
 }
 
-export function createThread(botId: string, repoPath?: string) {
+export function createThread(botId: string, repoPath?: string, agent?: string) {
   return req<{ thread: import("./gitbot").ThreadFull }>("/threads", {
     method: "POST",
-    body: JSON.stringify(
-      repoPath ? { botId, repoPath } : { botId },
-    ),
+    body: JSON.stringify({
+      botId,
+      ...(repoPath ? { repoPath } : {}),
+      ...(agent ? { agent } : {}),
+    }),
   });
 }
 

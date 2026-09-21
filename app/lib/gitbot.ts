@@ -33,6 +33,8 @@ export type Thread = {
 };
 
 export type ThreadFull = Thread & {
+  // Omitted when the thread inherits the bot's configured coding agent.
+  agent?: string;
   kind: string;
   sdkSessionId: string | null;
   titleIsAuto: boolean;
