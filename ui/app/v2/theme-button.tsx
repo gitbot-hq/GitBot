@@ -5,9 +5,8 @@ import { IconMoon, IconSun } from "@tabler/icons-react";
 
 type Theme = "light" | "dark";
 
-// v2 top-bar theme switch, next to the user chip. Same mechanics as the
-// shared ThemeToggle (documentElement dataset + localStorage, restored
-// before paint by layout.tsx) — icon-button presentation for the bar.
+// v2 top-bar theme switch, next to the user chip: documentElement dataset +
+// localStorage, restored before paint by layout.tsx.
 export default function ThemeButton() {
   const [theme, setTheme] = useState<Theme>("dark");
 

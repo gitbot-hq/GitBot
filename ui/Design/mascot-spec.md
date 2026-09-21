@@ -6,7 +6,7 @@ those files into a working, recolorable, animated mascot. No build step needed.
 
 ## 1. Asset inventory
 
-Copy these 11 files as-is (they live in `public/figma-expressions/`):
+Copy these 11 files as-is (they live in `Design/expressions/figma-expressions/`):
 
 | Expression   | File            | Canvas (`viewBox`) | Pupils |
 | ------------ | --------------- | ------------------ | ------ |
@@ -154,7 +154,7 @@ Deliberate near-duplicates (do not "fix" — they are the Figma design):
 
 ## 6. Motion
 
-Reference implementation: `public/creature-expressions.svg` (animated Neutral).
+Reference implementation: `Design/expressions/creature-expressions.svg` (animated Neutral).
 Calm, deliberate timing: eased gaze shifts and one unified blink. Apply these
 classes and keyframes to the converted markup from §2:
 

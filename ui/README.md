@@ -28,21 +28,19 @@ rewrites with static export). `npx tsc --noEmit` must stay clean.
 
 ## Routes
 
-| Route | Shipped | What |
-|---|---|---|
-| `/` | yes | First-run redirect: no bots → `/onboarding`, otherwise `/v2` |
-| `/v2` | yes | The app: bots sidebar + threads + chat, dark and light themes |
-| `/onboarding` | yes | First-run hero (mascot, explainer carousel, studio/import) |
-| `/blank` | no | Earlier main build (light/dark system theme) |
-| `/bot-maker` | no | Character-studio playground (bot-maker system demo, internal) |
-| `/mascots`, `/mascot`, `/mascot-lab`, `/cta` | no | Internal demos |
+| Route | What |
+|---|---|
+| `/` | First-run redirect: no bots → `/onboarding`, otherwise `/v2` |
+| `/v2` | The app: bots sidebar + threads + chat, dark and light themes |
+| `/onboarding` | First-run hero (mascot, explainer carousel, studio/import) |
 
-Pages marked "no" still build, but `build-ui.mjs` leaves them out of the
-published package.
+All three ship in the published package. The earlier design playgrounds
+(`/blank`, `/bot-maker`, `/mascot`, `/mascot-lab`, `/mascots`, `/cta`) were
+removed from the repo; they remain in git history.
 
 ## Key files
 
-- `app/blank/page.tsx`, `app/v2/page.tsx` — app shells (bots sidebar +
+- `app/v2/page.tsx` — app shell (bots sidebar +
   threads + chat/tray). v2 theme in `app/v2/v2-theme.css`.
 - `app/components/chat.tsx` — live chat (SSE, typewriter reveal because the
   server emits whole messages, approvals, markdown).
@@ -68,10 +66,10 @@ published package.
   scripts/import-mascots.mjs`; morph math tested with
   `node --test scripts/mascot-morph.test.mjs`. Adopted verbatim — don't
   refactor it; integrate by wrapping.
-- **Old (retired from app surfaces):** `app/components/mascots/`,
-  `studio-mascots.tsx`, spider CSS, blink-desync rules. Still rendered by
-  the internal demo pages only. `mascot-art.tsx` stays — the logo imports
-  its faces. `app/components/logo.tsx` exports both `Logo` (lockup) and
+- **Old (removed):** the first mascot set (`app/components/mascots/`,
+  `studio-mascots.tsx`, the kawaii faces) went with the design playgrounds
+  that rendered it; it remains in git history. `mascot-art.tsx` stays — the
+  logo imports its faces. `app/components/logo.tsx` exports both `Logo` (lockup) and
   `LogoMark` (mark only) from one shared live-face implementation.
 
 ## Gotchas (earned the hard way)

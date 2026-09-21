@@ -19,7 +19,7 @@ import { EXPRESSION_ART, type Pupil } from "./mascot-art";
 // Filter IDs are uniquified per instance so multiple logos can coexist.
 //
 // The face is live: it cycles random positive mascot-page expressions,
-// morphed with flubber (same technique as figma-expression-morph.tsx).
+// morphed with flubber.
 // The logo mascot is the Neutral expression at 333/217 scale, so
 // expression paths map onto the face with a single scale transform.
 
@@ -58,7 +58,7 @@ type FaceFrame = {
 };
 
 // Random positive expression on load, then rotate every 6s with a
-// flubber morph (same technique as figma-expression-morph.tsx).
+// flubber morph.
 function useLiveFace(): FaceFrame {
   const [frame, setFrame] = useState<FaceFrame>({
     name: "neutral",

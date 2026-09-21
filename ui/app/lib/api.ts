@@ -1,5 +1,5 @@
 // HTTP adapter for the live GitBot server. Components never import this;
-// blank/page.tsx calls it and passes plain data down as props.
+// the pages call it and pass plain data down as props.
 
 import type { SessionPermissionMode } from "./gitbot";
 

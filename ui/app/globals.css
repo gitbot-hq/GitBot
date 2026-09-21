@@ -179,28 +179,6 @@ pre {
   font-size: var(--text-sm);
 }
 
-.theme-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
-  background: var(--surface);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  font-size: var(--text-sm);
-  font-weight: 550;
-  cursor: pointer;
-  transition:
-    border-color var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
-}
-
-.theme-toggle:hover {
-  border-color: var(--faint);
-  transform: translateY(-1px);
-}
-
 /* ---------------------------------- */
 /* Shell: rail · threads · chat        */
 /* ---------------------------------- */
@@ -408,8 +386,7 @@ pre {
   padding-inline: var(--space-2);
 }
 
-/* Rich thread row: a container holding the open button and a delete button.
-   (The plain `button.thread-row` above is still what the demo pages render.) */
+/* Rich thread row: a container holding the open button and a delete button. */
 div.thread-row {
   position: relative;
   padding: 0;
@@ -1562,7 +1539,7 @@ div.thread-row {
   font-weight: 700;
 }
 
-/* Live logo — cycles lifted from public/creature-expressions.svg */
+/* Live logo — cycles lifted from Design/expressions/creature-expressions.svg */
 .logo-float {
   transform-box: fill-box;
   transform-origin: center;
@@ -1949,242 +1926,7 @@ div.thread-row {
   padding: var(--space-6);
 }
 
-/* ---------------------------------- */
-/* Mascot playground: /mascot         */
-/* Internal preview for figma-expression-morph.tsx */
-/* ---------------------------------- */
-
-.expression-canvas {
-  min-height: 100vh;
-  min-height: 100dvh;
-  display: grid;
-  place-items: center;
-  padding: var(--space-6);
-}
-
-.expression-card {
-  width: 100%;
-  max-width: 760px;
-  display: grid;
-  gap: var(--space-4);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-6);
-}
-
-.expression-card .intro {
-  display: grid;
-  gap: var(--space-2);
-}
-
-.expression-card .eyebrow {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.expression-card h1 {
-  margin: 0;
-  font-size: var(--text-xl);
-  letter-spacing: -0.02em;
-}
-
-.expression-card .intro p {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--text-sm);
-}
-
-.mascot-stage {
-  display: grid;
-  justify-items: center;
-  gap: var(--space-2);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-6);
-}
-
-.figma-mascot {
-  width: min(420px, 100%);
-  height: auto;
-}
-
-.expression-name {
-  color: var(--muted);
-  font-size: var(--text-sm);
-  font-weight: 550;
-}
-
-.expression-picker {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.expression-picker button {
-  padding: var(--space-2) var(--space-4);
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: var(--text-sm);
-  font-weight: 550;
-  cursor: pointer;
-  transition:
-    border-color var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
-}
-
-.expression-picker button:hover:not(:disabled) {
-  border-color: var(--faint);
-  transform: translateY(-1px);
-}
-
-.expression-picker button.selected {
-  background: var(--text);
-  color: var(--bg);
-  border-color: var(--text);
-}
-
-.expression-picker button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-/* ---------------------------------- */
-/* Mascot gallery: /mascots            */
-/* Grid preview of Design/Mascots/animated */
-/* ---------------------------------- */
-
-.mascots-canvas {
-  min-height: 100vh;
-  min-height: 100dvh;
-  display: grid;
-  gap: var(--space-6);
-  align-content: start;
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: var(--space-6);
-}
-
-.mascots-head .eyebrow {
-  margin: 0 0 var(--space-2);
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.mascots-head h1 {
-  margin: 0 0 var(--space-2);
-  font-size: var(--text-xl);
-  letter-spacing: -0.02em;
-}
-
-.mascots-head p {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--text-sm);
-}
-
-.mascots-canvas section h2 {
-  margin: 0 0 var(--space-3);
-  font-size: var(--text-lg);
-  text-transform: capitalize;
-  letter-spacing: -0.01em;
-}
-
-.mascots-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: var(--space-3);
-}
-
-.mascots-grid figure {
-  margin: 0;
-  display: grid;
-  gap: var(--space-2);
-}
-
-.mascots-tile {
-  display: grid;
-  place-items: center;
-  aspect-ratio: 1;
-  padding: var(--space-4);
-  background: repeating-conic-gradient(
-    var(--surface-2) 0% 25%,
-    var(--surface) 0% 50%
-  ) 0 0 / 24px 24px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-}
-
-.mascots-tile svg {
-  width: 100%;
-  height: auto;
-  max-height: 100%;
-}
-
-.mascots-grid figcaption {
-  color: var(--muted);
-  font-size: var(--text-sm);
-  text-transform: capitalize;
-}
-
-.mascots-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-4);
-}
-
-.mascots-controls [role="group"] {
-  display: flex;
-  gap: var(--space-2);
-}
-
-.mascots-controls button {
-  padding: var(--space-2) var(--space-4);
-  background: var(--surface);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: var(--text-sm);
-  font-weight: 550;
-  text-transform: capitalize;
-  cursor: pointer;
-  transition:
-    border-color var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
-}
-
-.mascots-controls button:hover {
-  border-color: var(--faint);
-  transform: translateY(-1px);
-}
-
-.mascots-controls button.selected {
-  background: var(--text);
-  color: var(--bg);
-  border-color: var(--text);
-}
-
-.mascots-snippet {
-  margin: 0;
-  padding: var(--space-4);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  font-size: var(--text-sm);
-  overflow-x: auto;
-}
-
+/* Narrow screens: the thread list gives way to the chat. */
 @media (max-width: 900px) {
   .shell {
     grid-template-columns: auto minmax(0, 1fr);

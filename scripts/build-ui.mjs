@@ -10,8 +10,6 @@ const uiDir = join(root, "ui");
 const outDir = join(uiDir, "out");
 const destDir = join(root, "dist", "ui");
 
-// Internal design playgrounds: they stay in the repo but not in the package.
-const DEMO_PAGES = ["blank", "bot-maker", "cta", "mascot", "mascot-lab", "mascots"];
 // The pages users actually reach: `/` redirects to one of the other two.
 const REQUIRED = ["index.html", "v2.html", "onboarding.html", "404.html", "_next"];
 
@@ -26,15 +24,10 @@ console.log("[build-ui] building the UI");
 rmSync(outDir, { recursive: true, force: true });
 run("npm run build");
 
-const demoEntries = new Set(DEMO_PAGES.flatMap((page) => [page, `${page}.html`, `${page}.txt`]));
 rmSync(destDir, { recursive: true, force: true });
 cpSync(outDir, destDir, {
   recursive: true,
-  filter: (src) => {
-    const relative = src.slice(outDir.length + 1);
-    // Demo pages only ever sit at the top level of the export.
-    return !demoEntries.has(relative.split(/[\\/]/)[0]) && !relative.endsWith(".DS_Store");
-  },
+  filter: (src) => !src.endsWith(".DS_Store"),
 });
 
 const missing = REQUIRED.filter((entry) => !existsSync(join(destDir, entry)));
