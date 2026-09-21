@@ -10,6 +10,20 @@ export const metadata: Metadata = {
   },
   description: "GitBot helps teams turn Git workflows into momentum.",
   metadataBase: new URL("https://gitbot.example"),
+  icons: {
+    icon: [
+      {
+        url: "/favicon-light.svg",
+        type: "image/svg+xml",
+        media: "(prefers-color-scheme: light)",
+      },
+      {
+        url: "/favicon-dark.svg",
+        type: "image/svg+xml",
+        media: "(prefers-color-scheme: dark)",
+      },
+    ],
+  },
 };
 
 // Runs before paint: restores saved theme, else follows the OS.

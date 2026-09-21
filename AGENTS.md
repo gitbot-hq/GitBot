@@ -19,7 +19,8 @@ Frontend-only Next.js 16 + React + Tailwind v4 + TypeScript repo. The backend is
 
 - `npm run dev` → `:3000` (expects backend on `:3100`).
 - `npx tsc --noEmit` must stay clean (no typecheck script; README mandates it).
-- `npm run lint` (eslint), `npm run build` (`next build --webpack` — keep the flag).
+- `npm run lint` is broken repo-wide (no `eslint.config.*` — fails whether or not
+  your change is involved). Trust `npx tsc --noEmit` instead.
 - No test runner. Mascot morph math only: `node --test scripts/mascot-morph.test.mjs`.
 - Regenerate mascot art after `Design/Mascots2/` changes:
   `node scripts/import-mascots.mjs` (writes `app/components/bot-maker/artwork.json` + `morphs.json`).
@@ -39,8 +40,13 @@ Frontend-only Next.js 16 + React + Tailwind v4 + TypeScript repo. The backend is
   markdown). Bot studio: `bot-form.tsx`; profile: `bot-profile.tsx`;
   new-thread folder picker: `thread-panel.tsx` (mirrors original client's
   `openFolderPicker` strings verbatim — keep them).
+- Tab alerts: `app/lib/status-favicon.ts` (`useStatusFavicon`: swaps
+  `<link rel="icon">` hrefs to pre-made notif SVGs (mascot + colored dot)
+  + standout `document.title` while hidden). Driven from `chat.tsx` signal
+  (attention > error > working > done flash > idle). SVGs live in
+  `public/notif/` (8 files: 4 states × light/dark).
 - Routes: `/` is the app (onboarding empty state when no bots); `/blank` is the
-  previous build; `/onboarding`, `/bot-maker`, `/mascot-lab`, `/cta`, `/tool-test`
+  previous build; `/onboarding`, `/bot-maker`, `/mascot-lab`, `/cta`
   are standalone/internal demos, not public.
 - Branding source of truth: `BRANDING.md` (tokens, avatar rules). Check it before
   adding any color. Bot tile color = stable hash of id (`botTile()` in
@@ -65,6 +71,11 @@ Frontend-only Next.js 16 + React + Tailwind v4 + TypeScript repo. The backend is
   (the `N` circle bottom-left is the Next dev indicator).
 - Server emits whole assistant messages, no token deltas — the typewriter in
   `chat.tsx` simulates streaming. Don't "fix" it into real deltas.
+- One turn per thread (server 409s a second `POST /chat` while running).
+  The composer stays enabled: mid-turn sends park in a single "up next"
+  queue slot (`queueRef`, flushed by `finish()`), with steer (abort +
+  send) and remove actions. `startTurn` owns no streaming check — callers
+  (`sendPrompt`, `maybeFlush`) guarantee state.
 - `body` resolves `color` before scoped theme vars — re-resolve `color` at theme
   boundaries (see `.page.v2`).
 - `confirm()` dialogs need `pg.on('dialog', accept)` in tests. AI e2e turns cost
