@@ -19,7 +19,6 @@ import {
   emitEvent,
   scheduleCleanup,
   notifyPermissionsChanged,
-  notifySessionDone,
   type SessionStore,
   type PermissionMode,
 } from "./server-common";
@@ -259,7 +258,6 @@ export async function runAgent(store: SessionStore): Promise<void> {
   store.status = "done";
   notifyPermissionsChanged();
   emitEvent(store, "done", {});
-  notifySessionDone(store);
   scheduleCleanup(store);
 }
 

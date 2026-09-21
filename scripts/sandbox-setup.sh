@@ -28,7 +28,6 @@ GITBOT_CONFIG_DIR="$HOME_DIR/.config/gitbot"
 GITBOT_ENV_FILE="$GITBOT_CONFIG_DIR/env"
 GITBOT_PORT=3000
 GITBOT_LOG="$GITBOT_CONFIG_DIR/gitbot.log"
-RELAY_URL="wss://relay.codeongrass.com"
 
 # --- Create workspace folder -------------------------------------------------
 echo ""
@@ -68,7 +67,7 @@ echo "Env file written and locked to owner-read-only."
 # --- Register cron @reboot entry (idempotent) --------------------------------
 echo ""
 echo "==> Registering cron @reboot entry"
-(crontab -l 2>/dev/null | grep -Ev 'grass|gitbot' || true; echo "@reboot nohup bash -c \"cd '$GITBOT_WORKSPACE' && gitbot start -p $GITBOT_PORT -r $RELAY_URL\" >> $GITBOT_LOG 2>&1 &") | crontab -
+(crontab -l 2>/dev/null | grep -Ev 'grass|gitbot' || true; echo "@reboot nohup bash -c \"cd '$GITBOT_WORKSPACE' && gitbot start -p $GITBOT_PORT\" >> $GITBOT_LOG 2>&1 &") | crontab -
 echo "Cron entry registered."
 
 # --- Kill any existing gitbot process and start fresh -------------------------
@@ -77,7 +76,7 @@ echo "==> Starting gitbot"
 pkill -x gitbot 2>/dev/null || true
 pkill -x grass 2>/dev/null || true  # pre-rename binary, if still running
 sleep 1
-nohup bash -c "cd '$GITBOT_WORKSPACE' && gitbot start -p $GITBOT_PORT -r $RELAY_URL" >> "$GITBOT_LOG" 2>&1 &
+nohup bash -c "cd '$GITBOT_WORKSPACE' && gitbot start -p $GITBOT_PORT" >> "$GITBOT_LOG" 2>&1 &
 echo "gitbot started (pid $!)"
 
 # --- Health check ------------------------------------------------------------

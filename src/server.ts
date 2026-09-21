@@ -3,7 +3,6 @@ import http from "node:http";
 import {
   createHttpServer,
   setupShutdown,
-  maybeCaffeinate,
   handleWorkspaceRoutes,
   createSession,
   shouldAutoApprove,
@@ -21,8 +20,6 @@ import {
   buildPermissionsDump,
   buildSessionsDump,
   notifyPermissionsChanged,
-  notifySessionStarted,
-  notifySessionEnded,
   IRequest,
   IResponse,
   type PermissionMode,
@@ -31,7 +28,6 @@ import {
 import { initAgent as initClaudeCode, runAgent as runClaudeCode, listSessions as listClaudeSessions, loadTranscript } from "./start-claude-code";
 import { initAgent as initOpencode, runAgent as runOpencode, listSessions as listOpencodeSessions, getSessionHistory, abortSession as opencodeAbort, respondPermission as opencodePermission } from "./start-opencode";
 import { initAgent as initCodex, runAgent as runCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
-import { startRelayMode } from "./relay-client";
 import { handleBotRoutes } from "./bot-routes";
 import { getBot, getThread, touchThread, updateThread, botNeedsSetup, DEFAULT_BOT_AGENT } from "./bot-store";
 import { botPermissionToSession } from "./server-common";
@@ -332,22 +328,21 @@ export async function handleRequest(
 
       const s = store;
       if (threadId) touchThread(threadId, prompt ?? '');
-      notifySessionStarted();
       if (agent === "claude-code") {
         runClaudeCode(s).catch((err) => {
           console.error("[runAgent] unhandled:", err);
-        }).finally(() => notifySessionEnded());
+        });
       } else if (agent === "codex") {
         runCodex(s).catch((err) => {
-        }).finally(() => notifySessionEnded());
+        });
       } else if (agent === "opencode") {
         runOpencode(s).catch((err) => {
           console.error("[runAgent] unhandled:", err);
-        }).finally(() => notifySessionEnded());
+        });
       } else {
         runOpencode(s).catch((err) => {
           console.error("[runAgent] unhandled:", err);
-        }).finally(() => notifySessionEnded());
+        });
       }
 
       jsonOk(res, { sessionId: s.gitbotId });
@@ -462,7 +457,7 @@ export async function handleRequest(
   }
 }
 
-export async function start(network: string = "local", portOverride?: number, caffeinate: boolean = false, relayUrl?: string) {
+export async function start(network: string = "local", portOverride?: number, caffeinate: boolean = false) {
   const workspaceCwd = process.cwd();
   console.log(`gitbot — starting workspace server in ${workspaceCwd}`);
 
@@ -484,14 +479,6 @@ export async function start(network: string = "local", portOverride?: number, ca
   ];
   console.log(`  available agents: ${availableAgents.join(", ") || "none"}`);
 
-  // A relay URL with no port means relay only; with a port, serve both.
-  if (relayUrl && portOverride === undefined) {
-    const caffeinatePid = maybeCaffeinate(caffeinate);
-    setupShutdown(() => {}, caffeinatePid);
-    await startRelayMode(relayUrl, availableAgents, workspaceCwd);
-    return;
-  }
-
   const { server, caffeinatePid } = await createHttpServer({
     portOverride,
     caffeinate,
@@ -508,8 +495,4 @@ export async function start(network: string = "local", portOverride?: number, ca
   setupShutdown(() => {
     server.close(() => process.exit(0));
   }, caffeinatePid);
-
-  if (relayUrl) {
-    await startRelayMode(relayUrl, availableAgents, workspaceCwd);
-  }
 }

@@ -5,9 +5,7 @@ import {
   emitEvent,
   scheduleCleanup,
   sessions,
-  notifyNewPermission,
   notifyPermissionsChanged,
-  notifySessionDone,
   shouldAutoApprove,
   type SessionStore,
 } from "./server-common";
@@ -433,7 +431,7 @@ async function startEventStream(client: any, directory: string) {
               toolUseID: permId,
               askedBySdkSessionId: sdkSessionId,
             });
-            notifyNewPermission(toolName);
+            notifyPermissionsChanged();
             emitEvent(store, "permission_request", {
               toolUseID: permId,
               toolName,
@@ -465,7 +463,6 @@ async function startEventStream(client: any, directory: string) {
         store.pendingPermissions.clear();
         notifyPermissionsChanged();
         emitEvent(store, "done", {});
-        notifySessionDone(store);
         scheduleCleanup(store);
       }
     }

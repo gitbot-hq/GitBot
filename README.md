@@ -97,7 +97,7 @@ gitbot runs a single HTTP server that handles everything:
 4. **Bridges bots to harnesses** — Each thread creates a real agent session via the Claude Agent SDK (Claude Code), the Opencode SDK, or the Codex CLI, with the bot's instructions appended to the harness's own system prompt. The agent sees your project files, can edit code, run commands — everything it normally does.
 5. **Streams events to the UI** — Agent output is delivered via Server-Sent Events (SSE), so the UI receives a live stream of assistant messages, tool calls, permission requests, and status updates.
 
-By default the connection is local: your prompts go from your browser, over your WiFi, to the gitbot server on your machine. Nothing leaves your network (except the agent's own API calls to Anthropic or its configured provider). Pass `--relay` instead and the server dials out to a relay so you can reach it from outside your LAN.
+By default the connection is local: your prompts go from your browser, over your WiFi, to the gitbot server on your machine. Nothing leaves your network (except the agent's own API calls to Anthropic or its configured provider). To reach it from outside your LAN, put it on a private network such as Tailscale.
 
 ### Bots carry their own setup
 
@@ -115,9 +115,9 @@ Close your browser tab. Your phone dies. The WiFi drops. It doesn't matter — y
 
 When the agent wants to do something that needs approval (run a bash command, edit a file, fetch a URL), you'll see a permission prompt right in the chat UI. You approve or deny from your phone. You stay in control.
 
-### Ports and the relay
+### Ports
 
-`gitbot start` runs locally and binds port `3000` by default. Pass `-p <port>` to use a different one — handy when several instances run at once in different directories. Passing `-r <url>` on its own switches to relay mode instead: the server dials out to the relay, defaulting to `wss://relay.codeongrass.com`, so the hub is reachable from outside your LAN, and no local port is bound. Pass `-r` together with `-p` (or `-l`) to do both — the relay connection plus the local port, which is what a sandbox wants for its health check.
+`gitbot start` runs locally and binds port `3000` by default. Pass `-p <port>` to use a different one — handy when several instances run at once in different directories.
 
 ---
 
@@ -133,9 +133,8 @@ gitbot start [options]
 
 | Flag | Description |
 |---|---|
-| `-p, --port <number>` | Bind this local port and serve the UI at `http://localhost:<port>` (implies `--local`; default `3000`) |
-| `-l, --local` | Bind a local port; combine with `--relay` to do both |
-| `-r, --relay <url>` | Connect to a relay server; on its own no local port is bound (default: `wss://relay.codeongrass.com`) |
+| `-p, --port <number>` | Bind this local port and serve the UI at `http://localhost:<port>` (default `3000`) |
+| `-l, --local` | Bind a local port. This is the default; the flag is accepted for compatibility |
 | `-c, --caffeinate` | Prevent macOS sleep for 8 hours while the server is running |
 
 **Examples:**
@@ -146,12 +145,6 @@ gitbot start
 
 # A different local port
 gitbot start -p 4000
-
-# Relay mode — reachable from outside your LAN
-gitbot start --relay wss://relay.codeongrass.com
-
-# Point at your own relay
-gitbot start --relay wss://relay.example.com
 
 # Keep your Mac awake while your bots work
 gitbot start -p 3000 --caffeinate
@@ -260,7 +253,7 @@ Each permission entry includes `sessionId`, `agent`, `repoPath`, `repoName`, `to
 │  ─ file browser             │
 └──────────┬──────────────────┘
            │ HTTP + SSE
-           │ (local port, or via relay)
+           │ (local port)
 ┌──────────▼──────────────────┐
 │  gitbot Server              │
 │  ─ bot + thread store       │
@@ -336,7 +329,7 @@ When listing Claude Code sessions, gitbot first looks for a `custom-title` entry
 
 ### Web UI
 
-The UI is a Next.js app that lives in [`ui/`](ui/). `npm run build` exports it to static HTML/CSS/JS and copies it into `dist/ui`, so the published package ships a ready-built UI and users need no build step. `gitbot start` serves it from the same port as the API; it is available on the local/LAN server only, not through the relay.
+The UI is a Next.js app that lives in [`ui/`](ui/). `npm run build` exports it to static HTML/CSS/JS and copies it into `dist/ui`, so the published package ships a ready-built UI and users need no build step. `gitbot start` serves it from the same port as the API.
 
 Opening `/` sends first-time users (no bots on this machine yet) to `/onboarding`; everyone else lands on the bot hub at `/v2`.
 
@@ -364,7 +357,6 @@ GitBot/
 │   ├── workspace.ts       # Repo listing, file browser, git details, clone
 │   ├── bot-store.ts       # Bot + thread persistence (JSON store)
 │   ├── bot-routes.ts      # REST surface for /bots and /threads
-│   ├── relay-client.ts    # Relay mode transport
 │   └── static-ui.ts       # Serves the built web UI from dist/ui
 ├── ui/                    # Web UI source (Next.js, static export) — not published
 ├── scripts/
@@ -414,7 +406,7 @@ The working directory where you run `gitbot start` is treated as the workspace r
 > [!IMPORTANT]
 > gitbot has **no authentication**. Anyone who can reach the gitbot port on your network can run your bots on your machine, browse your project files, and read file contents. Bots can be given `auto-approve` permission mode, in which case they act without asking you first.
 >
-> Use local mode on trusted networks only. Relay mode exposes the hub beyond your LAN — only use it if you accept that.
+> Run it on trusted networks only, and do not expose the port to the internet.
 
 ## Contributing
 
