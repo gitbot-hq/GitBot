@@ -1396,6 +1396,13 @@ pre {
   border-radius: 50%;
   font-size: var(--text-xs);
   font-weight: 700;
+  overflow: hidden;
+}
+
+.user-chip-photo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 /* Live logo — cycles lifted from public/creature-expressions.svg */

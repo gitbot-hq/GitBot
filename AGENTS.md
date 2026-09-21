@@ -8,9 +8,63 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 <!-- END:nextjs-agent-rules -->
 
-## Project docs
+# GitBot UI — agent guide
 
-- Branding (palette, avatar rules): read `BRANDING.md` before adding any color.
-- UI/backend contract: frontend-only types in `app/lib/gitbot.ts` mirror the
-  live GitBot server routes (`/chat`, `/history`, `/sessions`, `/status`,
-  `/abort`, `/permission`). Components take props, never fetch.
+Frontend-only Next.js 16 + React + Tailwind v4 + TypeScript repo. The backend is
+**not here**: it's the read-only `gitbot-ai` npm package
+(`/opt/homebrew/lib/node_modules/gitbot-ai` — never edit). Run it with
+`gitbot start -p 3100 -l`; its state lives in `~/.gitbot` (`bots.json`, `threads.json`).
+
+## Commands
+
+- `npm run dev` → `:3000` (expects backend on `:3100`).
+- `npx tsc --noEmit` must stay clean (no typecheck script; README mandates it).
+- `npm run lint` (eslint), `npm run build` (`next build --webpack` — keep the flag).
+- No test runner. Mascot morph math only: `node --test scripts/mascot-morph.test.mjs`.
+- Regenerate mascot art after `Design/Mascots2/` changes:
+  `node scripts/import-mascots.mjs` (writes `app/components/bot-maker/artwork.json` + `morphs.json`).
+
+## Architecture (where things live)
+
+- Entry: `app/page.tsx` → `app/components/app-shell.tsx` (bots sidebar + threads + chat/tray). Theme in `app/v2-theme.css`.
+- HTTP boundary: `app/lib/api.ts` is the **only** fetch layer (same-origin
+  `BASE = "/api/gitbot"`); `app/lib/gitbot.ts` is frontend-only types mirroring
+  server routes — no fetches there, never add backend surface (`/chat`, `/history`,
+  `/sessions`, `/status`, `/abort`, `/permission`).
+- Proxy: `app/api/gitbot/[...path]/route.ts` forwards to `$GITBOT_URL` (default
+  `http://localhost:3100`), incl. SSE passthrough. Exists only because the local
+  test browser can't hit `:3100` directly.
+- Live chat: `app/components/chat.tsx` (SSE via `streamUrl(sessionId)`, approvals,
+  markdown). Bot studio: `bot-form.tsx`; profile: `bot-profile.tsx`;
+  new-thread folder picker: `thread-panel.tsx` (mirrors original client's
+  `openFolderPicker` strings verbatim — keep them).
+- Routes: `/` is the app (onboarding empty state when no bots); `/blank` is the
+  previous build; `/onboarding`, `/bot-maker`, `/mascot-lab`, `/cta`, `/tool-test`
+  are standalone/internal demos, not public.
+- Branding source of truth: `BRANDING.md` (tokens, avatar rules). Check it before
+  adding any color. Bot tile color = stable hash of id (`botTile()` in
+  `bot-avatar.tsx`) — never random per render.
+
+## Conventions for new changes
+
+- **Merge rule: frontend-only, zero new backend surface.** Additions go in
+  `app/components/` + `app/lib/`; components take props, HTTP stays in `api.ts`.
+- `app/components/bot-maker/` (live `BotMascot`: 18 bodies, 12 expressions) was
+  adopted verbatim — integrate by wrapping, don't refactor.
+- Old mascot set (`mascots/`, `studio-mascots.tsx`) renders on internal demo pages
+  only; `mascot-art.tsx` stays (logo imports its faces), `logo.tsx` exports both
+  `Logo` and `LogoMark`.
+- Avatar prefs: `app/lib/avatar-prefs.ts` (localStorage, frontend-only).
+
+## Gotchas (earned the hard way)
+
+- Turbopack dev goes stale — `edit` can succeed on ghost paths. Verify with
+  grep/curl/screenshots; when in doubt kill dev, `rm -rf .next`, restart.
+- Brave shows stale renders; Playwright screenshots are ground truth
+  (the `N` circle bottom-left is the Next dev indicator).
+- Server emits whole assistant messages, no token deltas — the typewriter in
+  `chat.tsx` simulates streaming. Don't "fix" it into real deltas.
+- `body` resolves `color` before scoped theme vars — re-resolve `color` at theme
+  boundaries (see `.page.v2`).
+- `confirm()` dialogs need `pg.on('dialog', accept)` in tests. AI e2e turns cost
+  real backend runs — keep prompts tiny.

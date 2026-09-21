@@ -14,6 +14,7 @@ import Chat from "./chat";
 import NewBotButton from "./new-bot-button";
 import BotForm from "./bot-form";
 import BotProfile from "./bot-profile";
+import UserProfile from "./user-profile";
 import ThreadPanel from "./thread-panel";
 import OnboardingFlow from "./onboarding-flow";
 import ThemeButton from "./theme-button";
@@ -22,6 +23,12 @@ import { useToast } from "./toast";
 import BotFace from "./bot-face";
 import { botTile } from "./bot-avatar";
 import TopBar from "./top-bar";
+import {
+  DEFAULT_USER_NAME,
+  getUserPref,
+  setUserPref,
+  type UserPref,
+} from "../lib/user-prefs";
 import {
   botSetupAction,
   createBot,
@@ -86,6 +93,16 @@ export default function V2() {
   // New-thread folder picker: slides over the chat column only.
   const [threadPanel, setThreadPanel] = useState(false);
   const [autoSend, setAutoSend] = useState<string | null>(null);
+  // User profile: generic default until set; stored on this device only.
+  const [user, setUser] = useState<UserPref>({
+    name: DEFAULT_USER_NAME,
+    email: "",
+    bio: "",
+    location: "",
+    emailVerified: false,
+    photo: null,
+  });
+  const [userOpen, setUserOpen] = useState(false);
   const { toast, view: toastView } = useToast();
 
   const [width, setWidth] = useState<number | null>(null);
@@ -143,6 +160,16 @@ export default function V2() {
   }, []);
 
   useEffect(loadBots, [loadBots]);
+
+  // Stored profile loads after mount (default first — no hydration flash).
+  useEffect(() => {
+    setUser(getUserPref());
+  }, []);
+
+  function savedUser(next: UserPref) {
+    setUser(next);
+    setUserPref(next);
+  }
 
   // Widths: null means "CSS owns it" — layout.tsx sets --v2-side-w /
   // --v2-threads-w before paint, so the first paint is already final.
@@ -466,9 +493,26 @@ export default function V2() {
   if (!botsLoading && !botsError && bots.length === 0) {
     return (
       <div className="page v2">
-        <TopBar actions={<ThemeButton />} />
+        <TopBar
+          actions={<ThemeButton />}
+          userName={user.name}
+          userPhoto={user.photo}
+          onProfile={() => setUserOpen(true)}
+        />
         <div className="page-body">
           <OnboardingFlow onDone={loadBots} />
+          <div
+            className={userOpen ? "user-overlay open" : "user-overlay"}
+            aria-hidden={!userOpen}
+          >
+            {userOpen && (
+              <UserProfile
+                user={user}
+                onBack={() => setUserOpen(false)}
+                onSaved={savedUser}
+              />
+            )}
+          </div>
         </div>
         {toastView}
       </div>
@@ -477,7 +521,12 @@ export default function V2() {
 
   return (
     <div className="page v2">
-      <TopBar actions={<ThemeButton />} />
+      <TopBar
+        actions={<ThemeButton />}
+        userName={user.name}
+        userPhoto={user.photo}
+        onProfile={() => setUserOpen(true)}
+      />
       <div className="page-body">
         <aside
           ref={sideRef}
@@ -789,6 +838,18 @@ export default function V2() {
                   onShare={(b) => setModal({ kind: "share", bot: b })}
                 />
               </div>
+            )}
+          </div>
+          <div
+            className={userOpen ? "user-overlay open" : "user-overlay"}
+            aria-hidden={!userOpen}
+          >
+            {userOpen && (
+              <UserProfile
+                user={user}
+                onBack={() => setUserOpen(false)}
+                onSaved={savedUser}
+              />
             )}
           </div>
         </div>

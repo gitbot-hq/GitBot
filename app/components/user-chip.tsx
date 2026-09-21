@@ -1,18 +1,30 @@
 import { IconChevronDown } from "@tabler/icons-react";
+import { userInitials } from "../lib/user-prefs";
 
 // User profile trigger: avatar + name + dropdown chevron.
-// Hover reveals a container behind it. Menu wiring comes next.
-export default function UserChip({ name }: { name: string }) {
-  const initials = name
-    .split(/\s+/)
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
+// Hover reveals a container behind it. Click opens the user profile.
+export default function UserChip({
+  name,
+  photo,
+  onClick,
+}: {
+  name: string;
+  photo?: string | null;
+  onClick?: () => void;
+}) {
   return (
-    <button type="button" className="user-chip">
+    <button
+      type="button"
+      className="user-chip"
+      onClick={onClick}
+      aria-label={`${name} — open profile`}
+    >
       <span className="user-chip-avatar" aria-hidden="true">
-        {initials}
+        {photo ? (
+          <img src={photo} alt="" className="user-chip-photo" />
+        ) : (
+          userInitials(name)
+        )}
       </span>
       {name}
       <IconChevronDown
