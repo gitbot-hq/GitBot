@@ -34,6 +34,7 @@ export default function ThemeButton() {
       className="theme-btn"
       onClick={toggle}
       aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+      data-tip={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
     >
       {theme === "dark" ? (
         <IconSun size={18} stroke={2} aria-hidden="true" />

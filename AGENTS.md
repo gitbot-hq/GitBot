@@ -34,6 +34,7 @@ Frontend-only Next.js 16 + React + Tailwind v4 + TypeScript repo. The backend is
 - Proxy: `app/api/gitbot/[...path]/route.ts` forwards to `$GITBOT_URL` (default
   `http://localhost:3100`), incl. SSE passthrough. Exists only because the local
   test browser can't hit `:3100` directly.
+- No CI, no `opencode.json`.
 - Live chat: `app/components/chat.tsx` (SSE via `streamUrl(sessionId)`, approvals,
   markdown). Bot studio: `bot-form.tsx`; profile: `bot-profile.tsx`;
   new-thread folder picker: `thread-panel.tsx` (mirrors original client's
@@ -68,3 +69,5 @@ Frontend-only Next.js 16 + React + Tailwind v4 + TypeScript repo. The backend is
   boundaries (see `.page.v2`).
 - `confirm()` dialogs need `pg.on('dialog', accept)` in tests. AI e2e turns cost
   real backend runs — keep prompts tiny.
+- Known residue: an inert "Set up X-Bot" setup thread (no delete
+  endpoint; X-Bot itself restored byte-for-byte).

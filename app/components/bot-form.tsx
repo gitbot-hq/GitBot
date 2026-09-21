@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { IconQuestionMark } from "@tabler/icons-react";
+import { IconQuestionMark, IconX } from "@tabler/icons-react";
 import { createBot, deleteBot, patchBot, type BotInput } from "../lib/api";
 import type { Bot } from "../lib/gitbot";
 import { getAvatarPref, resolveAvatar, defaultMascotFor, type AvatarMascot, type AvatarPref } from "../lib/avatar-prefs";
@@ -58,18 +58,35 @@ function fallbackPref(id: string): AvatarPref {
 // color pickers on the left, a progressive form on the right (essentials
 // first, power settings behind Advanced). Labels, hints, and
 // placeholders are the original's words verbatim.
+//
+// Bot switching: app-shell sets `switchTo` when the user picks another bot
+// mid-edit. If the form is clean the switch applies straight through;
+// if dirty a guard dialog offers Save / Discard / Cancel.
 export default function BotForm({
   bot,
   onClose,
   onSaved,
   onDeleted,
   onShare,
+  switchTo,
+  onSwitched,
+  onSwitchDiscard,
+  onSwitchCancel,
 }: {
   bot: Bot | null;
   onClose: () => void;
   onSaved: (bot: Bot, pref: AvatarPref) => void;
   onDeleted: (id: string) => void;
   onShare: (bot: Bot) => void;
+  /** Pending bot-switch target from the sidebar; null when none.
+   *  Optional — only the main shell drives switches. */
+  switchTo?: Bot | null;
+  /** A guarded save completed — list is fresh, apply the switch. */
+  onSwitched?: (bot: Bot, pref: AvatarPref) => void;
+  /** Apply the pending switch without saving (clean form or Discard). */
+  onSwitchDiscard?: () => void;
+  /** User cancelled the switch — stay on this bot. */
+  onSwitchCancel?: () => void;
 }) {
   const editing = !!bot;
   const [emoji, setEmoji] = useState(bot ? bot.emoji : "🤖");
@@ -94,7 +111,43 @@ export default function BotForm({
   );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [guard, setGuard] = useState(false);
   const studioRef = useRef<HTMLDivElement | null>(null);
+
+  // Snapshot of the opened bot (or blank defaults for "new") — the guard
+  // compares live field state against this.
+  const initial = useRef({
+    emoji, name, description, agent, instructions, setupInstructions,
+    repoPath, model, permissionMode, allowedTools, mascot, color,
+  });
+
+  function isDirty(): boolean {
+    const s = initial.current;
+    return (
+      emoji !== s.emoji ||
+      name !== s.name ||
+      description !== s.description ||
+      agent !== s.agent ||
+      instructions !== s.instructions ||
+      setupInstructions !== s.setupInstructions ||
+      repoPath !== s.repoPath ||
+      model !== s.model ||
+      permissionMode !== s.permissionMode ||
+      allowedTools !== s.allowedTools ||
+      mascot !== s.mascot ||
+      color !== s.color
+    );
+  }
+
+  // A sidebar switch request lands here: clean forms pass through, dirty
+  // ones raise the guard dialog. No-ops when the host doesn't drive
+  // switches (legacy/demo surfaces).
+  useEffect(() => {
+    if (!switchTo) return;
+    if (isDirty()) setGuard(true);
+    else onSwitchDiscard?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [switchTo]);
 
   // Studio mascots watch the cursor: each followed face steers toward
   // the pointer (capped travel, eased). Reduced-motion users never opt in.
@@ -131,11 +184,11 @@ export default function BotForm({
 
   useEffect(() => {
     function esc(ev: KeyboardEvent) {
-      if (ev.key === "Escape") onClose();
+      if (ev.key === "Escape" && !guard) onClose();
     }
     document.addEventListener("keydown", esc);
     return () => document.removeEventListener("keydown", esc);
-  }, [onClose]);
+  }, [guard, onClose]);
 
   function body(): BotInput {
     const tools = allowedTools
@@ -184,8 +237,110 @@ export default function BotForm({
     );
   }
 
+  /** Guard "Save": persist this bot, then hand the fresh record to the
+   *  pending sidebar switch. */
+  function guardSave() {
+    if (!name.trim()) {
+      setError("Name your bot before saving.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const pref = { mascot, color };
+    const req = editing && bot ? patchBot(bot.id, body()) : createBot(body());
+    req.then(
+      (d) => {
+        setBusy(false);
+        setGuard(false);
+        onSwitched?.(d.bot, pref);
+      },
+      (e) => {
+        setBusy(false);
+        setError(e instanceof Error ? e.message : "Save failed");
+      },
+    );
+  }
+
+  function cancelGuard() {
+    setGuard(false);
+    onSwitchCancel?.();
+  }
+
+  function discardGuard() {
+    setGuard(false);
+    onSwitchDiscard?.();
+  }
+
+  // Guard Escape closes the dialog (stays in the editor); the form-level
+  // Escape above already stands down while the guard is open.
+  useEffect(() => {
+    if (!guard) return;
+    function esc(ev: KeyboardEvent) {
+      if (ev.key === "Escape") cancelGuard();
+    }
+    document.addEventListener("keydown", esc);
+    return () => document.removeEventListener("keydown", esc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [guard]);
+
   return (
     <div className="modal inline" aria-label={editing ? "Edit bot" : "New bot"}>
+      {guard && switchTo && (
+        <div className="backdrop">
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Unsaved changes"
+          >
+            <div className="modal-head">
+              <h2>Unsaved changes</h2>
+              <button
+                type="button"
+                className="modal-x"
+                disabled={busy}
+                onClick={cancelGuard}
+                aria-label="Close"
+                data-tip="Close"
+              >
+                <IconX size={18} stroke={2} aria-hidden="true" />
+              </button>
+            </div>
+            <p className="guard-text">
+              {editing && bot ? bot.name : "Your new bot"} has unsaved
+              changes. Save them before switching to {switchTo.name}?
+            </p>
+            {error && <p className="chat-error">{error}</p>}
+            <div className="acts">
+              <button
+                type="button"
+                className="btn-danger"
+                disabled={busy}
+                onClick={discardGuard}
+              >
+                Discard
+              </button>
+              <div className="spacer" />
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={busy}
+                onClick={cancelGuard}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={busy}
+                onClick={guardSave}
+              >
+                Save changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="modal-head">
         <h2>{editing ? "Edit bot" : "New bot"}</h2>
       </div>

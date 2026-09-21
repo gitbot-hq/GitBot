@@ -179,7 +179,7 @@ export default function UserProfile({
               className="profile-avatar avatar-upload"
               onClick={openPicker}
               aria-label={photo ? "Change profile photo" : "Upload profile photo"}
-              title={photo ? "Change profile photo" : "Upload profile photo"}
+              data-tip={photo ? "Change profile photo" : "Upload profile photo"}
             >
               {photo ? (
                 <img src={photo} alt="" className="profile-avatar-img" />
@@ -305,6 +305,7 @@ export default function UserProfile({
                     className="btn-secondary"
                     onClick={() => setPhoto(null)}
                     aria-label="Remove profile photo"
+                    data-tip="Remove photo"
                   >
                     <IconTrash size={15} stroke={2} aria-hidden="true" />
                   </button>

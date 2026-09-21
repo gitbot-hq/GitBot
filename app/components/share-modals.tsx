@@ -26,7 +26,7 @@ function Shell({
       <div className="modal" role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-head">
           <h2>{title}</h2>
-          <button type="button" className="modal-x" onClick={onClose} aria-label="Close">
+          <button type="button" className="modal-x" onClick={onClose} aria-label="Close" data-tip="Close">
             <IconX size={18} stroke={2} aria-hidden="true" />
           </button>
         </div>

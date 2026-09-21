@@ -87,6 +87,8 @@ export default function V2() {
   const [modal, setModal] = useState<Modal>(null);
   // Inline bot studio: slides over threads + chat.
   const [editing, setEditing] = useState<Bot | "new" | null>(null);
+  // Pending sidebar switch target while the studio guards unsaved changes.
+  const [switchTo, setSwitchTo] = useState<Bot | null>(null);
   // Bot profile: fills the tray where threads + chat live. Edit dives
   // into the studio on top of it; saving lands back here.
   const [profileId, setProfileId] = useState<string | null>(null);
@@ -441,6 +443,7 @@ export default function V2() {
 
   function savedBot(saved: Bot, pref: AvatarPref) {
     setAvatarPref(saved.id, pref);
+    setSwitchTo(null);
     if (editing === "new") {
       setEditing(null);
       afterBotAdded(saved, pref);
@@ -452,9 +455,55 @@ export default function V2() {
 
   function deletedBot(id: string) {
     setEditing(null);
+    setSwitchTo(null);
     setProfileId((prev) => (prev === id ? null : prev));
     setBots((prev) => prev.filter((b) => b.id !== id));
     setSelectedId((prev) => (prev === id ? null : prev));
+  }
+
+  /** A guarded studio save completed — refresh the list, then apply the
+   *  pending sidebar switch. */
+  function switchedBot(saved: Bot, pref: AvatarPref) {
+    setAvatarPref(saved.id, pref);
+    setBots((prev) => {
+      const i = prev.findIndex((b) => b.id === saved.id);
+      return i === -1 ? [...prev, saved] : prev.map((b) => (b.id === saved.id ? saved : b));
+    });
+    const target = switchTo;
+    setSwitchTo(null);
+    if (target) setEditing(target);
+  }
+
+  function applySwitch(target: Bot) {
+    setSwitchTo(null);
+    setEditing(target);
+  }
+
+  /** Sidebar bot rows while panels are open. The studio guards unsaved
+   *  work (switch with a Save check); every other panel yields — profile
+   *  re-targets, picker re-targets, user panel closes — and the tapped bot
+   *  gets selected. */
+  function botRowClick(b: Bot) {
+    if (editing) {
+      if (editing !== "new" && editing.id === b.id) return; // already editing it
+      setSwitchTo(b);
+      return;
+    }
+    setSelectedId(b.id);
+    // The user panel is global, not bot-scoped — any bot pick dismisses it.
+    setUserOpen(false);
+    if (showProfile) {
+      setProfileId(b.id);
+    } else if (threadPanel) {
+      if (needsSetup(b)) {
+        setThreadPanel(false);
+        toast(`Set up ${b.name} on this machine first`);
+        openSetup(b.id);
+      }
+      // else: the picker stays open and re-targets via key={bot.id}
+    } else if (b.id === bot?.id) {
+      setProfileId(b.id);
+    }
   }
 
   function refreshAfterTurn() {
@@ -497,7 +546,7 @@ export default function V2() {
           actions={<ThemeButton />}
           userName={user.name}
           userPhoto={user.photo}
-          onProfile={() => setUserOpen(true)}
+          onProfile={() => setUserOpen((v) => !v)}
         />
         <div className="page-body">
           <OnboardingFlow onDone={loadBots} />
@@ -525,7 +574,7 @@ export default function V2() {
         actions={<ThemeButton />}
         userName={user.name}
         userPhoto={user.photo}
-        onProfile={() => setUserOpen(true)}
+        onProfile={() => setUserOpen((v) => !v)}
       />
       <div className="page-body">
         <aside
@@ -549,6 +598,7 @@ export default function V2() {
                 onClick={toggleCollapse}
                 aria-expanded={!collapsed}
                 aria-label="Expand sidebar"
+                data-tip="Expand sidebar"
               >
                 <IconArrowBarToRight size={18} stroke={2} aria-hidden="true" />
               </button>
@@ -560,6 +610,7 @@ export default function V2() {
                 onClick={toggleCollapse}
                 aria-expanded={!collapsed}
                 aria-label="Collapse sidebar"
+                data-tip="Collapse sidebar"
               >
                 <IconArrowBarToLeft size={18} stroke={2} aria-hidden="true" />
               </button>
@@ -572,6 +623,7 @@ export default function V2() {
                   else setSearchOpen(true);
                 }}
                 aria-label="Search bots"
+                data-tip="Search bots"
                 aria-hidden={searchOpen || undefined}
                 tabIndex={searchOpen ? -1 : 0}
               >
@@ -595,6 +647,7 @@ export default function V2() {
                 className="collapse-btn fades"
                 onClick={() => setModal({ kind: "import" })}
                 aria-label="Import a bot"
+                data-tip="Import a bot"
               >
                 <IconDownload size={18} stroke={2} aria-hidden="true" />
               </button>
@@ -602,6 +655,7 @@ export default function V2() {
                 type="button"
                 className="collapse-btn plus-btn"
                 aria-label={searchOpen ? "Close search" : "Add new bot"}
+                data-tip={searchOpen ? "Close search" : "Add new bot"}
                 onClick={() => (searchOpen ? closeSearch() : setEditing("new"))}
               >
                 <IconPlus size={18} stroke={2} aria-hidden="true" />
@@ -636,10 +690,7 @@ export default function V2() {
                   key={b.id}
                   type="button"
                   className={`${b.id === bot?.id ? "bot-row selected" : "bot-row"}${b.id === bot?.id && activeLabel ? " live" : ""}${searchText ? "" : " msg-in"}`}
-                  onClick={() => {
-                    if (b.id === bot?.id) setProfileId(b.id);
-                    else setSelectedId(b.id);
-                  }}
+                  onClick={() => botRowClick(b)}
                   onMouseEnter={() => setHoverId(b.id)}
                   onMouseLeave={() => setHoverId((prev) => (prev === b.id ? null : prev))}
                   aria-current={b.id === bot?.id ? "true" : undefined}
@@ -658,8 +709,10 @@ export default function V2() {
                   <span
                     className="edit-badge"
                     aria-hidden="true"
+                    data-tip="Open profile"
                     onClick={(e) => {
                       e.stopPropagation();
+                      setUserOpen(false);
                       setProfileId(b.id);
                     }}
                   >
@@ -722,6 +775,7 @@ export default function V2() {
                     else setThreadSearchOpen(true);
                   }}
                   aria-label="Search threads"
+                  data-tip="Search threads"
                   aria-hidden={threadSearchOpen || undefined}
                   tabIndex={threadSearchOpen ? -1 : 0}
                 >
@@ -744,6 +798,7 @@ export default function V2() {
                   type="button"
                   className="collapse-btn plus-btn"
                   aria-label={threadSearchOpen ? "Close search" : "New thread"}
+                  data-tip={threadSearchOpen ? "Close search" : "New thread"}
                   onClick={() => (threadSearchOpen ? closeThreadSearch() : newThread())}
                 >
                   <IconPlus size={18} stroke={2} aria-hidden="true" />
@@ -826,16 +881,31 @@ export default function V2() {
           <div className="form-overlay" aria-hidden={!editing}>
             {editing && (
               <div className="form-pane">
-                <button type="button" className="back-btn" onClick={() => setEditing(null)}>
+                <button
+                  type="button"
+                  className="back-btn"
+                  onClick={() => {
+                    setEditing(null);
+                    setSwitchTo(null);
+                  }}
+                >
                   <IconArrowLeft size={16} stroke={2} aria-hidden="true" />
                   Back
                 </button>
                 <BotForm
+                  key={editing === "new" ? "new" : editing.id}
                   bot={editing === "new" ? null : editing}
-                  onClose={() => setEditing(null)}
+                  onClose={() => {
+                    setEditing(null);
+                    setSwitchTo(null);
+                  }}
                   onSaved={savedBot}
                   onDeleted={deletedBot}
                   onShare={(b) => setModal({ kind: "share", bot: b })}
+                  switchTo={switchTo}
+                  onSwitched={switchedBot}
+                  onSwitchDiscard={() => switchTo && applySwitch(switchTo)}
+                  onSwitchCancel={() => setSwitchTo(null)}
                 />
               </div>
             )}

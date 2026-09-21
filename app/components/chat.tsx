@@ -729,6 +729,7 @@ export default function Chat({
                     className="icon-btn"
                     onClick={() => copyText(m.id, msgText(m))}
                     aria-label="Copy reply"
+                    data-tip="Copy reply"
                   >
                     {copiedId === m.id ? (
                       <IconCheck size={15} aria-hidden="true" />
@@ -741,6 +742,7 @@ export default function Chat({
                     className="icon-btn"
                     onClick={() => lastPrompt.current && sendPrompt(lastPrompt.current)}
                     aria-label="Try again"
+                    data-tip="Try again"
                   >
                     <IconRefresh size={15} aria-hidden="true" />
                   </button>
@@ -823,6 +825,8 @@ export default function Chat({
             requestAnimationFrame(scrollDown);
           }}
           aria-label="Jump to latest"
+          data-tip="Jump to latest"
+          data-tip-pos="above"
         >
           <IconArrowDown size={15} aria-hidden="true" />
           Latest
@@ -870,11 +874,11 @@ export default function Chat({
             disabled={streaming}
           />
           {streaming ? (
-            <button type="button" className="send-btn" onClick={stop} aria-label="Stop">
+            <button type="button" className="send-btn" onClick={stop} aria-label="Stop" data-tip="Stop" data-tip-pos="above">
               <IconPlayerStop size={16} aria-hidden="true" />
             </button>
           ) : (
-            <button type="submit" className="send-btn" disabled={!draft.trim()} aria-label="Send">
+            <button type="submit" className="send-btn" disabled={!draft.trim()} aria-label="Send" data-tip="Send" data-tip-pos="above">
               <IconArrowUp size={16} aria-hidden="true" />
             </button>
           )}

@@ -353,6 +353,13 @@
     visibility 0s linear 260ms;
 }
 
+/* Morph buttons clip overflow for the width animation — lift the clip on
+   hover so their data-tip tooltips can drop below. (Searching hides them
+   outright, so the morph itself is never affected.) */
+.v2 .side-head .fades:hover {
+  overflow: visible;
+}
+
 .v2 .side-head .plus-btn {
   transition:
     background var(--duration-fast) var(--ease-out),

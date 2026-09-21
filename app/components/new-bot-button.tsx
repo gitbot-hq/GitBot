@@ -25,7 +25,7 @@ export default function NewBotButton({ onClick }: { onClick?: () => void }) {
   }, []);
 
   return (
-    <button ref={ref} type="button" className="new-bot" onClick={onClick} aria-label="Add new bot">
+    <button ref={ref} type="button" className="new-bot" onClick={onClick} aria-label="Add new bot" data-tip="Add new bot">
       <svg
         className="dash-frame"
         viewBox={`0 0 ${box.w} ${box.h}`}
