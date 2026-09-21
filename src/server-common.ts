@@ -5,8 +5,7 @@ import { execSync, execFile, spawn } from "child_process";
 import http from "node:http";
 import { EventEmitter } from "events";
 import qrcode from "qrcode-terminal";
-import { html } from "./client-html";
-import { vendorScripts } from "./client-vendor";
+import { serveUiFile, uiAvailable, uiFileFor } from "./static-ui";
 import { listRepos, cloneRepo, createFolder, listDir, readFile, getRepoDetails, browseDirs } from "./workspace";
 
 // --- Transport abstractions ---
@@ -493,13 +492,15 @@ export async function createHttpServer(opts: {
 
   const server = http.createServer();
 
-  // Serve the SPA for GET /
+  // Serve the web UI: static files from the bundled export
   server.on("request", (req, res) => {
-    if (req.method === "GET" && (req.url === "/" || req.url === "")) {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      // Function replacement: the vendor bundles contain `$&`-style sequences
-      // that a string replacement would interpret.
-      res.end(html.replace("<!--vendor-->", () => vendorScripts()));
+    const uiFile = uiFileFor(req.method, req.url);
+    if (uiFile) {
+      serveUiFile(req, res, uiFile);
+    } else if (!uiAvailable() && req.method === "GET" && ["/", ""].includes((req.url ?? "/").split("?")[0])) {
+      // Only reachable when running from source: published builds always carry the UI.
+      res.writeHead(503, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("The gitbot web UI has not been built. Run `npm run build` in the gitbot repo, then restart.\n");
     }
     // All other routes handled by server.ts listener
   });

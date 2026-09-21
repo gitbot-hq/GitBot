@@ -1,0 +1,17 @@
+<svg width="162" height="153" viewBox="0 0 162 153" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Horned mascot, happy">
+  <style>
+    .m-horned-happy .mascot-body{fill:var(--mascot-body,#ffffff);}
+    .m-horned-happy .eye-white{fill:#fff;}
+    .m-horned-happy .pupil{fill:var(--mascot-ink,#24211f);}
+    .m-horned-happy .ink{fill:var(--mascot-ink,#24211f);stroke:none;}
+    .m-horned-happy .mouth{fill:none;stroke:var(--mascot-ink,#24211f);stroke-linecap:round;}
+    .m-horned-happy .eye-arc{fill:none;stroke:var(--mascot-ink,#24211f);stroke-linecap:round;}
+    .m-horned-happy .mascot-idle{transform-box:fill-box;transform-origin:center;animation:m-horned-happy-float 4.8s cubic-bezier(.37,0,.22,1) infinite;}
+    .m-horned-happy .pupil{transform-box:fill-box;transform-origin:center;animation:m-horned-happy-gaze 6.8s cubic-bezier(.37,0,.22,1) infinite;}
+    @keyframes m-horned-happy-float{0%,100%{translate:0 0;}45%,55%{translate:0 -4px;}}
+    @keyframes m-horned-happy-gaze{0%,16%,100%{translate:0 0;}31%,48%{translate:3px -1px;}64%,80%{translate:-3px 1px;}}
+    @media (prefers-reduced-motion:reduce){.m-horned-happy .mascot-idle,.m-horned-happy .mascot-blink,.m-horned-happy .pupil,.m-horned-happy .mascot-travelface{animation:none;}}
+  </style>
+  <title>Horned mascot (happy)</title><desc>Animated Horned mascot, happy expression.</desc>
+  <g class="m-horned-happy"><g class="mascot-idle"><g class="mascot-body"><path class="mascot-body" d="M11.6265 3.55432C41.1957 -9.40861 50.3474 16.2942 51.4849 29.2643C64.2768 25.4194 76.099 24.4362 82.2183 24.4362C88.3604 24.4362 99.2156 25.4684 110.721 29.3912C113.46 16.8017 126.75 -7.89918 150.028 3.55627C173.583 15.1474 156.112 44.2353 143.78 52.5709C150.854 62.3133 155.535 75.3231 155.535 92.6461C155.535 140.503 102.037 152.467 75.2877 152.467C50.3622 152.589 0.511289 140.794 0.511289 92.6461C0.511302 74.6548 6.24888 61.3253 14.7603 51.4772C-0.0501909 43.6506 -7.89387 14.8254 11.6265 3.55432Z"/></g><g class="mascot-face"><path class="ink" d="M80.7606 99.001C82.7857 99.001 84.4276 100.643 84.4276 102.668C84.4275 106.317 81.7611 109.342 78.2704 109.905C78.42 110.431 78.6238 110.96 78.8944 111.452C79.5952 112.726 80.7184 113.775 82.8495 114.025C84.7691 114.251 86.1418 115.99 85.9159 117.91C85.6899 119.83 83.9508 121.202 82.0312 120.977C78.6537 120.579 76.1702 119.099 74.4335 117.181C72.6968 119.099 70.214 120.579 66.8368 120.977C64.9172 121.202 63.178 119.83 62.952 117.91C62.7262 115.99 64.0989 114.251 66.0185 114.025C68.1496 113.775 69.2728 112.726 69.9735 111.452C70.2437 110.961 70.446 110.432 70.5956 109.907C67.0996 109.349 64.4278 106.321 64.4276 102.668C64.4276 100.643 66.0696 99.001 68.0946 99.001H80.7606Z"/></g><g class="mascot-blink"><g class="mascot-eyes"><g><path class="eye-arc" d="M28 101Q38 87 48 101" stroke-width="8"/></g><g><path class="eye-arc" d="M100 97Q110 83 120 97" stroke-width="8"/></g></g></g></g></g>
+</svg>

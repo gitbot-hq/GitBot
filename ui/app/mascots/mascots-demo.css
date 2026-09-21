@@ -1,0 +1,96 @@
+/* Demo page for the alternate-mascot set. Class-only selectors (no
+   element selectors), so nothing here can touch inline SVGs.
+   The page itself is dark: white-bodied mascots need a non-white
+   backdrop, so no boxes are added behind any mascot. */
+
+.demo-page {
+  color-scheme: dark;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: #101010;
+  color: #f5f5f5;
+  padding: 48px 32px 64px;
+}
+
+.demo-head {
+  max-width: 880px;
+  margin: 0 auto 36px;
+}
+
+.demo-eyebrow {
+  margin: 0 0 8px;
+  color: #949494;
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.demo-head h1 {
+  margin: 0 0 8px;
+  font-size: var(--text-2xl);
+  letter-spacing: -0.02em;
+}
+
+.demo-sub {
+  margin: 0;
+  color: #949494;
+  font-size: var(--text-sm);
+}
+
+.demo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 20px;
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+.demo-card {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  padding: 28px 20px;
+}
+
+.demo-card h2 {
+  margin: 0;
+  font-size: var(--text-md);
+  text-transform: capitalize;
+}
+
+.demo-stage {
+  display: grid;
+  place-items: center;
+  min-height: 170px;
+}
+
+.demo-seg {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: #1c1c1c;
+  border: 1px solid rgb(255 255 255 / 0.09);
+  border-radius: 999px;
+}
+
+.demo-seg-btn {
+  padding: 5px 12px;
+  background: none;
+  border: 0;
+  border-radius: 999px;
+  color: #949494;
+  font-size: var(--text-xs);
+  font-weight: 550;
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.demo-seg-btn:hover {
+  color: #f5f5f5;
+}
+
+.demo-seg-btn.selected {
+  background: #2a2a2a;
+  color: #f5f5f5;
+}

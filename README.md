@@ -47,11 +47,11 @@ That's it. `gitbot` is now available everywhere.
 ### Build from source
 
 ```bash
-git clone https://github.com/anildukkipatty/grass-ide.git
-cd grass-ide/cli
+git clone https://github.com/sj9911/GitBot.git
+cd GitBot
 
 npm install
-npm run build
+npm run build      # compiles the CLI and bundles the web UI into dist/ui
 npm install -g .
 ```
 
@@ -320,28 +320,25 @@ gitbot detects which harnesses are available at startup by checking for the `cla
 
 When listing Claude Code sessions, gitbot first looks for a `custom-title` entry in the session's `.jsonl` transcript. If found, that title is used as the session preview. Otherwise, it collects text from the first few user and assistant messages to build a ~80-character preview string.
 
-### Chat UI Features
+### Web UI
 
-The UI is a self-contained React app embedded in the server binary. No build step, no separate deployment.
+The UI is a Next.js app that lives in [`ui/`](ui/). `npm run build` exports it to static HTML/CSS/JS and copies it into `dist/ui`, so the published package ships a ready-built UI and users need no build step. `gitbot start` serves it from the same port as the API; it is available on the local/LAN server only, not through the relay.
 
-- **Bot hub** — create, edit and delete bots; presets to start from; per-bot thread lists
+Opening `/` sends first-time users (no bots on this machine yet) to `/onboarding`; everyone else lands on the bot hub at `/v2`.
+
+- **Bot hub** — create, edit and delete bots, each with its own mascot and color; per-bot thread lists
+- **Onboarding** — first-run flow to make your first bot or import one
+- **Bot sharing** — export a bot as a share code and import it on another machine
 - **Setup threads** — a bot prepares this machine once, in a thread of its own, before it takes work
-- **Repo + folder picker** — choose where a thread runs
-- **Markdown rendering** with syntax-highlighted code blocks (via `marked` + `highlight.js`)
-- **Light/dark theme** toggle (persisted in `localStorage`, respects system preference)
-- **Session picker** — browse and resume prior conversations
-- **Diff viewer** — full-screen file-by-file git diff display with syntax highlighting
-- **File browser** — browse the repo file tree and read file contents from within the UI
-- **Permission modals** — approve/deny the agent's tool usage with formatted previews (including diff previews for file edits)
-- **Activity indicators** — animated status showing what the agent is doing ("Thinking", "Reading file", "Running bash")
-- **Cost tracking** — each response shows API cost and duration
-- **Mobile-first** — safe-area insets, touch targets, disabled zoom, `100dvh` layout
-- **Auto-reconnect** — exponential backoff with connection status indicator
+- **Folder picker** — choose where a thread runs
+- **Live chat** — SSE streaming with activity status, a Stop button, and markdown rendering (`react-markdown` + GFM)
+- **Permission prompts** — approve/deny the agent's tool usage from the chat
+- **Light/dark theme** toggle (persisted in `localStorage`)
 
 ## Project Structure
 
 ```
-cli/
+GitBot/
 ├── src/
 │   ├── index.ts           # CLI entrypoint (commander setup)
 │   ├── server.ts          # HTTP request routing, session lifecycle
@@ -353,11 +350,13 @@ cli/
 │   ├── bot-store.ts       # Bot + thread persistence (JSON store)
 │   ├── bot-routes.ts      # REST surface for /bots and /threads
 │   ├── relay-client.ts    # Relay mode transport
-│   └── client-html.ts     # Embedded React bot hub UI
-├── dist/                  # Compiled output (CommonJS)
+│   └── static-ui.ts       # Serves the built web UI from dist/ui
+├── ui/                    # Web UI source (Next.js, static export) — not published
+├── scripts/
+│   └── build-ui.mjs       # Builds ui/ and copies the export into dist/ui
+├── dist/                  # Compiled CLI (CommonJS) + dist/ui (built web UI)
 ├── package.json
-├── tsconfig.json
-└── CLAUDE.md              # Project instructions for Claude Code
+└── tsconfig.json
 ```
 
 ## Tech Stack
@@ -370,18 +369,24 @@ cli/
 | Claude Code | `@anthropic-ai/claude-agent-sdk` |
 | Opencode | `@opencode-ai/sdk` |
 | Codex | `codex` CLI |
-| UI | React 18 (CDN), Babel standalone |
-| Markdown | marked + highlight.js |
+| UI | Next.js 16 static export, React 19, Tailwind v4 |
+| Markdown | react-markdown + remark-gfm |
 | QR codes | qrcode-terminal |
 
 ## Development
 
 ```bash
-# Run in dev mode (no build step)
-npm run dev -- start -p 3000
-
-# Build
+# Full build: CLI (tsc) + web UI (Next.js export -> dist/ui)
 npm run build
+
+# CLI only — fast, when you haven't touched ui/
+npm run build:cli
+
+# Web UI only
+npm run build:ui
+
+# Run the CLI from source (serves the UI from ui/out — run build:ui once first)
+npm run dev -- start -p 3000
 
 # Run built version
 ./dist/index.js start -p 3000

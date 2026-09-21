@@ -35,6 +35,7 @@ import { startRelayMode } from "./relay-client";
 import { handleBotRoutes } from "./bot-routes";
 import { getBot, getThread, touchThread, botNeedsSetup } from "./bot-store";
 import { botPermissionToSession } from "./server-common";
+import { uiFileFor } from "./static-ui";
 
 export async function handleRequest(
   req: IRequest,
@@ -485,6 +486,8 @@ export async function start(network: string = "local", portOverride?: number, ca
   });
 
   server.on("request", (req: http.IncomingMessage, res: http.ServerResponse) => {
+    // UI files are answered by createHttpServer's listener
+    if (uiFileFor(req.method, req.url)) return;
     handleRequest(req as unknown as IRequest, res as unknown as IResponse, availableAgents, workspaceCwd);
   });
 
