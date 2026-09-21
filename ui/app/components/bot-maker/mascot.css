@@ -1,0 +1,24 @@
+.bot-mascot { display: inline-block; max-width: 100%; flex: none; vertical-align: middle; }
+.bm-shell { position: relative; transform-origin: 50% 85%; }
+.bm-body { display: block; width: 100%; height: auto; overflow: visible; }
+.bm-face-anchor { position: absolute; left: var(--face-x); top: var(--face-y); width: var(--face-width); aspect-ratio: 78 / 104; transform: translate(-50%, -50%); }
+.bm-gaze, .bm-morph-face { width: 100%; height: 100%; }
+.bm-morph-face { display: block; overflow: visible; }
+.bm-eyes { transform-box: fill-box; transform-origin: center; }
+.bot-mascot[data-motion="true"] .bm-gaze { animation: bm-gaze 13s ease-in-out infinite; }
+.bot-mascot[data-motion="true"] .bm-morph-face:not([data-morphing="true"]) .bm-eyes { animation: bm-blink 7.3s linear infinite; }
+.bot-mascot[data-mood="sleepy"] .bm-gaze { animation: none; }
+.bot-mascot[data-mood="confused"] .bm-gaze { animation-name: bm-curious; }
+@keyframes bm-gaze { 0%, 16%, 46%, 66%, 100% { transform: translate(0, 0); } 22%, 36% { transform: translate(3%, -1%); } 73%, 86% { transform: translate(-3%, 1%); } }
+@keyframes bm-curious { 0%, 100%, 45% { transform: rotate(0); } 15%, 30% { transform: rotate(-5deg) translateY(-2%); } 65%, 80% { transform: rotate(4deg); } }
+@keyframes bm-blink { 0%, 43%, 47%, 100% { transform: scaleY(1); } 45% { transform: scaleY(.08); } }
+@media (prefers-reduced-motion: reduce) { .bot-mascot * { animation: none !important; } }
+
+.bot-mascot[data-motion="true"][data-mood="looking-around"] .bm-gaze { animation: bm-look-around 6.4s ease-in-out infinite; }
+@keyframes bm-look-around {
+  0%, 8%, 95%, 100% { transform: translate(0, 0); }
+  18%, 32% { transform: translate(-8%, -1%); }
+  45%, 61% { transform: translate(8%, -1%); }
+  73%, 83% { transform: translate(0, -4%); }
+}
+@media (prefers-reduced-motion: reduce) { .bot-mascot * { animation: none !important; } }

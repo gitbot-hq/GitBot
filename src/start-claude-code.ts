@@ -1,4 +1,4 @@
-import { query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query, type Options, type PreToolUseHookInput, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createReadStream, existsSync } from "fs";
 import { execSync, execFileSync } from "child_process";
 import { readdir, stat } from "fs/promises";
@@ -10,12 +10,11 @@ import {
   emitEvent,
   scheduleCleanup,
   notifyPermissionsChanged,
-  notifyNewPermission,
-  notifySessionDone,
   shouldAutoApprove,
   type SessionStore,
 } from "./server-common";
-import { bindSession, setSetupStatus } from "./bot-store";
+import { bindSession } from "./bot-store";
+import { presetSystemPrompt, recordSetupOutcome } from "./bot-prompt";
 
 export async function initAgent(): Promise<boolean> {
   try {
@@ -66,11 +65,7 @@ export async function runAgent(store: SessionStore): Promise<void> {
     // A bot is a preset: its instructions ride on top of Claude Code's own system
     // prompt, and its tool lists constrain the run.
     const preset = store.botPreset;
-    const append = preset?.setup
-      ? setupSystemPrompt(preset)
-      : preset?.instructions
-        ? botSystemPrompt(preset)
-        : undefined;
+    const append = presetSystemPrompt(preset);
 
     const q = query({
       prompt: promptParam,
@@ -90,7 +85,15 @@ export async function runAgent(store: SessionStore): Promise<void> {
         ...(append
           ? { systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append } }
           : {}),
-        ...(preset?.allowedTools?.length ? { allowedTools: preset.allowedTools } : {}),
+        // Allowed tools are the only tools the bot has. (`allowedTools` in the SDK
+        // means something else: tools that skip the permission prompt.) Whether a
+        // tool needs approval stays with the permission mode.
+        ...(preset?.allowedTools?.length ? { tools: preset.allowedTools } : {}),
+        // `tools` only fences the built-in tools. MCP tools come in through the
+        // settings loaded above, so a hook turns away anything not on the list —
+        // it runs before every tool call, pre-approved ones included. An MCP tool
+        // named on the list (mcp__server__tool) still passes.
+        ...(preset?.allowedTools?.length ? { hooks: allowListHooks(preset.allowedTools, preset.name) } : {}),
         ...(preset?.disallowedTools?.length ? { disallowedTools: preset.disallowedTools } : {}),
         ...(store.sdkSessionId ? { resume: store.sdkSessionId } : {}),
         canUseTool: (toolName, input, { signal, toolUseID }) => {
@@ -102,7 +105,7 @@ export async function runAgent(store: SessionStore): Promise<void> {
             }
 
             store.pendingPermissions.set(toolUseID, { resolve, input, toolName, toolUseID });
-            notifyNewPermission(toolName);
+            notifyPermissionsChanged();
             emitEvent(store, "permission_request", { toolUseID, toolName, input });
 
             signal.addEventListener("abort", () => {
@@ -188,7 +191,6 @@ export async function runAgent(store: SessionStore): Promise<void> {
   store.status = "done";
   notifyPermissionsChanged();
   emitEvent(store, "done", {});
-  notifySessionDone(store);
   scheduleCleanup(store);
 }
 
@@ -202,77 +204,24 @@ export async function continueAgent(store: SessionStore, prompt: string): Promis
   await runAgent(store);
 }
 
-/**
- * Frames a bot's instructions as a standing job. The instructions alone read as
- * background colour, so a bare "hi" often gets a greeting back instead of the
- * work; naming the job and saying when to start it makes the first turn reliable.
- */
-function botSystemPrompt(preset: NonNullable<SessionStore["botPreset"]>): string {
-  return [
-    `You are "${preset.name}", an agent with one standing job in this workspace.`,
-    "",
-    "YOUR JOB:",
-    preset.instructions.trim(),
-    "",
-    "Start this job on the user's first message of the conversation, whatever that",
-    "message says — a greeting such as \"hi\" is a signal to begin, not small talk.",
-    "Do not ask what to work on and do not wait for a restatement of the job; the",
-    "job above is the request. Afterwards, follow the user's messages as usual,",
-    "keeping the job's constraints in force for the rest of the conversation.",
-  ].join("\n");
-}
-
-/**
- * Frames the one-time machine-preparation run. The bot's own job is context
- * here, not the task: the task is making this computer able to do that job.
- * The run stays an ordinary conversation afterwards, so the user can take over
- * when a step needs a human — a password, a licence, a choice of package manager.
- */
-function setupSystemPrompt(preset: NonNullable<SessionStore["botPreset"]>): string {
-  return [
-    `You are setting up the machine for "${preset.name}", a bot that has just been`,
-    "installed here. This thread is the one-time setup run, not the bot's work.",
-    "",
-    ...(preset.instructions.trim()
-      ? ["THE JOB THIS MACHINE IS BEING PREPARED FOR (context only — do not do it now):",
-         preset.instructions.trim(), ""]
-      : []),
-    "SETUP INSTRUCTIONS FROM THE BOT'S AUTHOR:",
-    (preset.setupInstructions ?? "").trim(),
-    "",
-    "HOW TO RUN THIS:",
-    "Begin as soon as the user's first message arrives, whatever it says. Check what",
-    "is already present before installing anything — a machine that is ready needs no",
-    "changes. Prefer the platform's usual package manager, keep changes to what the",
-    "instructions call for, and explain anything that touches system state before you",
-    "do it. If a step needs the user — a password, a licence key, an account, a choice",
-    "you cannot make for them — ask in this thread and wait; this is a normal",
-    "conversation and they can answer.",
-    "",
-    "HOW TO FINISH:",
-    "When the machine can do the job, verify it (run the tool, check the version),",
-    "then end your final message with a line containing exactly:",
-    "SETUP_COMPLETE",
-    "If you cannot get there — a missing dependency you may not install, an",
-    "unsupported platform, a step the user must do elsewhere — end your final message",
-    "with a line of the form:",
-    "SETUP_FAILED: <one line saying what is blocked>",
-    "Write one of those two markers only when the run has actually reached that",
-    "point; never write them while a step is still outstanding, and never mention",
-    "them as an example. The user may keep talking to you afterwards, and a later",
-    "turn may end with a marker of its own once the situation changes.",
-  ].join("\n");
-}
-
-/**
- * Reads the run's verdict off the end of the transcript. The last marker wins,
- * so a later turn that fixes a failure can flip the bot to ready.
- */
-function recordSetupOutcome(botId: string, text: string): void {
-  const matches = text.match(/^\s*SETUP_(COMPLETE|FAILED)\b/gm);
-  if (!matches?.length) return;
-  const done = /COMPLETE/.test(matches[matches.length - 1]);
-  setSetupStatus(botId, done ? "complete" : "failed");
+/** Denies every tool call that is not on the bot's allow-list. */
+function allowListHooks(allowedTools: string[], botName: string): Options["hooks"] {
+  const allowed = new Set(allowedTools.map((t) => t.trim().toLowerCase()).filter(Boolean));
+  return {
+    PreToolUse: [{
+      hooks: [async (input) => {
+        const toolName = (input as PreToolUseHookInput).tool_name ?? "";
+        if (allowed.has(toolName.toLowerCase())) return {};
+        return {
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse" as const,
+            permissionDecision: "deny" as const,
+            permissionDecisionReason: `${botName} is only allowed these tools: ${allowedTools.join(", ")}`,
+          },
+        };
+      }],
+    }],
+  };
 }
 
 function formatMessage(

@@ -1,17 +1,15 @@
 import { networkInterfaces } from "os";
-import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { execSync, execFile, spawn } from "child_process";
 import http from "node:http";
 import { EventEmitter } from "events";
 import qrcode from "qrcode-terminal";
-import { html } from "./client-html";
-import { vendorScripts } from "./client-vendor";
+import { serveUiFile, uiAvailable, uiFileFor } from "./static-ui";
 import { listRepos, cloneRepo, createFolder, listDir, readFile, getRepoDetails, browseDirs } from "./workspace";
 
 // --- Transport abstractions ---
 // These interfaces cover the exact surface area that route handlers use.
-// Both http.IncomingMessage/ServerResponse and the relay adapters satisfy them structurally.
+// http.IncomingMessage/ServerResponse satisfy them structurally.
 
 export interface IRequest {
   method: string;
@@ -130,18 +128,6 @@ export async function showQR(network: string, port: number): Promise<void> {
     });
   });
 
-  console.log(qrCode);
-}
-
-export async function showRelayQR(relayBaseUrl: string, token: string): Promise<void> {
-  // Convert ws(s):// to http(s):// for the app-facing URL
-  const appUrl = relayBaseUrl.replace(/^ws(s?):\/\//, "http$1://") + `/s/${token}`;
-  console.log(`\n  Relay  ${appUrl}\n`);
-  const qrCode = await new Promise<string>((resolve) => {
-    qrcode.generate(appUrl, { small: true }, (code: string) => {
-      resolve(code.trimEnd());
-    });
-  });
   console.log(qrCode);
 }
 
@@ -320,58 +306,6 @@ export function notifyPermissionsChanged(): void {
   permissionsEmitter.emit("update", buildPermissionsDump(), buildSessionsDump());
 }
 
-// --- Push notification bridge (avoids circular import with relay-client) ---
-
-let _pushSender: ((title: string, body: string, data: Record<string, unknown>) => void) | null = null;
-
-export function setPushNotificationSender(
-  fn: ((title: string, body: string, data: Record<string, unknown>) => void) | null
-): void {
-  _pushSender = fn;
-}
-
-export function sendPushViaRelay(title: string, body: string, data: Record<string, unknown>): void {
-  _pushSender?.(title, body, data);
-}
-
-export function notifyNewPermission(toolName: string): void {
-  notifyPermissionsChanged();
-  if (permissionsEmitter.listenerCount("update") === 0) {
-    sendPushViaRelay(
-      "Permission required",
-      `gitbot wants to use ${toolName}. Tap to review.`,
-      { type: "permission" }
-    );
-  } else {
-    // SSE listener exists but may be stale (iOS keeps connections alive after backgrounding).
-    // Wait 5s — if the permission is still pending the user hasn't responded, so push.
-    setTimeout(() => {
-      if (buildPermissionsDump().length > 0) {
-        sendPushViaRelay(
-          "Permission required",
-          `gitbot wants to use ${toolName}. Tap to review.`,
-          { type: "permission" }
-        );
-      }
-    }, 10000);
-  }
-}
-
-export function notifySessionDone(store: SessionStore): void {
-  const repoName = store.repoPath.split("/").filter(Boolean).pop() ?? store.repoPath;
-  const send = () => sendPushViaRelay(
-    "Task complete",
-    `gitbot finished working on ${repoName}. Tap to see the response.`,
-    { type: "task_complete", sessionId: store.gitbotId }
-  );
-
-  if (store.emitter.listenerCount("event") === 0) {
-    send();
-  } else {
-    setTimeout(send, 2000);
-  }
-}
-
 export function createSession(
   gitbotId: string,
   agent: "claude-code" | "opencode" | "codex",
@@ -419,52 +353,6 @@ export function emitEvent(store: SessionStore, type: string, data: Record<string
 }
 
 
-/**
- * Where the relay token lives for a workspace. `.grass-relay-token` is the
- * pre-rename name: keep honouring it when it is the only one present, so an
- * upgrade doesn't hand the relay a brand-new identity.
- */
-export function relayTokenPath(cwd: string): string {
-  const current = join(cwd, ".gitbot-relay-token");
-  const legacy = join(cwd, ".grass-relay-token");
-  if (!existsSync(current) && existsSync(legacy)) return legacy;
-  return current;
-}
-
-let _keepAliveInterval: ReturnType<typeof setInterval> | null = null;
-let _activeSessionCount = 0;
-
-function _pingActivity(): void {
-  const apiUrl = "https://api.codeongrass.com/v1";
-  if (!apiUrl) return;
-  let token: string;
-  try {
-    token = readFileSync(relayTokenPath(process.cwd()), "utf8").trim();
-  } catch { return; }
-  if (!token) return;
-  fetch(`${apiUrl}/containers/activity`, {
-    method: "POST",
-    headers: { "x-relay-token": token },
-    signal: AbortSignal.timeout(10_000),
-  }).catch(() => {});
-}
-
-export function notifySessionStarted(): void {
-  _activeSessionCount++;
-  if (_keepAliveInterval === null) {
-    _pingActivity();
-    _keepAliveInterval = setInterval(_pingActivity, 2 * 60 * 1000);
-  }
-}
-
-export function notifySessionEnded(): void {
-  _activeSessionCount = Math.max(0, _activeSessionCount - 1);
-  if (_activeSessionCount === 0 && _keepAliveInterval !== null) {
-    clearInterval(_keepAliveInterval);
-    _keepAliveInterval = null;
-  }
-}
-
 // --- HTTP Server ---
 
 export async function createHttpServer(opts: {
@@ -493,13 +381,15 @@ export async function createHttpServer(opts: {
 
   const server = http.createServer();
 
-  // Serve the SPA for GET /
+  // Serve the web UI: static files from the bundled export
   server.on("request", (req, res) => {
-    if (req.method === "GET" && (req.url === "/" || req.url === "")) {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      // Function replacement: the vendor bundles contain `$&`-style sequences
-      // that a string replacement would interpret.
-      res.end(html.replace("<!--vendor-->", () => vendorScripts()));
+    const uiFile = uiFileFor(req.method, req.url);
+    if (uiFile) {
+      serveUiFile(req, res, uiFile);
+    } else if (!uiAvailable() && req.method === "GET" && ["/", ""].includes((req.url ?? "/").split("?")[0])) {
+      // Only reachable when running from source: published builds always carry the UI.
+      res.writeHead(503, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("The gitbot web UI has not been built. Run `npm run build` in the gitbot repo, then restart.\n");
     }
     // All other routes handled by server.ts listener
   });
@@ -625,7 +515,6 @@ export async function handleWorkspaceRoutes(
   const query = parseQuery(url);
 
   if (method === "GET" && path === "/health") {
-    _pingActivity();
     jsonOk(res, { status: "ok", cwd: workspaceCwd, serverVersion: SERVER_VERSION, clientVersionRange: CLIENT_VERSION_RANGE });
     return true;
   }

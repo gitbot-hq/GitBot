@@ -1,17 +1,25 @@
 {
-  "name": "gitbot-ai",
-  "version": "0.0.3",
+  "name": "@gitbot-hq/gitbot",
+  "version": "0.0.4",
   "description": "Run Claude Code, Codex, or OpenCode from any device on your network — a local server that puts an AI coding agent in your browser, with reusable bots, threads, and per-bot setup instructions.",
   "main": "dist/index.js",
   "bin": {
     "gitbot": "dist/index.js"
   },
   "files": [
-    "dist",
-    "skills"
+    "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
-    "build": "tsc",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && npm run build:cli && npm run build:ui",
+    "build:cli": "tsc",
+    "build:ui": "node scripts/build-ui.mjs",
     "dev": "tsx src/index.ts",
     "prepublishOnly": "npm run build"
   },
@@ -23,32 +31,29 @@
     "agent",
     "cli",
     "coding-agent",
-    "bot",
-    "websocket"
+    "bot"
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/anildukkipatty/grass-ide.git"
+    "url": "git+https://github.com/sj9911/GitBot.git"
+  },
+  "homepage": "https://github.com/sj9911/GitBot#readme",
+  "bugs": {
+    "url": "https://github.com/sj9911/GitBot/issues"
   },
   "author": "anildukkipatty",
   "license": "MIT",
   "type": "commonjs",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.42",
-    "@openai/codex-sdk": "^0.130.0",
+    "@openai/codex-sdk": "^0.155.1",
     "@opencode-ai/sdk": "^1.2.15",
-    "cli-progress": "^3.12.0",
     "commander": "^14.0.3",
-    "dompurify": "^3.4.15",
-    "marked": "^18.0.12",
-    "qrcode-terminal": "^0.12.0",
-    "ws": "^8.19.0"
+    "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
-    "@types/cli-progress": "^3.11.6",
     "@types/node": "^25.2.3",
     "@types/qrcode-terminal": "^0.12.2",
-    "@types/ws": "^8.18.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
