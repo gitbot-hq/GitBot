@@ -355,19 +355,22 @@ export default function Chat({
           : [...prev, { toolUseID: d.toolUseID, toolName: String(d.toolName ?? "tool"), input: d.input }],
       );
     });
-    // The agent itself failed (provider refused, bad model, crashed CLI). The
-    // turn still ends with its own `done`/`error`; this only keeps the reason,
-    // which would otherwise show as an empty reply.
+    // The agent reported a problem (provider refused, bad model, a connection
+    // retry). Not terminal on its own, so the reason is kept only until the
+    // turn ends: `done` clears it, `error` replaces it with the real cause.
     es.addEventListener("agent_error", (ev) => {
+      if (catchupRef.current) return;
       setTurnError(String(data(ev).message ?? "The agent reported an error"));
     });
     es.addEventListener("aborted", () => {
       setMsgs((prev) => [...prev, { id: nid(), role: "assistant", text: "_Stopped._", tools: [] }]);
+      setTurnError(null);
       catchupRef.current = false;
       pendingFilter.current = null;
       finish(true);
     });
     es.addEventListener("done", () => {
+      setTurnError(null);
       catchupRef.current = false;
       pendingFilter.current = null;
       finish(true);
