@@ -302,6 +302,7 @@ export default function Chat({
   const pendingSteer = useRef<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [escapeStopArmed, setEscapeStopArmed] = useState(false);
   const [activeMenu, setActiveMenu] = useState<"share" | "more" | null>(null);
   const shareButtonRef = useRef<HTMLButtonElement | null>(null);
   const moreButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -332,6 +333,8 @@ export default function Chat({
   const [stuck, setStuck] = useState(true);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
   const reloadTimer = useRef<number | null>(null);
+  const escapeStopTimer = useRef<number | null>(null);
+  const escapeStopArmedRef = useRef(false);
   // Rejoin mode: a turn is already running server-side. Text/tool events
   // are replays of painted history, so only approvals (filtered to the
   // still-pending set), status, and terminal events are honored.
@@ -357,6 +360,35 @@ export default function Chat({
   useEffect(() => {
     setActiveMenu(null);
   }, [thread?.id]);
+
+  useEffect(() => {
+    if (!streaming || activeMenu || setup) {
+      escapeStopArmedRef.current = false;
+      setEscapeStopArmed(false);
+      if (escapeStopTimer.current) window.clearTimeout(escapeStopTimer.current);
+      return;
+    }
+    function confirmStop(event: KeyboardEvent) {
+      if (event.key !== "Escape" || event.repeat) return;
+      event.preventDefault();
+      if (escapeStopArmedRef.current) {
+        stop();
+        return;
+      }
+      escapeStopArmedRef.current = true;
+      setEscapeStopArmed(true);
+      if (escapeStopTimer.current) window.clearTimeout(escapeStopTimer.current);
+      escapeStopTimer.current = window.setTimeout(() => {
+        escapeStopArmedRef.current = false;
+        setEscapeStopArmed(false);
+      }, 3000);
+    }
+    document.addEventListener("keydown", confirmStop);
+    return () => {
+      document.removeEventListener("keydown", confirmStop);
+      if (escapeStopTimer.current) window.clearTimeout(escapeStopTimer.current);
+    };
+  }, [streaming, activeMenu, setup]);
 
   useEffect(() => {
     if (!activeMenu) return;
@@ -893,6 +925,9 @@ export default function Chat({
   }
 
   function stop() {
+    escapeStopArmedRef.current = false;
+    setEscapeStopArmed(false);
+    if (escapeStopTimer.current) window.clearTimeout(escapeStopTimer.current);
     // Halting means halting: a queued follow-up rides back into the draft
     // instead of firing the moment the turn dies.
     const q = queueRef.current;
@@ -1361,11 +1396,6 @@ export default function Chat({
                 e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
               }}
               onKeyDown={(e) => {
-                if (e.key === "Escape" && streaming) {
-                  e.preventDefault();
-                  stop();
-                  return;
-                }
                 if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                   e.preventDefault();
                   sendPrompt(draft);
@@ -1390,10 +1420,13 @@ export default function Chat({
               aria-label={setup ? "Setup response" : "Message"}
             />
             {streaming ? (
-              <>
+              <div className="composer-action">
+                {escapeStopArmed && (
+                  <span className="stop-confirm" role="status">Press Escape again to stop</span>
+                )}
                 <button
                   type="button"
-                  className="send-btn stop-btn"
+                  className="send-btn"
                   onClick={stop}
                   aria-label="Stop"
                   data-tip="Stop"
@@ -1401,17 +1434,7 @@ export default function Chat({
                 >
                   <AnimatedActionIcon icon={CircleStopIcon} size={16} aria-hidden="true" />
                 </button>
-                <button
-                  type="submit"
-                  className="send-btn"
-                  disabled={!draft.trim()}
-                  aria-label="Queue for next"
-                  data-tip="Queue for next"
-                  data-tip-pos="above"
-                >
-                  <AnimatedActionIcon icon={ArrowUpIcon} size={16} aria-hidden="true" />
-                </button>
-              </>
+              </div>
             ) : (
               <button type="submit" className="send-btn" disabled={!draft.trim()} aria-label="Send" data-tip="Send" data-tip-pos="above">
                 <AnimatedActionIcon icon={ArrowUpIcon} size={16} aria-hidden="true" />
