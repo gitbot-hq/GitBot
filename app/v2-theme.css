@@ -427,6 +427,10 @@
     padding 280ms var(--morph);
 }
 
+.v2 .threads-head-row .side-title {
+  max-width: none;
+}
+
 .v2 .side-head.searching .side-title {
   max-width: 0;
   margin: 0;
