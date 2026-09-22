@@ -74,7 +74,7 @@
 .onboarding-intro h1 {
   margin: 0;
   font-size: var(--text-2xl);
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: -0.02em;
 }
 
@@ -164,8 +164,8 @@
 
 .onboarding-slide h2 {
   margin: 0 0 var(--space-2);
-  font-size: 19px;
-  font-weight: 800;
+  font-size: var(--text-lg);
+  font-weight: 600;
   letter-spacing: -0.015em;
 }
 

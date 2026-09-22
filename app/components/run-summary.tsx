@@ -1,8 +1,11 @@
 "use client";
 
+import AnimatedActionIcon from "./animated-action-icon";
+import { ChevronDownIcon } from "@animateicons/react/lucide/chevron-down-icon";
+
 import { useState } from "react";
 import { createPortal } from "react-dom";
-import { IconBolt, IconChevronDown } from "@tabler/icons-react";
+import { IconBolt } from "@tabler/icons-react";
 import {
   extractChangedFiles,
   groupAllTools,
@@ -36,9 +39,8 @@ export function ActionRow({
           <Icon size={13} stroke={2} aria-hidden="true" />
         </span>
         {!archived && (
-          <IconChevronDown
+          <AnimatedActionIcon icon={ChevronDownIcon}
             size={12}
-            stroke={2.2}
             aria-hidden="true"
             className={open ? "act-swap open" : "act-swap"}
           />
@@ -138,7 +140,7 @@ export default function RunSummary({
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
       >
-        <IconChevronDown
+        <AnimatedActionIcon icon={ChevronDownIcon}
           size={13}
           aria-hidden="true"
           className={open ? "act-chev open" : "act-chev"}

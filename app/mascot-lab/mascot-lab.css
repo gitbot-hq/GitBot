@@ -65,6 +65,11 @@
   border-radius: 16px;
 }
 
+.lab-stage > .kawaii {
+  max-width: 100%;
+  height: auto;
+}
+
 .lab-caption {
   color: #949494;
   font-size: var(--text-sm);
@@ -74,6 +79,7 @@
 
 .lab-controls {
   display: grid;
+  min-width: 0;
   gap: 16px;
   align-content: start;
   padding: 24px;
@@ -327,5 +333,11 @@
 @media (max-width: 860px) {
   .lab-hero {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 380px) {
+  .lab-page {
+    padding-inline: 16px;
   }
 }

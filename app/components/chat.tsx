@@ -1,10 +1,26 @@
 "use client";
 
+import AnimatedActionIcon from "./animated-action-icon";
+import { ArrowDownIcon } from "@animateicons/react/lucide/arrow-down-icon";
+import { ArrowUpIcon } from "@animateicons/react/lucide/arrow-up-icon";
+import { CheckIcon } from "@animateicons/react/lucide/check-icon";
+import { CodeIcon } from "@animateicons/react/lucide/code-icon";
+import { CopyIcon } from "@animateicons/react/lucide/copy-icon";
+import { CircleStopIcon } from "@animateicons/react/lucide/circle-stop-icon";
+import { EllipsisIcon } from "@animateicons/react/lucide/ellipsis-icon";
+import { MessageSquarePlusIcon } from "@animateicons/react/lucide/message-square-plus-icon";
+import { RefreshCwIcon } from "@animateicons/react/lucide/refresh-cw-icon";
+import { ShareIcon } from "@animateicons/react/lucide/share-icon";
+import { StoreIcon } from "@animateicons/react/lucide/store-icon";
+import { UserIcon } from "@animateicons/react/lucide/user-icon";
+
 import { Fragment, useEffect, useRef, useState } from "react";
-import { IconArrowDown, IconArrowUp, IconCheck, IconCopy, IconPlayerStop, IconRefresh } from "@tabler/icons-react";
+
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import LoadingState from "./loading-state";
+import BotFace from "./bot-face";
+import BotName from "./bot-name";
 import {
   ApiError,
   getMessages,
@@ -16,8 +32,17 @@ import {
   streamUrl,
 } from "../lib/api";
 import type { HistoryMsg, PermRequest, ThreadFull } from "../lib/gitbot";
+import type { AvatarPref } from "../lib/avatar-prefs";
+import { useMascotPointerFollow } from "../lib/use-mascot-pointer-follow";
+import { useScrollEdge } from "../lib/use-scroll-edge";
 import { useStatusFavicon } from "../lib/status-favicon";
 import { groupTools, type ToolChip } from "../lib/tool-ui";
+import {
+  presentSetupText,
+  readSetupNeedsInput,
+  readSetupOutcome,
+  type SetupOutcome,
+} from "../lib/setup";
 import RunSummary, { ActionRow } from "./run-summary";
 import QueueTray from "./queue-tray";
 
@@ -144,18 +169,105 @@ function ChatSkeleton({ label }: { label: string }) {
     </div>
   );
 }
+
+type SetupMode = {
+  status: string;
+  instructions: string;
+  retrying: boolean;
+  paused: boolean;
+  onRetry: () => void;
+  onPause: () => void;
+  onOutcome: (outcome: SetupOutcome) => Promise<void>;
+};
+
+function SetupIntro({
+  botName,
+  botColor,
+  setup,
+  running,
+  threadReady,
+  awaitingInput,
+}: {
+  botName: string;
+  botColor?: string;
+  setup: SetupMode;
+  running: boolean;
+  threadReady: boolean;
+  awaitingInput: boolean;
+}) {
+  const failed = setup.status === "failed";
+  const paused = setup.paused && !running;
+  return (
+    <header className={failed || paused ? "setup-gate failed" : "setup-gate"}>
+      <div className="setup-gate-status" role="status" aria-live="polite">
+        <span aria-hidden="true" />
+        {failed || paused
+          ? "Setup paused"
+          : running
+            ? "Setting up"
+            : awaitingInput
+              ? "Action needed"
+              : "One-time setup"}
+      </div>
+      <h1>
+        {paused
+          ? "Setup is paused"
+          : failed
+            ? "Setup needs attention"
+            : awaitingInput
+              ? "Setup needs your input"
+              : <>Preparing <BotName color={botColor}>{botName}</BotName></>}
+      </h1>
+      <p>
+        {paused
+          ? "Resume setup to finish preparing this bot. Normal conversations stay locked until verification succeeds."
+          : failed
+            ? "Review what stopped below, then try setup again when the blocker is resolved."
+            : awaitingInput
+              ? "Answer the setup question below so GitBot can continue verification."
+              : running
+                ? "GitBot is checking and preparing this machine. Normal conversations will unlock automatically when verification finishes."
+                : "GitBot will prepare this machine once. Normal conversations unlock automatically after it verifies the requirements."}
+      </p>
+      <details className="setup-requirements">
+        <summary>Setup requirements</summary>
+        <p>{setup.instructions}</p>
+      </details>
+      {!threadReady && !paused && (
+        <button
+          type="button"
+          className="btn-secondary btn-compact setup-retry"
+          onClick={setup.onRetry}
+          disabled={setup.retrying}
+        >
+          <AnimatedActionIcon icon={RefreshCwIcon} size={14} aria-hidden="true" />
+          {setup.retrying ? "Starting setup" : "Try setup again"}
+        </button>
+      )}
+    </header>
+  );
+}
+
 export default function Chat({
   thread,
+  botId,
   botName,
+  botAvatar,
   autoSend,
   onAutoSent,
   onTurnDone,
   onWorkingChange,
   onActivityChange,
+  onShare,
+  onOpenBot,
+  onNewThread,
   booting,
+  setup,
 }: {
   thread: ThreadFull | null;
+  botId?: string;
   botName: string;
+  botAvatar?: AvatarPref;
   autoSend: string | null;
   onAutoSent: () => void;
   onTurnDone: () => void;
@@ -163,10 +275,16 @@ export default function Chat({
   /** Live activity sentence ("Thinking…", "Running Bash…", null when idle).
    *  Lets the shell show what the bot is doing outside the chat. */
   onActivityChange?: (activity: string | null) => void;
+  onShare?: (view?: "options" | "code") => void;
+  onOpenBot?: () => void;
+  onNewThread?: () => void;
   /** True while the app is still loading bots/threads on boot. Shows a
    *  skeleton instead of the empty-thread copy, so the first paint never
    *  flashes placeholder text. Defaults to false (old behavior). */
   booting?: boolean;
+  /** Present while this bot is preparing the current machine. Setup uses
+   *  the chat transport, but is rendered as activation rather than a thread. */
+  setup?: SetupMode;
 }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [loading, setLoading] = useState(false);
@@ -184,10 +302,16 @@ export default function Chat({
   const pendingSteer = useRef<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [activeMenu, setActiveMenu] = useState<"share" | "more" | null>(null);
+  const shareButtonRef = useRef<HTMLButtonElement | null>(null);
+  const moreButtonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
   const esRef = useRef<EventSource | null>(null);
   const sessionRef = useRef<string | null>(null);
   const liveIdRef = useRef<string | null>(null);
+  const liveTextRef = useRef("");
+  const reportedSetupOutcome = useRef<string | null>(null);
   // Progressive reveal: the server emits whole messages, so the live
   // bubble types out at reading pace instead of popping in at once.
   const [live, setLive] = useState<{
@@ -228,6 +352,46 @@ export default function Chat({
   >({});
   // Expanded activity groups (live turn), keyed by segment + group.
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const scrollEdge = useScrollEdge(scrollRef, thread?.id ?? "no-thread");
+
+  useEffect(() => {
+    setActiveMenu(null);
+  }, [thread?.id]);
+
+  useEffect(() => {
+    if (!activeMenu) return;
+    const frame = window.requestAnimationFrame(() => {
+      menuRef.current?.querySelector<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)')?.focus();
+    });
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setActiveMenu(null);
+      (activeMenu === "share" ? shareButtonRef : moreButtonRef).current?.focus();
+    }
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [activeMenu]);
+
+  function moveMenuFocus(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const items = Array.from(
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)'),
+    );
+    if (!items.length) return;
+    event.preventDefault();
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? items.length - 1
+        : event.key === "ArrowUp"
+          ? (current <= 0 ? items.length - 1 : current - 1)
+          : (current + 1) % items.length;
+    items[next]?.focus();
+  }
 
   function resetBox() {
     if (boxRef.current) boxRef.current.style.height = "auto";
@@ -319,6 +483,8 @@ export default function Chat({
     if (prevId) drafts.current[prevId] = queueRef.current ?? draftRef.current;
     sessionRef.current = null;
     liveIdRef.current = null;
+    liveTextRef.current = "";
+    reportedSetupOutcome.current = null;
     setLive(null);
     threadRef.current = thread?.id ?? null;
     setMsgs([]);
@@ -378,9 +544,10 @@ export default function Chat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread?.id]);
 
-  // Setup runs auto-send their opening prompt into empty threads.
+  // Setup runs auto-send their opening or continuation prompt once history
+  // has settled. Continuations intentionally run in non-empty setup threads.
   useEffect(() => {
-    if (!thread || !autoSend || loading || streaming || msgs.length > 0) return;
+    if (!thread || !autoSend || loading || streaming) return;
     onAutoSent();
     sendPrompt(autoSend);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -448,6 +615,7 @@ export default function Chat({
   }
 
   function appendLiveText(chunk: string) {
+    liveTextRef.current += chunk;
     setLive((prev) => {
       if (!prev) return prev;
       const segs = [...prev.segs];
@@ -509,7 +677,7 @@ export default function Chat({
     if (next) startTurn(next);
   }
 
-  function finish(refetch: boolean, stopped = false) {
+  function finish(refetch: boolean, stopped = false, notifyTurnDone = true) {
     closeStream();
     const tid = threadRef.current;
     setStreaming(false);
@@ -566,12 +734,12 @@ export default function Chat({
           })
           .catch(() => {});
       }, 300);
-      onTurnDone();
+      if (notifyTurnDone) onTurnDone();
     } else {
       setLive(null);
       requestAnimationFrame(scrollDown);
       maybeFlush(tid);
-      onTurnDone();
+      if (notifyTurnDone) onTurnDone();
     }
   }
 
@@ -619,7 +787,7 @@ export default function Chat({
     es.addEventListener("aborted", () => {
       setMsgs((prev) => [
         ...prev,
-        { id: nid(), role: "assistant", segs: [{ kind: "text", text: "_Stopped._" }] },
+        { id: nid(), role: "assistant", segs: [{ kind: "text", text: setup ? "_Setup paused._" : "_Stopped._" }] },
       ]);
       catchupRef.current = false;
       pendingFilter.current = null;
@@ -628,7 +796,11 @@ export default function Chat({
     es.addEventListener("done", () => {
       catchupRef.current = false;
       pendingFilter.current = null;
-      finish(true);
+      const tid = threadRef.current;
+      const setupOutcomeReported = !!tid && reportSetupOutcome(tid, liveTextRef.current);
+      // The setup outcome request updates the bot directly. Avoid racing it
+      // with the generic post-turn bot refresh.
+      finish(true, false, !setupOutcomeReported);
     });
     es.addEventListener("error", (ev) => {
       const me = ev as MessageEvent;
@@ -685,6 +857,7 @@ export default function Chat({
     setOpenGroups({});
     pendingTools.current = [];
     pendingRun.current = null;
+    liveTextRef.current = "";
     turnStart.current = Date.now();
     setMsgs((prev) => [
       ...prev,
@@ -732,6 +905,7 @@ export default function Chat({
       if (threadRef.current) drafts.current[threadRef.current] = q;
       fitBox();
     }
+    setup?.onPause();
     abortCurrent();
   }
 
@@ -774,6 +948,19 @@ export default function Chat({
     }, 1500);
   }
 
+  function reportSetupOutcome(tid: string, text: string): boolean {
+    const outcome = readSetupOutcome(text);
+    if (!setup || !outcome) return false;
+    const key = `${tid}:${outcome}`;
+    if (reportedSetupOutcome.current === key) return true;
+    reportedSetupOutcome.current = key;
+    setup.onOutcome(outcome).catch((error) => {
+      if (reportedSetupOutcome.current === key) reportedSetupOutcome.current = null;
+      setTurnError(`Setup finished, but GitBot could not save the result: ${errText(error)}`);
+    });
+    return true;
+  }
+
   function answerPerm(p: PermRequest, approved: boolean) {
     const sid = sessionRef.current;
     if (!sid) return;
@@ -786,14 +973,139 @@ export default function Chat({
       .catch((e) => setTurnError(errText(e)));
   }
 
+  const visibleMsgs = setup
+    ? msgs.filter((message) => {
+        if (message.role !== "user") return true;
+        const text = msgText(message).trim();
+        return !text.startsWith("[GitBot setup run]");
+      })
+    : msgs;
+
+  const latestAssistant = [...msgs].reverse().find((message) => message.role === "assistant");
+  const setupAwaitingInput = !!setup && (
+    readSetupNeedsInput(liveTextRef.current) ||
+    (!!latestAssistant && readSetupNeedsInput(msgText(latestAssistant)))
+  );
+  const showThreadEmpty = !loading && visibleMsgs.length === 0 && !historyError && !setup;
+  useMascotPointerFollow({
+    group: botId,
+    enabled: !!botId && !setup && (!thread || showThreadEmpty),
+  });
+
+  const toolbar = (onShare || onOpenBot || onNewThread) && (
+    <div className="chat-toolbar" aria-label="Chat actions">
+      {onShare && (
+        <div className="chat-toolbar-action">
+          <button
+            ref={shareButtonRef}
+            type="button"
+            className={`icon-btn${activeMenu === "share" ? " is-active" : ""}`}
+            onClick={() => setActiveMenu((menu) => menu === "share" ? null : "share")}
+            aria-label="Share bot"
+            aria-expanded={activeMenu === "share"}
+            aria-haspopup="menu"
+            aria-controls="chat-share-menu"
+            data-tip="Share bot"
+          >
+            <AnimatedActionIcon icon={ShareIcon} size={17} aria-hidden="true" />
+          </button>
+          {activeMenu === "share" && (
+            <div ref={menuRef} id="chat-share-menu" className="chat-options-menu chat-share-menu" role="menu" aria-label="Share bot" onKeyDown={moveMenuFocus}>
+              <button type="button" role="menuitem" onClick={() => { setActiveMenu(null); onShare("code"); }}>
+                <AnimatedActionIcon icon={CodeIcon} size={15} aria-hidden="true" />
+                <span className="chat-menu-label">Share with code</span>
+              </button>
+              <button type="button" role="menuitem" disabled>
+                <AnimatedActionIcon icon={StoreIcon} size={15} aria-hidden="true" />
+                <span className="chat-menu-label">Publish to Marketplace</span>
+                <span className="chat-menu-status">Soon</span>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {(onOpenBot || onNewThread) && (
+        <div className="chat-toolbar-action">
+          <button
+            ref={moreButtonRef}
+            type="button"
+            className={`icon-btn${activeMenu === "more" ? " is-active" : ""}`}
+            onClick={() => setActiveMenu((menu) => menu === "more" ? null : "more")}
+            aria-label="More chat options"
+            aria-expanded={activeMenu === "more"}
+            aria-haspopup="menu"
+            aria-controls="chat-more-menu"
+            data-tip="More options"
+          >
+            <AnimatedActionIcon icon={EllipsisIcon} size={18} aria-hidden="true" />
+          </button>
+          {activeMenu === "more" && (
+            <div ref={menuRef} id="chat-more-menu" className="chat-options-menu" role="menu" aria-label="Chat options" onKeyDown={moveMenuFocus}>
+              {onOpenBot && (
+                <button type="button" role="menuitem" onClick={() => { setActiveMenu(null); onOpenBot(); }}>
+                  <AnimatedActionIcon icon={UserIcon} size={15} aria-hidden="true" />
+                  <span className="chat-menu-label">View bot profile</span>
+                </button>
+              )}
+              {onNewThread && (
+                <button type="button" role="menuitem" onClick={() => { setActiveMenu(null); onNewThread(); }}>
+                  <AnimatedActionIcon icon={MessageSquarePlusIcon} size={15} aria-hidden="true" />
+                  <span className="chat-menu-label">New conversation</span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      {activeMenu && (
+        <button type="button" className="menu-scrim" onClick={() => setActiveMenu(null)} aria-label="Close menu" tabIndex={-1} />
+      )}
+    </div>
+  );
+
   if (!thread) {
     return (
-      <main className="chat" aria-label="Chat">
-        <section className="chat-body">
-          {booting ? (
-            <ChatSkeleton label="Loading chat" />
+      <main className="chat" aria-label={setup ? "Bot setup" : "Chat"}>
+        {toolbar}
+        <section className={setup ? "chat-body setup-chat-body" : "chat-body"}>
+          {setup && (
+            <SetupIntro
+              botName={botName}
+              botColor={botAvatar?.color}
+              setup={setup}
+              running={false}
+              threadReady={false}
+              awaitingInput={false}
+            />
+          )}
+          {booting || setup ? (
+            <ChatSkeleton label={setup ? "Preparing setup" : "Loading chat"} />
           ) : (
-            <p className="chat-empty">Select a thread — or start one with +.</p>
+            <div className="conversation-empty">
+              {botAvatar && (
+                <div
+                  className="conversation-empty-mascot"
+                  data-bot-follow={botId}
+                >
+                  <BotFace
+                    mascot={botAvatar.mascot}
+                    color={botAvatar.color}
+                    size={144}
+                    follow
+                  />
+                </div>
+              )}
+              <div className="conversation-empty-copy">
+                <h1>Start a conversation</h1>
+                <p>Choose a folder, then tell <BotName color={botAvatar?.color}>{botName}</BotName> what you’d like help with.</p>
+              </div>
+              {onNewThread && (
+                <button type="button" className="btn-primary" onClick={onNewThread}>
+                  <AnimatedActionIcon icon={MessageSquarePlusIcon} size={16} aria-hidden="true" />
+                  New conversation
+                </button>
+              )}
+            </div>
           )}
         </section>
       </main>
@@ -801,9 +1113,11 @@ export default function Chat({
   }
 
   return (
-    <main className="chat" aria-label="Chat">
+    <main className="chat" aria-label={setup ? "Bot setup" : "Chat"}>
+      {toolbar}
+      <div className={`chat-scroll-edge chat-scroll-edge-top${scrollEdge === "top" ? " is-visible" : ""}`} aria-hidden="true" />
       <section
-        className="chat-body"
+        className={setup ? "chat-body setup-chat-body" : "chat-body"}
         ref={scrollRef}
         onScroll={(e) => {
           const el = e.currentTarget;
@@ -812,6 +1126,16 @@ export default function Chat({
           setStuck(pinned);
         }}
       >
+        {setup && (
+          <SetupIntro
+            botName={botName}
+            botColor={botAvatar?.color}
+            setup={setup}
+            running={streaming}
+            threadReady
+            awaitingInput={setupAwaitingInput}
+          />
+        )}
         {historyError && (
           <p className="chat-error">
             {historyError}{" "}
@@ -821,14 +1145,14 @@ export default function Chat({
           </p>
         )}
         {!loading &&
-          msgs.map((m) => (
+          visibleMsgs.map((m) => (
             <article
               key={m.id}
               className={`${m.role === "user" ? "bubble user" : "bubble assistant"}${m.id.startsWith("m") ? " msg-in" : ""}`}
             >
               {m.segs.map((s, si) =>
                 s.kind === "text" ? (
-                  <RichText key={si} text={s.text} />
+                  <RichText key={si} text={setup && m.role === "assistant" ? presentSetupText(s.text) : s.text} />
                 ) : null,
               )}
               {m.role === "assistant" &&
@@ -848,14 +1172,14 @@ export default function Chat({
                   <button
                     type="button"
                     className="icon-btn"
-                    onClick={() => copyText(m.id, msgText(m))}
+                    onClick={() => copyText(m.id, setup ? presentSetupText(msgText(m)) : msgText(m))}
                     aria-label="Copy reply"
                     data-tip="Copy reply"
                   >
                     {copiedId === m.id ? (
-                      <IconCheck size={15} aria-hidden="true" />
+                      <AnimatedActionIcon icon={CheckIcon} size={15} aria-hidden="true" />
                     ) : (
-                      <IconCopy size={15} aria-hidden="true" />
+                      <AnimatedActionIcon icon={CopyIcon} size={15} aria-hidden="true" />
                     )}
                   </button>
                   <button
@@ -865,7 +1189,7 @@ export default function Chat({
                     aria-label="Try again"
                     data-tip="Try again"
                   >
-                    <IconRefresh size={15} aria-hidden="true" />
+                    <AnimatedActionIcon icon={RefreshCwIcon} size={15} aria-hidden="true" />
                   </button>
                 </span>
               )}
@@ -875,7 +1199,7 @@ export default function Chat({
           <article key={live.key} className="bubble assistant msg-in">
             {revealSegs(live.segs, live.shown).map((s, si) =>
               s.kind === "text" ? (
-                <RichText key={`t${si}`} text={s.text} />
+                <RichText key={`t${si}`} text={setup ? presentSetupText(s.text) : s.text} />
               ) : (
                 <Fragment key={`g${si}`}>
                   {groupTools(s.tools).map((g, gi) => {
@@ -897,8 +1221,23 @@ export default function Chat({
           </article>
         )}
         {loading && <ChatSkeleton label="Loading history" />}
-        {!loading && msgs.length === 0 && !historyError && (
-          <p className="chat-empty">New thread. Say hello below.</p>
+        {showThreadEmpty && (
+          <div className="conversation-empty" data-bot-follow={botId}>
+            {botAvatar && (
+              <div className="conversation-empty-mascot">
+                <BotFace
+                  mascot={botAvatar.mascot}
+                  color={botAvatar.color}
+                  size={144}
+                  follow
+                />
+              </div>
+            )}
+            <div className="conversation-empty-copy">
+              <h1>Start a conversation</h1>
+              <p>Tell <BotName color={botAvatar?.color}>{botName}</BotName> what you’d like help with.</p>
+            </div>
+          </div>
         )}
         {perms.map((p) =>
           p.verdict === undefined ? (
@@ -936,6 +1275,7 @@ export default function Chat({
           </div>
         )}
       </section>
+      <div className={`chat-scroll-edge chat-scroll-edge-bottom${scrollEdge === "bottom" ? " is-visible" : ""}`} aria-hidden="true" />
       {!stuck && (
         <button
           type="button"
@@ -949,86 +1289,137 @@ export default function Chat({
           data-tip="Jump to latest"
           data-tip-pos="above"
         >
-          <IconArrowDown size={15} aria-hidden="true" />
+          <AnimatedActionIcon icon={ArrowDownIcon} size={15} aria-hidden="true" />
           Latest
         </button>
       )}
-      <form
-        className="composer"
-        onSubmit={(e) => {
-          e.preventDefault();
-          sendPrompt(draft);
-          resetBox();
-        }}
-      >
-        <QueueTray
-          text={queue}
-          onSteer={steerNow}
-          onEdit={editQueue}
-          onDiscard={discardQueue}
-        />
-        <div className="composer-pill">
-          <textarea
-            ref={boxRef}
-            value={draft}
-            rows={1}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              draftRef.current = e.target.value;
-              e.target.style.height = "auto";
-              e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Escape" && streaming) {
-                e.preventDefault();
-                stop();
-                return;
-              }
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                e.preventDefault();
-                sendPrompt(draft);
-                resetBox();
-                return;
-              }
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                sendPrompt(draft);
-                resetBox();
-              }
-            }}
-            placeholder={streaming ? "Add a follow-up…" : `Ask ${botName}…`}
-            aria-label="Message"
-          />
-          {streaming ? (
-            <>
-              <button
-                type="button"
-                className="send-btn stop-btn"
-                onClick={stop}
-                aria-label="Stop"
-                data-tip="Stop"
-                data-tip-pos="above"
-              >
-                <IconPlayerStop size={16} aria-hidden="true" />
-              </button>
-              <button
-                type="submit"
-                className="send-btn"
-                disabled={!draft.trim()}
-                aria-label="Queue for next"
-                data-tip="Queue for next"
-                data-tip-pos="above"
-              >
-                <IconArrowUp size={16} aria-hidden="true" />
-              </button>
-            </>
-          ) : (
-            <button type="submit" className="send-btn" disabled={!draft.trim()} aria-label="Send" data-tip="Send" data-tip-pos="above">
-              <IconArrowUp size={16} aria-hidden="true" />
+      {setup && streaming ? (
+        <div className="composer setup-resume-composer">
+          <div className="setup-resume-card" role="status">
+            <span>
+              <b>Setup in progress</b>
+              <small>GitBot is preparing and verifying this machine.</small>
+            </span>
+            <button
+              type="button"
+              className="btn-secondary btn-compact"
+              onClick={stop}
+            >
+              <AnimatedActionIcon icon={CircleStopIcon} size={14} aria-hidden="true" />
+              Stop setup
             </button>
-          )}
+          </div>
         </div>
-      </form>
+      ) : setup && !setupAwaitingInput ? (
+        <div className="composer setup-resume-composer">
+          <div className="setup-resume-card" role="status">
+            <span>
+              <b>{setup.paused ? "Setup pending" : autoSend ? "Starting setup" : "Setup incomplete"}</b>
+              <small>
+                {setup.paused
+                  ? "Resume setup to unlock conversations."
+                  : autoSend
+                    ? "GitBot is preparing the setup run."
+                    : "Continue setup to finish verification and unlock conversations."}
+              </small>
+            </span>
+            <button
+              type="button"
+              className="btn-primary btn-compact"
+              onClick={setup.onRetry}
+              disabled={setup.retrying}
+            >
+              <AnimatedActionIcon icon={RefreshCwIcon} size={14} aria-hidden="true" />
+              {setup.retrying ? "Resuming" : "Resume setup"}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form
+          className="composer"
+          onSubmit={(e) => {
+            e.preventDefault();
+            sendPrompt(draft);
+            resetBox();
+          }}
+        >
+          <QueueTray
+            text={queue}
+            onSteer={steerNow}
+            onEdit={editQueue}
+            onDiscard={discardQueue}
+          />
+          <div className="composer-pill">
+            <textarea
+              ref={boxRef}
+              value={draft}
+              rows={1}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                draftRef.current = e.target.value;
+                e.target.style.height = "auto";
+                e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape" && streaming) {
+                  e.preventDefault();
+                  stop();
+                  return;
+                }
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  sendPrompt(draft);
+                  resetBox();
+                  return;
+                }
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  sendPrompt(draft);
+                  resetBox();
+                }
+              }}
+              placeholder={
+                setup
+                  ? streaming
+                    ? "Add setup information…"
+                    : "Reply if setup needs you…"
+                  : streaming
+                    ? "Add a follow-up…"
+                    : `Ask ${botName}…`
+              }
+              aria-label={setup ? "Setup response" : "Message"}
+            />
+            {streaming ? (
+              <>
+                <button
+                  type="button"
+                  className="send-btn stop-btn"
+                  onClick={stop}
+                  aria-label="Stop"
+                  data-tip="Stop"
+                  data-tip-pos="above"
+                >
+                  <AnimatedActionIcon icon={CircleStopIcon} size={16} aria-hidden="true" />
+                </button>
+                <button
+                  type="submit"
+                  className="send-btn"
+                  disabled={!draft.trim()}
+                  aria-label="Queue for next"
+                  data-tip="Queue for next"
+                  data-tip-pos="above"
+                >
+                  <AnimatedActionIcon icon={ArrowUpIcon} size={16} aria-hidden="true" />
+                </button>
+              </>
+            ) : (
+              <button type="submit" className="send-btn" disabled={!draft.trim()} aria-label="Send" data-tip="Send" data-tip-pos="above">
+                <AnimatedActionIcon icon={ArrowUpIcon} size={16} aria-hidden="true" />
+              </button>
+            )}
+          </div>
+        </form>
+      )}
     </main>
   );
 }

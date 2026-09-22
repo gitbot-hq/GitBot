@@ -6,7 +6,7 @@ import type { AvatarMascot } from "../lib/avatar-prefs";
 // Ambient behavior (our own director; the bot-maker motion system is
 // untouched — only activity/expression props change, so every switch
 // morphs instead of popping):
-// - baseline idle cycles (neutral/looking/happy/wink come free)
+// - baseline idle looks around with varied pauses; smiles come from interaction
 // - idle 60s+ with no interaction → sleeping; any activity wakes
 // - hover (or external cheer) holds happy while active
 // - reduced motion parks the body; morphs stay permitted
@@ -89,6 +89,7 @@ export default function BotFace({
   cheer = false,
   follow = false,
   still = false,
+  unpowered = false,
   duration = 420,
   phase = 0,
 }: {
@@ -98,10 +99,12 @@ export default function BotFace({
   ambient?: boolean;
   /** External delight signal (e.g. row hovered). Holds a smile. */
   cheer?: boolean;
-  /** Face tracks the cursor (studio only). Gated on no-preference. */
+  /** Face tracks the cursor. Gated on no-preference. */
   follow?: boolean;
   /** Pose neutral and still (picker tiles). Preview + rail stay live. */
   still?: boolean;
+  /** Setup is incomplete: render a dormant shell with no personality motion. */
+  unpowered?: boolean;
   /** Geometry morph time in ms (bot-maker clamps 120–2000). */
   duration?: number;
   /** Stagger index: holds a different starting expression and arms sleep
@@ -110,26 +113,28 @@ export default function BotFace({
   phase?: number;
 }) {
   const mood = useMood(ambient, cheer, phase);
-  const motion = mood.reduced ? false : !still;
+  const motion = unpowered || mood.reduced ? false : !still;
   const seq = activityExpressions[mood.activity] ?? activityExpressions.idle;
   const holdExpr = seq[phase % seq.length];
-  const expression = mood.happy
-    ? "happy"
-    : !mood.released
-      ? holdExpr
-      : still
-        ? "neutral"
-        : undefined;
+  const expression = unpowered
+    ? "neutral"
+    : mood.happy
+      ? "happy"
+      : !mood.released
+        ? holdExpr
+        : still
+          ? "neutral"
+          : undefined;
   // Fit tall bodies inside the square box by width.
   const { w, h } = dimsFor(mascot);
   const fitWidth = Math.round(size * Math.min(1, w / h));
   return (
     <span
-      className={follow ? "bot-avatar follow" : "bot-avatar"}
+      className={`bot-avatar${follow && !unpowered ? " follow" : ""}${unpowered ? " unpowered" : ""}`}
       style={{ width: size, height: size }}
       aria-hidden="true"
-      onMouseEnter={mood.onEnter}
-      onMouseLeave={mood.onLeave}
+      onMouseEnter={unpowered ? undefined : mood.onEnter}
+      onMouseLeave={unpowered ? undefined : mood.onLeave}
     >
       <BotMascot
         body={mascot}

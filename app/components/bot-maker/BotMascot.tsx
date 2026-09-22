@@ -3,7 +3,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { activityExpressions, bodies, expressions, facePlacement, type BotActivity } from './registry';
 import './mascot.css';
-import MorphFace from './MorphFace';
+import LookAroundFace from './LookAroundFace';
 import BodyReaction from './BodyReaction';
 
 export type BotMascotProps = {
@@ -40,7 +40,7 @@ export default function BotMascot({ body = 'ghost', color = '#FECE00', expressio
     <BodyReaction expression={active} motion={motion}>
       <Artwork art={shape} className="bm-body" />
       <div className="bm-face-anchor"><div className="bm-gaze">
-        <MorphFace expression={active} duration={duration} motion={motion} />
+        <LookAroundFace expression={active} duration={duration} motion={motion} />
       </div></div>
     </BodyReaction>
   </div>;

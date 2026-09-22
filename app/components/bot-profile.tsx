@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { IconArrowLeft } from "@tabler/icons-react";
+import { PanelBack } from "./panel-controls";
 import BotFace from "./bot-face";
 import { getThreads } from "../lib/api";
 import type { Bot, ThreadFull } from "../lib/gitbot";
@@ -76,9 +76,9 @@ function levelColor(count: number, color: string): string {
   return color;
 }
 
-// Bot profile: cover, identity, facts, and the three actions (edit dives
-// into the studio, share opens the code modal, publish waits on the
-// marketplace). The cover is generative — the bot's own brand color — so
+// Bot profile: cover, identity, facts, and its edit/share actions. Sharing
+// owns both the portable-code and future marketplace paths. The cover is
+// generative — the bot's own brand color — so
 // there is nothing to store or upload.
 export default function BotProfile({
   bot,
@@ -86,12 +86,14 @@ export default function BotProfile({
   onBack,
   onEdit,
   onShare,
+  active = true,
 }: {
   bot: Bot;
   pref: AvatarPref;
   onBack: () => void;
   onEdit: () => void;
   onShare: () => void;
+  active?: boolean;
 }) {
   const [threads, setThreads] = useState<ThreadFull[] | null>(null);
 
@@ -112,13 +114,14 @@ export default function BotProfile({
 
   useEffect(() => {
     function esc(ev: KeyboardEvent) {
-      if (ev.key === "Escape") onBack();
+      if (active && ev.key === "Escape") onBack();
     }
     document.addEventListener("keydown", esc);
     return () => document.removeEventListener("keydown", esc);
-  }, [onBack]);
+  }, [active, onBack]);
 
   const chat = (threads ?? []).filter((t) => t.kind !== "setup");
+  const setupPending = !!bot.setupInstructions && bot.setupStatus !== "complete";
   const messages = chat.reduce((n, t) => n + (t.messageCount || 0), 0);
   const lastActive = chat.length
     ? timeAgo(
@@ -129,10 +132,7 @@ export default function BotProfile({
 
   return (
     <div className="profile-pane" aria-label={`${bot.name} profile`}>
-      <button type="button" className="back-btn" onClick={onBack}>
-        <IconArrowLeft size={16} stroke={2} aria-hidden="true" />
-        Back
-      </button>
+      <PanelBack onClick={onBack} />
       <div className="profile-pane-inner">
       <div className="profile-cover-wrap">
         <div
@@ -142,29 +142,33 @@ export default function BotProfile({
           }}
           aria-hidden="true"
         />
-        <span className="profile-avatar">
-          <BotFace mascot={pref.mascot} size={88} color={pref.color} />
+        <span className={`profile-avatar${setupPending ? " needs-setup" : ""}`}>
+          <BotFace
+            mascot={pref.mascot}
+            size={88}
+            color={pref.color}
+            still={setupPending}
+            unpowered={setupPending}
+          />
         </span>
       </div>
       <div className="profile-head">
         <div>
           <h2>{bot.name}</h2>
+          {setupPending ? (
+            <p className="profile-setup-status">
+              <i aria-hidden="true" />
+              Needs setup
+            </p>
+          ) : null}
           {bot.description ? <p>{bot.description}</p> : null}
         </div>
         <div className="profile-acts">
           <button type="button" className="btn-primary" onClick={onShare}>
-            Share the bot
+            Share bot
           </button>
           <button type="button" className="btn-secondary" onClick={onEdit}>
             Edit
-          </button>
-          <button
-            type="button"
-            className="btn-secondary"
-            disabled
-            title="Coming soon"
-          >
-            Publish to marketplace
           </button>
         </div>
       </div>

@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { IconQuestionMark, IconX } from "@tabler/icons-react";
+import { IconQuestionMark } from "@tabler/icons-react";
+import { PanelBack, CloseButton } from "./panel-controls";
 import { createBot, deleteBot, patchBot, type BotInput } from "../lib/api";
 import type { Bot } from "../lib/gitbot";
 import { getAvatarPref, resolveAvatar, defaultMascotFor, type AvatarMascot, type AvatarPref } from "../lib/avatar-prefs";
 import { bodies } from "./bot-maker/registry";
 import { botTile, BRAND_TILES } from "./bot-avatar";
 import BotFace from "./bot-face";
+import BotName from "./bot-name";
+import { useMascotPointerFollow } from "../lib/use-mascot-pointer-follow";
 
 function Field({
   label,
@@ -72,8 +75,10 @@ export default function BotForm({
   onSwitched,
   onSwitchDiscard,
   onSwitchCancel,
+  active = true,
 }: {
   bot: Bot | null;
+  active?: boolean;
   onClose: () => void;
   onSaved: (bot: Bot, pref: AvatarPref) => void;
   onDeleted: (id: string) => void;
@@ -113,6 +118,7 @@ export default function BotForm({
   const [busy, setBusy] = useState(false);
   const [guard, setGuard] = useState(false);
   const studioRef = useRef<HTMLDivElement | null>(null);
+  useMascotPointerFollow({ root: studioRef });
 
   // Snapshot of the opened bot (or blank defaults for "new") — the guard
   // compares live field state against this.
@@ -149,46 +155,13 @@ export default function BotForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [switchTo]);
 
-  // Studio mascots watch the cursor: each followed face steers toward
-  // the pointer (capped travel, eased). Reduced-motion users never opt in.
-  useEffect(() => {
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    let raf = 0;
-    let cx = window.innerWidth / 2;
-    let cy = window.innerHeight / 2;
-    const apply = () => {
-      raf = 0;
-      studioRef.current
-        ?.querySelectorAll(".bot-avatar.follow .bot-mascot")
-        .forEach((el) => {
-          const r = el.getBoundingClientRect();
-          const dx = (cx - (r.left + r.width / 2)) / r.width;
-          const dy = (cy - (r.top + r.height / 2)) / r.height;
-          const len = Math.hypot(dx, dy) || 1;
-          const mag = Math.min(1, len * 1.5) * 3;
-          (el as HTMLElement).style.setProperty("--px", `${((dx / len) * mag).toFixed(2)}px`);
-          (el as HTMLElement).style.setProperty("--py", `${((dy / len) * mag).toFixed(2)}px`);
-        });
-    };
-    const onMove = (e: MouseEvent) => {
-      cx = e.clientX;
-      cy = e.clientY;
-      if (!raf) raf = requestAnimationFrame(apply);
-    };
-    window.addEventListener("mousemove", onMove);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      if (raf) cancelAnimationFrame(raf);
-    };
-  }, []);
-
   useEffect(() => {
     function esc(ev: KeyboardEvent) {
-      if (ev.key === "Escape" && !guard) onClose();
+      if (ev.key === "Escape" && !guard && active) onClose();
     }
     document.addEventListener("keydown", esc);
     return () => document.removeEventListener("keydown", esc);
-  }, [guard, onClose]);
+  }, [guard, active, onClose]);
 
   function body(): BotInput {
     const tools = allowedTools
@@ -274,17 +247,19 @@ export default function BotForm({
   // Guard Escape closes the dialog (stays in the editor); the form-level
   // Escape above already stands down while the guard is open.
   useEffect(() => {
-    if (!guard) return;
+    if (!guard || !active) return;
     function esc(ev: KeyboardEvent) {
       if (ev.key === "Escape") cancelGuard();
     }
     document.addEventListener("keydown", esc);
     return () => document.removeEventListener("keydown", esc);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [guard]);
+  }, [guard, active]);
 
   return (
-    <div className="modal inline" aria-label={editing ? "Edit bot" : "New bot"}>
+    <>
+    <PanelBack onClick={onClose} disabled={busy} />
+    <div className="modal inline" aria-label={editing ? "Edit bot" : "Create bot"}>
       {guard && switchTo && (
         <div className="backdrop">
           <div
@@ -295,20 +270,14 @@ export default function BotForm({
           >
             <div className="modal-head">
               <h2>Unsaved changes</h2>
-              <button
-                type="button"
-                className="modal-x"
-                disabled={busy}
-                onClick={cancelGuard}
-                aria-label="Close"
-                data-tip="Close"
-              >
-                <IconX size={18} stroke={2} aria-hidden="true" />
-              </button>
+              <CloseButton disabled={busy} onClick={cancelGuard} />
             </div>
             <p className="guard-text">
-              {editing && bot ? bot.name : "Your new bot"} has unsaved
-              changes. Save them before switching to {switchTo.name}?
+              {editing && bot ? <BotName color={color}>{bot.name}</BotName> : "Your new bot"} has unsaved
+              changes. Save them before switching to{" "}
+              <BotName color={resolveAvatar(getAvatarPref(switchTo.id), fallbackPref(switchTo.id)).color}>
+                {switchTo.name}
+              </BotName>?
             </p>
             {error && <p className="chat-error">{error}</p>}
             <div className="acts">
@@ -342,7 +311,7 @@ export default function BotForm({
         </div>
       )}
       <div className="modal-head">
-        <h2>{editing ? "Edit bot" : "New bot"}</h2>
+        <h2>{editing ? "Edit bot" : "Create bot"}</h2>
       </div>
       <div className="studio" ref={studioRef}>
         <div className="studio-side">
@@ -461,7 +430,7 @@ export default function BotForm({
           <div className="acts">
             {editing && bot && (
               <button type="button" className="btn-ghost" disabled={busy} onClick={() => onShare(bot)}>
-                Share
+                Share bot
               </button>
             )}
             {editing && (
@@ -485,5 +454,6 @@ export default function BotForm({
         </div>
       </div>
     </div>
+    </>
   );
 }

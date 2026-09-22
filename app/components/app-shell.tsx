@@ -1,17 +1,19 @@
 "use client";
 
+import AnimatedActionIcon from "./animated-action-icon";
+import { ChevronsLeftIcon } from "@animateicons/react/lucide/chevrons-left-icon";
+import { ChevronsRightIcon } from "@animateicons/react/lucide/chevrons-right-icon";
+import { CheckIcon } from "@animateicons/react/lucide/check-icon";
+import { ShoppingBagIcon } from "@animateicons/react/lucide/shopping-bag-icon";
+import { DownloadIcon } from "@animateicons/react/lucide/download-icon";
+import { UserIcon } from "@animateicons/react/lucide/user-icon";
+import { PlusIcon } from "@animateicons/react/lucide/plus-icon";
+import { SearchIcon } from "@animateicons/react/lucide/search-icon";
+
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
-import {
-  IconArrowBarToLeft,
-  IconArrowBarToRight,
-  IconArrowLeft,
-  IconShoppingBag,
-  IconDownload,
-  IconPencil,
-  IconPlus,
-  IconSearch,
-} from "@tabler/icons-react";
+import Link from "./page-link";
+import { useUserProfile } from "./app-providers";
+
 import Chat from "./chat";
 import NewBotButton from "./new-bot-button";
 import BotForm from "./bot-form";
@@ -23,14 +25,10 @@ import ThemeButton from "./theme-button";
 import { ImportModal, ShareModal } from "./share-modals";
 import { useToast } from "./toast";
 import BotFace from "./bot-face";
+import BotName from "./bot-name";
 import { botTile } from "./bot-avatar";
 import TopBar from "./top-bar";
-import {
-  DEFAULT_USER_NAME,
-  getUserPref,
-  setUserPref,
-  type UserPref,
-} from "../lib/user-prefs";
+
 import {
   botSetupAction,
   createBot,
@@ -39,6 +37,8 @@ import {
 } from "../lib/api";
 import { getAvatarPref, setAvatarPref, resolveAvatar, defaultMascotFor, type AvatarPref } from "../lib/avatar-prefs";
 import type { Bot, ThreadFull } from "../lib/gitbot";
+import { setupPrompt, type SetupOutcome, type SetupRunKind } from "../lib/setup";
+import { useScrollEdge } from "../lib/use-scroll-edge";
 import "../v2-theme.css";
 import "../onboarding/onboarding.css";
 
@@ -73,7 +73,7 @@ function needsSetup(bot: Bot) {
   return !!bot.setupInstructions && bot.setupStatus !== "complete";
 }
 
-type Modal = { kind: "share"; bot: Bot } | { kind: "import" } | null;
+type Modal = { kind: "share"; bot: Bot; view?: "options" | "code" } | { kind: "import" } | null;
 
 export default function V2() {
   const [bots, setBots] = useState<Bot[]>([]);
@@ -97,15 +97,11 @@ export default function V2() {
   // New-thread folder picker: slides over the chat column only.
   const [threadPanel, setThreadPanel] = useState(false);
   const [autoSend, setAutoSend] = useState<string | null>(null);
+  const [setupRetrying, setSetupRetrying] = useState(false);
+  const [pausedSetupIds, setPausedSetupIds] = useState<Record<string, boolean>>({});
+  const setupLaunchRef = useRef<string | null>(null);
   // User profile: generic default until set; stored on this device only.
-  const [user, setUser] = useState<UserPref>({
-    name: DEFAULT_USER_NAME,
-    email: "",
-    bio: "",
-    location: "",
-    emailVerified: false,
-    photo: null,
-  });
+  const { user, saveUser: savedUser } = useUserProfile();
   const [userOpen, setUserOpen] = useState(false);
   const { toast, view: toastView } = useToast();
 
@@ -113,6 +109,14 @@ export default function V2() {
   const [threadsWidth, setThreadsWidth] = useState<number | null>(null);
   const sideRef = useRef<HTMLElement | null>(null);
   const threadsAsideRef = useRef<HTMLElement | null>(null);
+  const botsHeaderRef = useRef<HTMLDivElement | null>(null);
+  const threadsHeaderRef = useRef<HTMLDivElement | null>(null);
+  const botsScrollRef = useRef<HTMLDivElement | null>(null);
+  const threadsScrollRef = useRef<HTMLDivElement | null>(null);
+  const [botsHeaderHeight, setBotsHeaderHeight] = useState(44);
+  const [threadsHeaderHeight, setThreadsHeaderHeight] = useState(60);
+  const [botsScrolled, setBotsScrolled] = useState(false);
+  const [threadsScrolled, setThreadsScrolled] = useState(false);
   const [threadsDragging, setThreadsDragging] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [settled, setSettled] = useState(false);
@@ -165,16 +169,6 @@ export default function V2() {
 
   useEffect(loadBots, [loadBots]);
 
-  // Stored profile loads after mount (default first — no hydration flash).
-  useEffect(() => {
-    setUser(getUserPref());
-  }, []);
-
-  function savedUser(next: UserPref) {
-    setUser(next);
-    setUserPref(next);
-  }
-
   // Widths: null means "CSS owns it" — layout.tsx sets --v2-side-w /
   // --v2-threads-w before paint, so the first paint is already final.
   // React writes an inline width only after a drag or reset (persisted).
@@ -195,6 +189,27 @@ export default function V2() {
   useEffect(() => {
     if (threadSearchOpen) threadSearchRef.current?.focus({ preventScroll: true });
   }, [threadSearchOpen]);
+
+  useEffect(() => {
+    const entries = [
+      [botsHeaderRef.current, setBotsHeaderHeight],
+      [threadsHeaderRef.current, setThreadsHeaderHeight],
+    ] as const;
+    const observers: ResizeObserver[] = [];
+    for (const [node, setHeight] of entries) {
+      if (!node) continue;
+      const measure = () => {
+        const style = getComputedStyle(node);
+        const margins = parseFloat(style.marginTop) + parseFloat(style.marginBottom);
+        setHeight(Math.ceil(node.getBoundingClientRect().height + margins));
+      };
+      measure();
+      const observer = new ResizeObserver(measure);
+      observer.observe(node);
+      observers.push(observer);
+    }
+    return () => observers.forEach((observer) => observer.disconnect());
+  }, [botsLoading]);
 
   const bot = bots.find((b) => b.id === selectedId) ?? null;
   const profileBot = bots.find((b) => b.id === profileId) ?? null;
@@ -226,6 +241,9 @@ export default function V2() {
     return "Working";
   }
   const activeLabel = bot ? shortActivity(botActivity) : null;
+  const setupRequired = !!bot && needsSetup(bot);
+  const setupThread = threads.find((t) => t.kind === "setup") ?? null;
+  const workThreads = threads.filter((t) => t.kind !== "setup");
 
   const searchText = query.trim().toLowerCase();
   const visibleBots = searchText
@@ -234,8 +252,32 @@ export default function V2() {
 
   const threadSearchText = threadQuery.trim().toLowerCase();
   const visibleThreads = threadSearchText
-    ? threads.filter((t) => t.title.toLowerCase().includes(threadSearchText))
-    : threads;
+    ? workThreads.filter((t) => t.title.toLowerCase().includes(threadSearchText))
+    : workThreads;
+  const botsScrollEdge = useScrollEdge(
+    botsScrollRef,
+    `${collapsed}:${botsLoading}:${visibleBots.length}`,
+  );
+  const threadsScrollEdge = useScrollEdge(
+    threadsScrollRef,
+    `${bot?.id ?? "no-bot"}:${threadsLoading}:${visibleThreads.length}`,
+  );
+
+  useEffect(() => {
+    const entries = [
+      [botsScrollRef.current, setBotsScrolled],
+      [threadsScrollRef.current, setThreadsScrolled],
+    ] as const;
+    const cleanups: (() => void)[] = [];
+    for (const [node, setScrolled] of entries) {
+      if (!node) continue;
+      const update = () => setScrolled(node.scrollTop > 1);
+      update();
+      node.addEventListener("scroll", update, { passive: true });
+      cleanups.push(() => node.removeEventListener("scroll", update));
+    }
+    return () => cleanups.forEach((cleanup) => cleanup());
+  }, [botsLoading, visibleBots.length, bot?.id, threadsLoading, visibleThreads.length]);
 
   const refreshThreads = useCallback((botId: string) => {
     setThreadsLoading(true);
@@ -244,8 +286,16 @@ export default function V2() {
       .then(({ threads }) => {
         setThreads(threads);
         setThreadByBot((prev) => {
-          if (prev[botId] && threads.some((t) => t.id === prev[botId])) return prev;
-          return { ...prev, [botId]: threads[0]?.id };
+          if (
+            prev[botId] &&
+            threads.some((t) => t.id === prev[botId] && t.kind !== "setup")
+          ) {
+            return prev;
+          }
+          const firstWorkThread = threads.find((t) => t.kind !== "setup");
+          if (firstWorkThread) return { ...prev, [botId]: firstWorkThread.id };
+          const { [botId]: _removed, ...rest } = prev;
+          return rest;
         });
       })
       .catch((e) =>
@@ -264,10 +314,43 @@ export default function V2() {
     }
   }, [bot?.id, botsLoading, refreshThreads]);
 
-  const activeThread =
-    threads.find((t) => t.id === (bot ? threadByBot[bot.id] : undefined)) ??
-    threads[0] ??
-    null;
+  const activeThread = setupRequired
+    ? setupThread
+    : workThreads.find((t) => t.id === (bot ? threadByBot[bot.id] : undefined)) ??
+      workThreads[0] ??
+      null;
+  // When the selected bot also appears in the empty chat panel, both
+  // renderings act as one character: same pose and same pointer gaze.
+  const mirroredEmptyBotId =
+    bot && !setupRequired && !threadsLoading && workThreads.length === 0
+      ? bot.id
+      : null;
+
+  // Activating a bot that owes this machine setup immediately enters its
+  // setup run. The setup thread is implementation detail, so it never needs
+  // a click in the thread rail to begin or resume.
+  useEffect(() => {
+    if (!bot || !setupRequired || threadsLoading) return;
+    if (setupThread) {
+      if (!setupThread.messageCount && setupLaunchRef.current !== setupThread.id) {
+        setupLaunchRef.current = setupThread.id;
+        setAutoSend(
+          setupPrompt({
+            setupInstructions: bot.setupInstructions ?? "",
+            botInstructions: bot.instructions,
+          }),
+        );
+      }
+      return;
+    }
+    const launchKey = `create:${bot.id}`;
+    if (setupLaunchRef.current === launchKey) return;
+    setupLaunchRef.current = launchKey;
+    openSetup(bot.id);
+    // openSetup intentionally owns the network flow; its inputs are all
+    // represented above, and including it would re-run on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bot?.id, setupRequired, setupThread?.id, setupThread?.messageCount, threadsLoading]);
 
   function toggleCollapse() {
     if (settleTimer.current) {
@@ -385,47 +468,77 @@ export default function V2() {
     [threadsWidth],
   );
 
+  function toggleUserProfile() {
+    if (!userOpen) {
+      setThreadPanel(false);
+      setProfileId(null);
+    }
+    setUserOpen((open) => !open);
+  }
+
+  function openBotProfile(id: string) {
+    setThreadPanel(false);
+    setUserOpen(false);
+    setProfileId(id);
+  }
+
+  function openBotEditor(target: Bot | "new") {
+    setThreadPanel(false);
+    setUserOpen(false);
+    setEditing(target);
+  }
+
   function newThread() {
     if (!bot || threadPanel) return;
     if (needsSetup(bot)) {
-      toast(`Set up ${bot.name} on this machine first`);
-      openSetup(bot.id);
       return;
     }
+    setUserOpen(false);
+    setProfileId(null);
     setThreadPanel(true);
   }
 
   /** Opens the setup thread (making one first if missing) and auto-sends
    *  the opening prompt into it when it is still empty. */
-  function openSetup(botId: string) {
-    getThreads(botId)
+  function openSetup(botId: string, kind: SetupRunKind = "start", sourceBot?: Bot) {
+    const setupBot = sourceBot ?? bots.find((candidate) => candidate.id === botId);
+    if (!setupBot?.setupInstructions) return Promise.resolve();
+    const prompt = setupPrompt({
+      setupInstructions: setupBot.setupInstructions,
+      botInstructions: setupBot.instructions,
+      kind,
+    });
+    return getThreads(botId)
       .then(({ threads: list }) => {
         setThreads(list);
         const found = list.find((t) => t.kind === "setup");
         if (found) {
-          setThreadByBot((prev) => ({ ...prev, [botId]: found.id }));
-          if (!found.messageCount) setAutoSend("Start setup.");
+          if (kind !== "start" || !found.messageCount) setAutoSend(prompt);
           return;
         }
         return botSetupAction(botId, "reset").then(() => getThreads(botId)).then(({ threads: fresh }) => {
           setThreads(fresh);
           const t = fresh.find((x) => x.kind === "setup");
           if (t) {
-            setThreadByBot((prev) => ({ ...prev, [botId]: t.id }));
-            setAutoSend("Start setup.");
+            setAutoSend(prompt);
           }
         });
       })
       .catch((e) => toast(e instanceof Error ? e.message : String(e)));
   }
 
-  function markSetupDone() {
+  function retrySetup() {
     if (!bot) return;
-    botSetupAction(bot.id, "complete")
+    setSetupRetrying(true);
+    botSetupAction(bot.id, "reset")
       .then(({ bot: updated }) => {
         setBots((prev) => prev.map((b) => (b.id === updated.id ? updated : b)));
+        return openSetup(updated.id, "continue").then(() => {
+          setPausedSetupIds((prev) => ({ ...prev, [updated.id]: false }));
+        });
       })
-      .catch((e) => toast(e instanceof Error ? e.message : String(e)));
+      .catch((e) => toast(e instanceof Error ? e.message : String(e)))
+      .finally(() => setSetupRetrying(false));
   }
 
   /** Called right after a bot lands here, whether created or imported. */
@@ -437,13 +550,16 @@ export default function V2() {
       .then(({ threads: list }) => {
         setThreads(list);
         setThreadByBot((prev) => ({ ...prev, [added.id]: list[0]?.id }));
-        // A new bot may owe this machine a setup run.
-        if (needsSetup(added)) openSetup(added.id);
       })
       .catch(() => {});
   }
 
   function savedBot(saved: Bot, pref: AvatarPref) {
+    const setupChanged =
+      editing !== "new" &&
+      editing != null &&
+      editing.setupInstructions !== saved.setupInstructions &&
+      needsSetup(saved);
     setAvatarPref(saved.id, pref);
     setSwitchTo(null);
     if (editing === "new") {
@@ -452,6 +568,10 @@ export default function V2() {
     } else {
       setEditing(null);
       setBots((prev) => prev.map((b) => (b.id === saved.id ? saved : b)));
+      if (setupChanged) {
+        setupLaunchRef.current = null;
+        openSetup(saved.id, "changed", saved);
+      }
     }
   }
 
@@ -495,27 +615,40 @@ export default function V2() {
     // The user panel is global, not bot-scoped — any bot pick dismisses it.
     setUserOpen(false);
     if (showProfile) {
-      setProfileId(b.id);
+      openBotProfile(b.id);
     } else if (threadPanel) {
       if (needsSetup(b)) {
         setThreadPanel(false);
-        toast(`Set up ${b.name} on this machine first`);
-        openSetup(b.id);
       }
       // else: the picker stays open and re-targets via key={bot.id}
     } else if (b.id === bot?.id) {
-      setProfileId(b.id);
+      openBotProfile(b.id);
     }
   }
 
   function refreshAfterTurn() {
     if (!bot) return;
     refreshThreads(bot.id);
-    // A setup run reports its verdict on the bot — refresh it too.
+    // A normal turn may still change bot metadata server-side.
     getBots().then(
-      ({ bots }) => setBots(bots),
+      ({ bots: nextBots }) => {
+        setBots(nextBots);
+      },
       () => {},
     );
+  }
+
+  async function recordSetupOutcome(outcome: SetupOutcome) {
+    if (!bot) return;
+    const { bot: updated } = await botSetupAction(
+      bot.id,
+      outcome === "complete" ? "complete" : "fail",
+    );
+    setBots((prev) => prev.map((candidate) =>
+      candidate.id === updated.id ? updated : candidate,
+    ));
+    setPausedSetupIds((prev) => ({ ...prev, [updated.id]: false }));
+    if (outcome === "complete") toast(`${updated.name} is ready`);
   }
 
   function threadCreated(thread: ThreadFull) {
@@ -530,7 +663,6 @@ export default function V2() {
     setThreadPanel(false);
     toast(message);
     refreshThreads(bot.id);
-    openSetup(bot.id);
   }
 
   function threadFailed(message: string) {
@@ -547,8 +679,8 @@ export default function V2() {
         <TopBar
           actions={
             <>
-              <Link href="/marketplace" className="topbar-marketplace-btn">
-                <IconShoppingBag size={16} stroke={2} aria-hidden="true" />
+              <Link href="/marketplace" className="text-action topbar-marketplace-btn" aria-label="Open marketplace">
+                <AnimatedActionIcon icon={ShoppingBagIcon} size={16} aria-hidden="true" />
                 <span>Marketplace</span>
               </Link>
               <span className="topbar-action-separator" aria-hidden="true" />
@@ -557,10 +689,10 @@ export default function V2() {
           }
           userName={user.name}
           userPhoto={user.photo}
-          onProfile={() => setUserOpen((v) => !v)}
+          onProfile={toggleUserProfile}
         />
         <div className="page-body">
-          <OnboardingFlow onDone={loadBots} />
+          <OnboardingFlow onDone={loadBots} active={!userOpen} />
           <div
             className={userOpen ? "user-overlay open" : "user-overlay"}
             aria-hidden={!userOpen}
@@ -584,8 +716,8 @@ export default function V2() {
       <TopBar
         actions={
           <>
-            <Link href="/marketplace" className="topbar-marketplace-btn">
-              <IconShoppingBag size={16} stroke={2} aria-hidden="true" />
+            <Link href="/marketplace" className="text-action topbar-marketplace-btn" aria-label="Open marketplace">
+              <AnimatedActionIcon icon={ShoppingBagIcon} size={16} aria-hidden="true" />
               <span>Marketplace</span>
             </Link>
             <span className="topbar-action-separator" aria-hidden="true" />
@@ -594,7 +726,7 @@ export default function V2() {
         }
         userName={user.name}
         userPhoto={user.photo}
-        onProfile={() => setUserOpen((v) => !v)}
+        onProfile={toggleUserProfile}
       />
       <div className="page-body">
         <aside
@@ -606,7 +738,7 @@ export default function V2() {
           }}
           aria-label="Bots"
         >
-          <div className={`side-head${searchOpen ? " searching" : ""}${iconSet === "solo" ? " solo" : ""}`}>
+          <div ref={botsHeaderRef} className={`side-head bots-panel-header${searchOpen ? " searching" : ""}${iconSet === "solo" ? " solo" : ""}${botsScrolled ? " is-scrolled" : ""}`}>
             {iconSet === "full" && (
               <h2 className="side-title">Your bots</h2>
             )}
@@ -620,7 +752,7 @@ export default function V2() {
                 aria-label="Expand sidebar"
                 data-tip="Expand sidebar"
               >
-                <IconArrowBarToRight size={18} stroke={2} aria-hidden="true" />
+                <AnimatedActionIcon icon={ChevronsRightIcon} size={18} aria-hidden="true" />
               </button>
             ) : (
               <>
@@ -632,7 +764,7 @@ export default function V2() {
                 aria-label="Collapse sidebar"
                 data-tip="Collapse sidebar"
               >
-                <IconArrowBarToLeft size={18} stroke={2} aria-hidden="true" />
+                <AnimatedActionIcon icon={ChevronsLeftIcon} size={18} aria-hidden="true" />
               </button>
               <button
                 type="button"
@@ -647,7 +779,7 @@ export default function V2() {
                 aria-hidden={searchOpen || undefined}
                 tabIndex={searchOpen ? -1 : 0}
               >
-                <IconSearch size={16} stroke={2} aria-hidden="true" />
+                <AnimatedActionIcon icon={SearchIcon} size={16} aria-hidden="true" />
               </button>
               <div className="search-box">
                 <input
@@ -666,88 +798,119 @@ export default function V2() {
                 type="button"
                 className="collapse-btn fades"
                 onClick={() => setModal({ kind: "import" })}
-                aria-label="Import a bot"
-                data-tip="Import a bot"
+                aria-label="Import bot"
+                data-tip="Import bot"
               >
-                <IconDownload size={18} stroke={2} aria-hidden="true" />
+                <AnimatedActionIcon icon={DownloadIcon} size={18} aria-hidden="true" />
               </button>
               <button
                 type="button"
                 className="collapse-btn plus-btn"
-                aria-label={searchOpen ? "Close search" : "Add new bot"}
-                data-tip={searchOpen ? "Close search" : "Add new bot"}
-                onClick={() => (searchOpen ? closeSearch() : setEditing("new"))}
+                aria-label={searchOpen ? "Close search" : "Create bot"}
+                data-tip={searchOpen ? "Close search" : "Create bot"}
+                onClick={() => (searchOpen ? closeSearch() : openBotEditor("new"))}
               >
-                <IconPlus size={18} stroke={2} aria-hidden="true" />
+                <AnimatedActionIcon icon={PlusIcon} size={18} aria-hidden="true" />
               </button>
               </>
             )}
             </span>
           </div>
-          {botsError ? (
-            <p className="threads-empty">
-              {botsError}{" "}
-              <button type="button" className="link" onClick={loadBots}>
-                Retry
-              </button>
-            </p>
-          ) : botsLoading && bots.length === 0 ? (
-            <div className="bot-skel" aria-label="Loading bots">
-              {[0, 1, 2].map((i) => (
-                <div key={i} className="skel bot-skel-row" aria-hidden="true">
-                  <i className="bot-skel-avatar" />
-                  <span className="bot-skel-lines">
-                    <i style={{ width: "58%" }} />
-                    <i style={{ width: "38%" }} />
-                  </span>
+          <div
+            className="side-scroll-region panel-scroll-under-header"
+            style={{ "--scroll-header-height": `${botsHeaderHeight}px` } as React.CSSProperties}
+          >
+            <div ref={botsScrollRef} className="side-scroll-content bot-scroll-content">
+              {botsError ? (
+                <p className="threads-empty">
+                  {botsError}{" "}
+                  <button type="button" className="link" onClick={loadBots}>
+                    Retry
+                  </button>
+                </p>
+              ) : botsLoading && bots.length === 0 ? (
+                <div className="bot-skel" aria-label="Loading bots">
+                  {[0, 1, 2].map((i) => (
+                    <div key={i} className="skel bot-skel-row" aria-hidden="true">
+                      <i className="bot-skel-avatar" />
+                      <span className="bot-skel-lines">
+                        <i style={{ width: "58%" }} />
+                        <i style={{ width: "38%" }} />
+                      </span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="bot-list">
-              {visibleBots.map((b, i) => (
-                <button
-                  key={b.id}
-                  type="button"
-                  className={`${b.id === bot?.id ? "bot-row selected" : "bot-row"}${b.id === bot?.id && activeLabel ? " live" : ""}${searchText ? "" : " msg-in"}`}
-                  onClick={() => botRowClick(b)}
-                  onMouseEnter={() => setHoverId(b.id)}
-                  onMouseLeave={() => setHoverId((prev) => (prev === b.id ? null : prev))}
-                  aria-current={b.id === bot?.id ? "true" : undefined}
-                >
-                  <span className="mascot-wrap">
-                    <BotFace mascot={avatarFor(b.id).mascot} size={44} color={avatarFor(b.id).color} cheer={hoverId === b.id || (b.id === bot?.id && activeLabel != null)} duration={240} phase={i} />
-                    <span className="presence" aria-hidden="true" />
-                  </span>
-                  <span className="bot-row-text">
-                    <b>{b.name}</b>
-                    <small>
-                      <i aria-hidden="true" />
-                      {b.id === bot?.id && activeLabel ? activeLabel : "Idle"}
-                    </small>
-                  </span>
-                  <span
-                    className="edit-badge"
-                    aria-hidden="true"
-                    data-tip="Open profile"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setUserOpen(false);
-                      setProfileId(b.id);
-                    }}
-                  >
-                    <IconPencil size={16} stroke={2} />
-                  </span>
-                </button>
-              ))}
-              {bots.length === 0 && <p className="threads-empty">No bots yet — add one with +.</p>}
-              {bots.length > 0 && visibleBots.length === 0 && (
-                <p className="threads-empty">No bots match your search.</p>
+              ) : (
+                <div className="bot-list">
+                  {visibleBots.map((b, i) => {
+                    const setupPending = needsSetup(b);
+                    const mirrored = !setupPending && b.id === mirroredEmptyBotId;
+                    return (
+                      <div className="bot-row-wrap" key={b.id}>
+                        <button
+                          type="button"
+                          className={`${b.id === bot?.id ? "bot-row selected" : "bot-row"}${b.id === bot?.id && activeLabel ? " live" : ""}${setupPending ? " needs-setup" : ""}${searchText ? "" : " msg-in"}`}
+                          onClick={() => botRowClick(b)}
+                          onMouseEnter={() => setHoverId(b.id)}
+                          onMouseLeave={() => setHoverId((prev) => (prev === b.id ? null : prev))}
+                          aria-current={b.id === bot?.id ? "true" : undefined}
+                        >
+                          <span
+                            className={`mascot-wrap${setupPending ? " unpowered" : ""}`}
+                            data-bot-follow={mirrored ? b.id : undefined}
+                          >
+                            <BotFace
+                              mascot={avatarFor(b.id).mascot}
+                              size={44}
+                              color={avatarFor(b.id).color}
+                              cheer={!setupPending && !mirrored && (hoverId === b.id || (b.id === bot?.id && activeLabel != null))}
+                              follow={mirrored}
+                              still={setupPending || mirrored}
+                              unpowered={setupPending}
+                              duration={240}
+                              phase={i}
+                            />
+                            <span className="presence" aria-hidden="true" />
+                          </span>
+                          <span className="bot-row-text">
+                            <b>{b.name}</b>
+                            <small>
+                              <i aria-hidden="true" />
+                              {b.id === bot?.id && activeLabel
+                                ? activeLabel
+                                : setupPending
+                                  ? b.setupStatus === "failed"
+                                    ? "Setup paused"
+                                    : "Needs setup"
+                                  : "Idle"}
+                            </small>
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className="bot-profile-btn"
+                          aria-label={`Open ${b.name} profile`}
+                          data-tip="Open profile"
+                          onClick={() => {
+                            openBotProfile(b.id);
+                          }}
+                        >
+                          <AnimatedActionIcon icon={UserIcon} size={16} aria-hidden="true" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                  {bots.length === 0 && <p className="threads-empty">No bots yet — add one with +.</p>}
+                  {bots.length > 0 && visibleBots.length === 0 && (
+                    <p className="threads-empty">No bots match your search.</p>
+                  )}
+                </div>
               )}
             </div>
-          )}
+            <div className={`side-scroll-edge side-scroll-edge-bottom${botsScrollEdge === "bottom" ? " is-visible" : ""}`} aria-hidden="true" />
+          </div>
           {collapsed && settled && (
-            <NewBotButton onClick={() => setEditing("new")} />
+            <NewBotButton onClick={() => openBotEditor("new")} />
           )}
           <span
             className="side-handle"
@@ -767,20 +930,18 @@ export default function V2() {
               }}
               aria-label="Threads"
             >
-              {bot && bot.setupInstructions && bot.setupStatus !== "complete" && (
-                <SetupBanner
-                  bot={bot}
-                  setupThread={threads.find((t) => t.kind === "setup") ?? null}
-                  onOpen={() => openSetup(bot.id)}
-                  onDone={markSetupDone}
-                />
-              )}
+              <div ref={threadsHeaderRef} className={`threads-scroll-header${threadsScrolled ? " is-scrolled" : ""}`}>
               <div className={collapsed ? "threads-bot-wrap open" : "threads-bot-wrap"}>
-              <div className={activeLabel ? "threads-bot live" : "threads-bot"}>
+              <div className={`${activeLabel ? "threads-bot live" : "threads-bot"}${setupRequired ? " needs-setup" : ""}`}>
                 <b>{bot?.name ?? ""}</b>
                 <small>
                   <i aria-hidden="true" />
-                  {activeLabel ?? "Idle"}
+                  {activeLabel ??
+                    (setupRequired
+                      ? bot?.setupStatus === "failed"
+                        ? "Setup paused"
+                        : "Needs setup"
+                      : "Idle")}
                 </small>
               </div>
               </div>
@@ -799,7 +960,7 @@ export default function V2() {
                   aria-hidden={threadSearchOpen || undefined}
                   tabIndex={threadSearchOpen ? -1 : 0}
                 >
-                  <IconSearch size={16} stroke={2} aria-hidden="true" />
+                  <AnimatedActionIcon icon={SearchIcon} size={16} aria-hidden="true" />
                 </button>
                 <div className="search-box">
                   <input
@@ -818,42 +979,70 @@ export default function V2() {
                   type="button"
                   className="collapse-btn plus-btn"
                   aria-label={threadSearchOpen ? "Close search" : "New thread"}
-                  data-tip={threadSearchOpen ? "Close search" : "New thread"}
+                  data-tip={
+                    threadSearchOpen
+                      ? "Close search"
+                      : setupRequired
+                        ? "Available after setup"
+                        : "New thread"
+                  }
+                  disabled={setupRequired && !threadSearchOpen}
                   onClick={() => (threadSearchOpen ? closeThreadSearch() : newThread())}
                 >
-                  <IconPlus size={18} stroke={2} aria-hidden="true" />
+                  <AnimatedActionIcon icon={PlusIcon} size={18} aria-hidden="true" />
                 </button>
               </div>
-              <div className="threads-list">
-                {threadsLoading && threads.length === 0 ? (
-                  <div className="skel" aria-label="Loading threads">
-                    <i style={{ width: "92%", height: 34 }} />
-                    <i style={{ width: "97%", height: 34 }} />
-                    <i style={{ width: "88%", height: 34 }} />
-                  </div>
-                ) : (
-                  <>
-                {threadsError && <p className="threads-empty">{threadsError}</p>}
-                {visibleThreads.map((t) => (
-                    <button
-                      key={t.id}
-                      type="button"
-                      className={`${t.id === activeThread?.id ? "thread-row active" : "thread-row"}${threadSearchText ? "" : " msg-in"}`}
-                      onClick={() =>
-                        bot && setThreadByBot((prev) => ({ ...prev, [bot.id]: t.id }))
-                      }
-                    >
-                      {t.title}
-                    </button>
-                  ))}
-                {!threadsError && threads.length === 0 && (
-                  <p className="threads-empty">No threads yet — start one with +.</p>
-                )}
-                {!threadsError && threads.length > 0 && visibleThreads.length === 0 && (
-                  <p className="threads-empty">No threads match your search.</p>
-                )}
-                  </>
-                )}
+              </div>
+              <div
+                className="side-scroll-region panel-scroll-under-header"
+                style={{ "--scroll-header-height": `${threadsHeaderHeight}px` } as React.CSSProperties}
+              >
+                <div ref={threadsScrollRef} className="threads-list">
+                  {threadsLoading && workThreads.length === 0 ? (
+                    <div className="skel" aria-label="Loading threads">
+                      <i style={{ width: "92%", height: 34 }} />
+                      <i style={{ width: "97%", height: 34 }} />
+                      <i style={{ width: "88%", height: 34 }} />
+                    </div>
+                  ) : (
+                    <>
+                      {threadsError && <p className="threads-empty">{threadsError}</p>}
+                      {visibleThreads.map((t) => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          className={`${t.id === activeThread?.id ? "thread-row active" : "thread-row"}${threadSearchText ? "" : " msg-in"}`}
+                          aria-current={t.id === activeThread?.id ? "true" : undefined}
+                          disabled={setupRequired}
+                          title={setupRequired ? "Available after setup" : undefined}
+                          onClick={() =>
+                            bot && setThreadByBot((prev) => ({ ...prev, [bot.id]: t.id }))
+                          }
+                        >
+                          <span className="thread-row-title">{t.title}</span>
+                          {t.id === activeThread?.id && <AnimatedActionIcon icon={CheckIcon} className="thread-selected-mark" size={16} aria-hidden="true" />}
+                        </button>
+                      ))}
+                      {!threadsError && workThreads.length === 0 && (
+                        setupRequired ? (
+                          <p className="threads-empty">Threads unlock when setup is complete.</p>
+                        ) : (
+                          <p className="threads-empty">
+                            No threads yet. New threads with{" "}
+                            <BotName color={bot ? avatarFor(bot.id).color : undefined}>
+                              {bot?.name ?? "this bot"}
+                            </BotName>{" "}
+                            will appear here.
+                          </p>
+                        )
+                      )}
+                      {!threadsError && workThreads.length > 0 && visibleThreads.length === 0 && (
+                        <p className="threads-empty">No threads match your search.</p>
+                      )}
+                    </>
+                  )}
+                </div>
+                <div className={`side-scroll-edge side-scroll-edge-bottom${threadsScrollEdge === "bottom" ? " is-visible" : ""}`} aria-hidden="true" />
               </div>
               <span
                 className="side-handle"
@@ -865,18 +1054,38 @@ export default function V2() {
             <div className={threadPanel ? "chat-col panel-open" : "chat-col"}>
               <Chat
                 thread={activeThread}
+                botId={bot?.id}
                 botName={bot?.name ?? "bot"}
+                botAvatar={bot ? avatarFor(bot.id) : undefined}
                 autoSend={autoSend}
                 onAutoSent={() => setAutoSend(null)}
                 onActivityChange={setBotActivity}
-              onTurnDone={refreshAfterTurn}
+                onTurnDone={refreshAfterTurn}
+                onShare={bot ? (view) => setModal({ kind: "share", bot, view }) : undefined}
+                onOpenBot={bot ? () => openBotProfile(bot.id) : undefined}
+                onNewThread={bot && !setupRequired ? newThread : undefined}
                 booting={botsLoading || threadsLoading}
-            />
+                setup={
+                  setupRequired && bot?.setupInstructions
+                    ? {
+                        status: bot.setupStatus ?? "pending",
+                        instructions: bot.setupInstructions,
+                        retrying: setupRetrying,
+                        paused: !!pausedSetupIds[bot.id],
+                        onRetry: retrySetup,
+                        onPause: () => setPausedSetupIds((prev) => ({ ...prev, [bot.id]: true })),
+                        onOutcome: recordSetupOutcome,
+                      }
+                    : undefined
+                }
+              />
               <div className="thread-overlay" aria-hidden={!threadPanel}>
                 {threadPanel && bot && (
                   <ThreadPanel
                     key={bot.id}
+                    active={!userOpen && !modal && !editing && !showProfile}
                     bot={bot}
+                    botAvatar={avatarFor(bot.id)}
                     onClose={() => setThreadPanel(false)}
                     onCreated={threadCreated}
                     onSetupNeeded={threadSetupNeeded}
@@ -892,8 +1101,9 @@ export default function V2() {
                 key={profileBot.id}
                 bot={profileBot}
                 pref={avatarFor(profileBot.id)}
+                active={!editing && !modal && !userOpen}
                 onBack={() => setProfileId(null)}
-                onEdit={() => setEditing(profileBot)}
+                onEdit={() => openBotEditor(profileBot)}
                 onShare={() => setModal({ kind: "share", bot: profileBot })}
               />
             )}
@@ -901,18 +1111,8 @@ export default function V2() {
           <div className="form-overlay" aria-hidden={!editing}>
             {editing && (
               <div className="form-pane">
-                <button
-                  type="button"
-                  className="back-btn"
-                  onClick={() => {
-                    setEditing(null);
-                    setSwitchTo(null);
-                  }}
-                >
-                  <IconArrowLeft size={16} stroke={2} aria-hidden="true" />
-                  Back
-                </button>
                 <BotForm
+                  active={!modal && !userOpen}
                   key={editing === "new" ? "new" : editing.id}
                   bot={editing === "new" ? null : editing}
                   onClose={() => {
@@ -946,7 +1146,7 @@ export default function V2() {
       </div>
       {toastView}
       {modal?.kind === "share" && (
-        <ShareModal bot={modal.bot} onClose={() => setModal(null)} />
+        <ShareModal bot={modal.bot} initialView={modal.view} onClose={() => setModal(null)} />
       )}
       {modal?.kind === "import" && (
         <ImportModal
@@ -972,58 +1172,6 @@ export default function V2() {
           }}
         />
       )}
-    </div>
-  );
-}
-
-// Setup banner. Copy verbatim from the original: pending and failed
-// earn a banner, a ready machine gets out of the way.
-function SetupBanner({
-  bot,
-  setupThread,
-  onOpen,
-  onDone,
-}: {
-  bot: Bot;
-  setupThread: ThreadFull | null;
-  onOpen: () => void;
-  onDone: () => void;
-}) {
-  const failed = bot.setupStatus === "failed";
-  return (
-    <div className={failed ? "setup failed" : "setup"}>
-      <div className="txt">
-        {failed ? (
-          <>
-            <div className="hd">Setup did not finish</div>
-            <p>
-              Open the setup thread to see what stopped it — it is an ordinary
-              conversation, so you can answer it and carry on.
-            </p>
-          </>
-        ) : (
-          <>
-            <div className="hd">Setup needed on this machine</div>
-            <p>
-              {bot.name} needs this machine prepared before it can take work. New
-              threads open once setup is done.
-            </p>
-          </>
-        )}
-      </div>
-      <div className="acts">
-        <button type="button" className="btn-primary" onClick={onOpen}>
-          {setupThread && setupThread.messageCount ? "Open setup" : "Run setup"}
-        </button>
-        <button
-          type="button"
-          className="btn-secondary"
-          title="Use this if you sorted it out yourself"
-          onClick={onDone}
-        >
-          Mark as done
-        </button>
-      </div>
     </div>
   );
 }

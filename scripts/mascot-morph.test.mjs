@@ -23,7 +23,7 @@ test('identical eyes stay fixed despite differently cropped expression exports',
 test('every expression pair has finite, untwisted intermediate eyes and mouth', () => {
   for(const [an,a] of Object.entries(morphs)) for(const [bn,b] of Object.entries(morphs)) {
     const target = alignFace(a,b);
-    for(const t of [0,.1,.25,.5,.75,.9,1]) {
+    for(const t of Array.from({ length: 41 }, (_, i) => i / 40)) {
       const frame = blendFace(a,target,t);
       for(const part of parts) assert.ok(frame[part].flat().every(Number.isFinite));
       for(const part of ['left','right','mouth']) assert.ok(!selfIntersects(frame[part]), `${an}→${bn}, ${part} at ${t}`);
@@ -36,5 +36,39 @@ test('interruption starts exactly at the visible frame and ends at the next targ
   for(const part of parts) {
     assert.deepEqual(blendFace(visible,next,0)[part], visible[part]);
     blendFace(visible,next,1)[part].forEach((p,i) => p.forEach((n,j) => assert.ok(Math.abs(n-next[part][i][j])<1e-9)));
+  }
+});
+
+test('new curved lids stay untwisted when interrupted by another positive expression', () => {
+  for (const [start, end, next] of [['calm', 'playful-2', 'starry'], ['excited-wink', 'wink', 'sassy']]) {
+    const visible = blendFace(morphs[start], alignFace(morphs[start], morphs[end]), .475);
+    const target = alignFace(visible, morphs[next]);
+    for (const part of parts) assert.deepEqual(blendFace(visible, target, 0)[part], visible[part]);
+    for (let step = 0; step <= 40; step++) {
+      const frame = blendFace(visible, target, step / 40);
+      for (const part of ['left', 'right', 'mouth']) assert.ok(!selfIntersects(frame[part]), `${start}→${end} interrupted by ${next}: ${part}`);
+    }
+  }
+});
+
+test('all eight gaze directions move the eyes farther than the mouth in the requested direction', () => {
+  const center = points => [0, 1].map(axis => points.reduce((sum, p) => sum + p[axis], 0) / points.length);
+  const directions = { 'top-left': [-1,-1], top: [0,-1], 'top-right': [1,-1], left: [-1,0], right: [1,0], 'bottom-left': [-1,1], bottom: [0,1], 'bottom-right': [1,1] };
+  for (const suffix of ['', '-curious']) {
+    const base = morphs[`looking-around${suffix}`];
+    for (const [name, vector] of Object.entries(directions)) {
+      const face = morphs[`look-${name}${suffix}`];
+      assert.ok(face, name);
+      const eye = center([...face.left, ...face.right]), restEye = center([...base.left, ...base.right]);
+      const mouth = center(face.mouth), restMouth = center(base.mouth);
+      for (let axis = 0; axis < 2; axis++) {
+        const movement = eye[axis] - restEye[axis], follow = mouth[axis] - restMouth[axis];
+        if (vector[axis]) {
+          assert.equal(Math.sign(movement), vector[axis], `${name} eye direction`);
+          assert.equal(Math.sign(follow), vector[axis], `${name} mouth direction`);
+          assert.ok(Math.abs(movement) > Math.abs(follow), `${name} eyes lead`);
+        } else assert.ok(Math.abs(movement) < .1, `${name} stationary axis`);
+      }
+    }
   }
 });

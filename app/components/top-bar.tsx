@@ -13,14 +13,16 @@ export default function TopBar({
   userName = DEFAULT_USER_NAME,
   userPhoto = null,
   onProfile,
+  className,
 }: {
   actions?: ReactNode;
   userName?: string;
   userPhoto?: string | null;
   onProfile?: () => void;
+  className?: string;
 }) {
   return (
-    <header className="topbar">
+    <header className={className ? `topbar ${className}` : "topbar"}>
       <span className="logo">
         <Logo height={24} />
       </span>

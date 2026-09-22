@@ -1,3 +1,4 @@
+import AppProviders from "./components/app-providers";
 import type { Metadata } from "next";
 import "./globals.css";
 import "./components/mascot-depth.css";
@@ -48,7 +49,7 @@ export default function RootLayout({
       </head>
       <body>
         <MascotDepthDefs />
-        {children}
+        <AppProviders>{children}</AppProviders>
       </body>
     </html>
   );

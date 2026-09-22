@@ -18,6 +18,7 @@ Frontend-only Next.js 16 + React + Tailwind v4 + TypeScript repo. The backend is
 ## Commands
 
 - `npm run dev` → `:3000` (expects backend on `:3100`).
+- `npm run build` uses `next build --webpack`; `npm start` serves the production build.
 - `npx tsc --noEmit` must stay clean (no typecheck script; README mandates it).
 - `npm run lint` is broken repo-wide (no `eslint.config.*` — fails whether or not
   your change is involved). Trust `npx tsc --noEmit` instead.
@@ -30,8 +31,8 @@ Frontend-only Next.js 16 + React + Tailwind v4 + TypeScript repo. The backend is
 - Entry: `app/page.tsx` → `app/components/app-shell.tsx` (bots sidebar + threads + chat/tray). Theme in `app/v2-theme.css`.
 - HTTP boundary: `app/lib/api.ts` is the **only** fetch layer (same-origin
   `BASE = "/api/gitbot"`); `app/lib/gitbot.ts` is frontend-only types mirroring
-  server routes — no fetches there, never add backend surface (`/chat`, `/history`,
-  `/sessions`, `/status`, `/abort`, `/permission`).
+  server routes — no fetches there. Use existing service endpoints through the
+  adapter; never invent new backend endpoints or implement backend capabilities here.
 - Proxy: `app/api/gitbot/[...path]/route.ts` forwards to `$GITBOT_URL` (default
   `http://localhost:3100`), incl. SSE passthrough. Exists only because the local
   test browser can't hit `:3100` directly.
@@ -48,6 +49,15 @@ Frontend-only Next.js 16 + React + Tailwind v4 + TypeScript repo. The backend is
 - Routes: `/` is the app (onboarding empty state when no bots); `/blank` is the
   previous build; `/onboarding`, `/bot-maker`, `/mascot-lab`, `/cta`
   are standalone/internal demos, not public.
+- `/marketplace` is linked from the app. Its catalog, authors, and install counts
+  are currently hardcoded UI data in `app/marketplace/page.tsx`, not a live catalog
+  or installation service. Styles live in `app/marketplace/marketplace.css`.
+- Shared header: `app/components/top-bar.tsx`. User profile UI:
+  `app/components/user-profile.tsx`; local profile storage: `app/lib/user-prefs.ts`.
+- Bot sharing/import: `app/components/share-modals.tsx` + `app/lib/share.ts`.
+  Codes use `gitbot:v1:`; parsing also accepts legacy `grassbot:v1:` and raw JSON.
+  Preserve the field allowlist and validation; machine-local workspace and setup
+  state do not travel with shared bots.
 - Branding source of truth: `BRANDING.md` (tokens, avatar rules). Check it before
   adding any color. Bot tile color = stable hash of id (`botTile()` in
   `bot-avatar.tsx`) — never random per render.
@@ -62,6 +72,11 @@ Frontend-only Next.js 16 + React + Tailwind v4 + TypeScript repo. The backend is
   only; `mascot-art.tsx` stays (logo imports its faces), `logo.tsx` exports both
   `Logo` and `LogoMark`.
 - Avatar prefs: `app/lib/avatar-prefs.ts` (localStorage, frontend-only).
+- User profiles are localStorage-only (`gitbot-user`); email verification is a
+  placeholder for a future server capability, not something to grant in client UI.
+- Theme (`gitbot-theme`) and panel widths (`gitbot-v2-side-width`,
+  `gitbot-v2-threads-width`) restore before paint in `app/layout.tsx`.
+  Keep width clamps synchronized with `app/components/app-shell.tsx`.
 
 ## Gotchas (earned the hard way)
 
@@ -71,6 +86,10 @@ Frontend-only Next.js 16 + React + Tailwind v4 + TypeScript repo. The backend is
   (the `N` circle bottom-left is the Next dev indicator).
 - Server emits whole assistant messages, no token deltas — the typewriter in
   `chat.tsx` simulates streaming. Don't "fix" it into real deltas.
+- Chat reattaches to running sessions using status and pending-permission checks
+  before reopening SSE. Preserve catch-up filtering so old approvals are not
+  presented again. Drafts and tool/run-summary overlays are in-memory; switching
+  threads moves a queued follow-up back into that thread's draft.
 - One turn per thread (server 409s a second `POST /chat` while running).
   The composer stays enabled: mid-turn sends park in a single "up next"
   queue slot (`queueRef`, flushed by `finish()`), with steer (abort +

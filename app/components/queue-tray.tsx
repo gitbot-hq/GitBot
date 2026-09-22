@@ -1,15 +1,15 @@
 "use client";
 
+import AnimatedActionIcon from "./animated-action-icon";
+import { ArrowRightIcon } from "@animateicons/react/lucide/arrow-right-icon";
+import { CheckIcon } from "@animateicons/react/lucide/check-icon";
+import { CopyIcon } from "@animateicons/react/lucide/copy-icon";
+import { CornerUpLeftIcon } from "@animateicons/react/lucide/corner-up-left-icon";
+import { EllipsisIcon } from "@animateicons/react/lucide/ellipsis-icon";
+import { PencilIcon } from "@animateicons/react/lucide/pencil-icon";
+import { TrashIcon } from "@animateicons/react/lucide/trash-icon";
+
 import { useEffect, useRef, useState } from "react";
-import {
-  IconArrowRight,
-  IconCheck,
-  IconCopy,
-  IconCornerUpLeft,
-  IconDots,
-  IconPencil,
-  IconTrash,
-} from "@tabler/icons-react";
 
 // Queued-message tray: a single compact card docked above the composer,
 // speaking the composer's own visual language (surface, border, radius,
@@ -92,7 +92,7 @@ export default function QueueTray({
       aria-label="Queued message"
     >
       <span className="queue-tray-icon" aria-hidden="true">
-        <IconCornerUpLeft size={14} stroke={2} />
+        <AnimatedActionIcon icon={CornerUpLeftIcon} size={14} />
       </span>
       <span className="queue-tray-text" title={shown}>
         {shown}
@@ -104,7 +104,7 @@ export default function QueueTray({
           onClick={onSteer}
           aria-label="Stop current work and send queued message"
         >
-          <IconArrowRight size={13} stroke={2} aria-hidden="true" />
+          <AnimatedActionIcon icon={ArrowRightIcon} size={13} aria-hidden="true" />
           Steer
         </button>
         <button
@@ -114,7 +114,7 @@ export default function QueueTray({
           aria-label="Discard queued message"
           data-tip="Discard"
         >
-          <IconTrash size={13} stroke={2} aria-hidden="true" />
+          <AnimatedActionIcon icon={TrashIcon} size={13} aria-hidden="true" />
         </button>
         <button
           type="button"
@@ -125,7 +125,7 @@ export default function QueueTray({
           aria-haspopup="menu"
           data-tip="More options"
         >
-          <IconDots size={14} stroke={2} aria-hidden="true" />
+          <AnimatedActionIcon icon={EllipsisIcon} size={14} aria-hidden="true" />
         </button>
       </span>
       {menu && (
@@ -146,14 +146,14 @@ export default function QueueTray({
                 onEdit();
               }}
             >
-              <IconPencil size={14} stroke={2} aria-hidden="true" />
+              <AnimatedActionIcon icon={PencilIcon} size={14} aria-hidden="true" />
               Edit in composer
             </button>
             <button type="button" role="menuitem" onClick={copyFull}>
               {copied ? (
-                <IconCheck size={14} stroke={2} aria-hidden="true" />
+                <AnimatedActionIcon icon={CheckIcon} size={14} aria-hidden="true" />
               ) : (
-                <IconCopy size={14} stroke={2} aria-hidden="true" />
+                <AnimatedActionIcon icon={CopyIcon} size={14} aria-hidden="true" />
               )}
               {copied ? "Copied" : "Copy full message"}
             </button>

@@ -5,7 +5,6 @@ import BotForm from "./bot-form";
 import { ImportModal } from "./share-modals";
 import { useToast } from "./toast";
 import { LogoMark } from "./logo";
-import { IconArrowLeft } from "@tabler/icons-react";
 import { createBot } from "../lib/api";
 import { setAvatarPref } from "../lib/avatar-prefs";
 
@@ -35,7 +34,7 @@ const SLIDES = [
 // First-run flow: hero (mark, intro, explainer carousel, three actions)
 // crossfading to the real bot studio. Creating or importing calls onDone
 // (the host reloads bots and carries on); the flow itself never navigates.
-export default function OnboardingFlow({ onDone }: { onDone: () => void }) {
+export default function OnboardingFlow({ onDone, active = true }: { onDone: () => void; active?: boolean }) {
   const [studio, setStudio] = useState(false);
   const [importing, setImporting] = useState(false);
   const [slide, setSlide] = useState(0);
@@ -111,7 +110,7 @@ export default function OnboardingFlow({ onDone }: { onDone: () => void }) {
                 className="btn-primary"
                 onClick={goStudio}
               >
-                Make your first bot
+                Create bot
               </button>
               <div className="onboarding-acts-row">
                 <span
@@ -134,7 +133,7 @@ export default function OnboardingFlow({ onDone }: { onDone: () => void }) {
                   className="btn-secondary"
                   onClick={() => setImporting(true)}
                 >
-                  Import from share code
+                  Import bot
                 </button>
               </div>
             </div>
@@ -144,11 +143,8 @@ export default function OnboardingFlow({ onDone }: { onDone: () => void }) {
           <div className={studio ? "ob-pane ob-studio" : "ob-pane ob-studio ob-hide"}>
             <div className="ob-pane-inner">
           <div className="form-pane">
-            <button type="button" className="back-btn" onClick={goHero}>
-              <IconArrowLeft size={16} stroke={2} aria-hidden="true" />
-              Back
-            </button>
             <BotForm
+              active={active && studio && !importing}
               bot={null}
               onClose={goHero}
               onSaved={(saved, pref) => {

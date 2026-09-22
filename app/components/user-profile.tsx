@@ -1,7 +1,13 @@
 "use client";
 
+import AnimatedActionIcon from "./animated-action-icon";
+import { CameraIcon } from "@animateicons/react/lucide/camera-icon";
+import { ImageIcon } from "@animateicons/react/lucide/image-icon";
+import { TrashIcon } from "@animateicons/react/lucide/trash-icon";
+
 import { useEffect, useRef, useState } from "react";
-import { IconArrowLeft, IconCamera, IconMapPin, IconPhoto, IconTrash } from "@tabler/icons-react";
+import { IconMapPin } from "@tabler/icons-react";
+import { PanelBack } from "./panel-controls";
 import type { UserPref } from "../lib/user-prefs";
 import { userInitials } from "../lib/user-prefs";
 
@@ -160,10 +166,7 @@ export default function UserProfile({
 
   return (
     <div className="profile-pane" aria-label="Your profile">
-      <button type="button" className="back-btn" onClick={onBack}>
-        <IconArrowLeft size={16} stroke={2} aria-hidden="true" />
-        Back
-      </button>
+      <PanelBack onClick={() => editing ? setEditing(false) : onBack()} />
       <div className="profile-pane-inner">
         <div className="profile-cover-wrap">
           <div
@@ -189,7 +192,7 @@ export default function UserProfile({
                 </span>
               )}
               <span className="avatar-camera" aria-hidden="true">
-                <IconCamera size={14} stroke={2} />
+                <AnimatedActionIcon icon={CameraIcon} size={14} />
               </span>
             </button>
           ) : (
@@ -288,7 +291,7 @@ export default function UserProfile({
                   />
                 ) : (
                   <span className="photo-empty" aria-hidden="true">
-                    <IconPhoto size={18} stroke={1.8} />
+                    <AnimatedActionIcon icon={ImageIcon} size={18} />
                   </span>
                 )}
                 <button
@@ -307,7 +310,7 @@ export default function UserProfile({
                     aria-label="Remove profile photo"
                     data-tip="Remove photo"
                   >
-                    <IconTrash size={15} stroke={2} aria-hidden="true" />
+                    <AnimatedActionIcon icon={TrashIcon} size={15} aria-hidden="true" />
                   </button>
                 )}
               </div>
@@ -390,7 +393,7 @@ export default function UserProfile({
                   className="btn-secondary"
                   onClick={startEdit}
                 >
-                  Edit
+                  Edit profile
                 </button>
               </div>
             </div>

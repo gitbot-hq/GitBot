@@ -10,7 +10,13 @@
   filter: url(#mascot-depth);
 }
 
-/* Follow-cursor: studio faces steer toward the pointer (bot-form sets
+/* A bot that still needs setup is hardware, not a character yet. Keep its
+   identity colour, but flatten the silhouette into a quiet outlined shell. */
+.bot-avatar.unpowered .bot-mascot .bm-body {
+  filter: none;
+}
+
+/* Follow-cursor: opted-in faces steer toward the pointer (their host sets
    --px/--py per frame). Gated on no-preference; reduced-motion users keep
    the parked face. */
 @media (prefers-reduced-motion: no-preference) {
