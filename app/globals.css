@@ -1116,10 +1116,20 @@ pre {
   display: grid;
 }
 
+.stop-glyph {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: currentColor;
+}
+
 .stop-confirm {
   position: absolute;
   right: 0;
   bottom: calc(100% + var(--space-3));
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   width: max-content;
   padding: 7px 10px;
   background: var(--text);
@@ -1129,6 +1139,14 @@ pre {
   font-size: var(--text-xs);
   line-height: 1.2;
   pointer-events: none;
+}
+
+.stop-confirm kbd {
+  padding: 2px 5px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font: inherit;
+  font-weight: 600;
 }
 
 /* ---------------------------------- */

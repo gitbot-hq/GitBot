@@ -1422,17 +1422,17 @@ export default function Chat({
             {streaming ? (
               <div className="composer-action">
                 {escapeStopArmed && (
-                  <span className="stop-confirm" role="status">Press Escape again to stop</span>
+                  <span className="stop-confirm" role="status">Press <kbd>Esc</kbd> again to stop</span>
                 )}
                 <button
                   type="button"
                   className="send-btn"
                   onClick={stop}
                   aria-label="Stop"
-                  data-tip="Stop"
+                  data-tip={escapeStopArmed ? undefined : "Stop"}
                   data-tip-pos="above"
                 >
-                  <AnimatedActionIcon icon={CircleStopIcon} size={16} aria-hidden="true" />
+                  <span className="stop-glyph" aria-hidden="true" />
                 </button>
               </div>
             ) : (
