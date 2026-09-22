@@ -272,14 +272,6 @@
   border-top: 1px solid var(--border);
 }
 
-.popular-bot-meta > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--faint);
-  font-size: var(--market-text-meta);
-}
-
 .popular-bot-maker {
   gap: 5px;
 }
@@ -583,12 +575,8 @@
 .bot-details-hero > p { max-width: 330px; margin: 0 auto; color: var(--muted); font-size: var(--market-text-body); line-height: 1.6; }
 .bot-details-author { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 20px; color: var(--muted); font-size: var(--market-text-meta); }
 
-.bot-details-facts { display: grid; grid-template-columns: repeat(3, 1fr); padding: 24px 0; border-block: 1px solid var(--border); }
-.bot-details-facts > div { display: flex; flex-direction: column; align-items: center; gap: 5px; }
-.bot-details-facts > div + div { border-left: 1px solid var(--border); }
-.bot-details-facts strong { font-size: var(--market-text-body); font-weight: 600; }
-.bot-details-facts span { color: var(--muted); font-size: var(--market-text-meta); }
 .bot-details-section { margin-top: 36px; }
+.bot-details-hero + .bot-details-section { margin-top: 0; }
 .bot-details-section h3 { margin: 0 0 12px; font-size: var(--market-text-lead); font-weight: 600; letter-spacing: -0.02em; }
 .bot-details-section p { margin: 0; color: var(--muted); font-size: var(--market-text-body); line-height: 1.7; }
 .bot-details-section ul { display: grid; gap: 16px; margin: 20px 0 0; padding: 0; list-style: none; }
@@ -674,6 +662,9 @@
   top: 56px;
   overscroll-behavior: contain;
 }
+.marketplace-page .learn-more-overlay { inset: 60px 4px 4px; }
+.marketplace-page:has(.learn-more-overlay.open) .marketplace-topbar { background: var(--bg); }
+.marketplace-page:has(.learn-more-overlay.open) .marketplace-body { visibility: hidden; }
 .marketplace-body.is-profile-open { overflow: hidden; }
 
 .bot-details-install-area { margin-top: 26px; }

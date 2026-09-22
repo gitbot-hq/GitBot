@@ -19,6 +19,8 @@ import NewBotButton from "./new-bot-button";
 import BotForm from "./bot-form";
 import BotProfile from "./bot-profile";
 import UserProfile from "./user-profile";
+import ProfilePanelOverlay from "./profile-panel-overlay";
+import LearnMorePanel, { type LearnMoreKind } from "./learn-more-panel";
 import ThreadPanel from "./thread-panel";
 import OnboardingFlow from "./onboarding-flow";
 import ThemeButton from "./theme-button";
@@ -88,6 +90,8 @@ export default function V2() {
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [botActivity, setBotActivity] = useState<string | null>(null);
   const [modal, setModal] = useState<Modal>(null);
+  const [learnMore, setLearnMore] = useState<LearnMoreKind | null>(null);
+  const learnMoreTriggerRef = useRef<HTMLElement | null>(null);
   // Inline bot studio: slides over threads + chat.
   const [editing, setEditing] = useState<Bot | "new" | null>(null);
   // Pending sidebar switch target while the studio guards unsaved changes.
@@ -476,7 +480,12 @@ export default function V2() {
     [threadsWidth],
   );
 
+  function dismissLearnMore() {
+    setLearnMore(null);
+  }
+
   function toggleUserProfile() {
+    dismissLearnMore();
     if (!userOpen) {
       setThreadPanel(false);
       setProfileId(null);
@@ -484,19 +493,32 @@ export default function V2() {
     setUserOpen((open) => !open);
   }
 
+  function openLearnMore(kind: "share" | "import") {
+    learnMoreTriggerRef.current = document.activeElement as HTMLElement | null;
+    setLearnMore(kind);
+  }
+
+  function backFromLearnMore() {
+    setLearnMore(null);
+    requestAnimationFrame(() => learnMoreTriggerRef.current?.focus({ preventScroll: true }));
+  }
+
   function openBotProfile(id: string) {
+    dismissLearnMore();
     setThreadPanel(false);
     setUserOpen(false);
     setProfileId(id);
   }
 
   function openBotEditor(target: Bot | "new") {
+    dismissLearnMore();
     setThreadPanel(false);
     setUserOpen(false);
     setEditing(target);
   }
 
   function newThread() {
+    dismissLearnMore();
     if (!bot || threadPanel) return;
     if (needsSetup(bot)) {
       return;
@@ -614,6 +636,7 @@ export default function V2() {
    *  re-targets, picker re-targets, user panel closes — and the tapped bot
    *  gets selected. */
   function botRowClick(b: Bot) {
+    dismissLearnMore();
     if (editing) {
       if (editing !== "new" && editing.id === b.id) return; // already editing it
       setSwitchTo(b);
@@ -701,10 +724,7 @@ export default function V2() {
         />
         <div className="page-body">
           <OnboardingFlow onDone={loadBots} active={!userOpen} />
-          <div
-            className={userOpen ? "user-overlay open" : "user-overlay"}
-            aria-hidden={!userOpen}
-          >
+          <ProfilePanelOverlay open={userOpen}>
             {userOpen && (
               <UserProfile
                 user={user}
@@ -712,7 +732,7 @@ export default function V2() {
                 onSaved={savedUser}
               />
             )}
-          </div>
+          </ProfilePanelOverlay>
         </div>
         {toastView}
       </div>
@@ -805,7 +825,7 @@ export default function V2() {
               <button
                 type="button"
                 className="collapse-btn fades"
-                onClick={() => setModal({ kind: "import" })}
+                onClick={() => { dismissLearnMore(); setModal({ kind: "import" }); }}
                 aria-label="Import bot"
                 data-tip="Import bot"
               >
@@ -1092,7 +1112,7 @@ export default function V2() {
                 {threadPanel && bot && (
                   <ThreadPanel
                     key={bot.id}
-                    active={!userOpen && !modal && !editing && !showProfile}
+                    active={!userOpen && !modal && !editing && !showProfile && !learnMore}
                     bot={bot}
                     botAvatar={avatarFor(bot.id)}
                     onClose={() => setThreadPanel(false)}
@@ -1110,7 +1130,7 @@ export default function V2() {
                 key={profileBot.id}
                 bot={profileBot}
                 pref={avatarFor(profileBot.id)}
-                active={!editing && !modal && !userOpen}
+                active={!editing && !modal && !userOpen && !learnMore}
                 onBack={() => setProfileId(null)}
                 onEdit={() => openBotEditor(profileBot)}
                 onShare={(view) => setModal({ kind: "share", bot: profileBot, view })}
@@ -1121,7 +1141,7 @@ export default function V2() {
             {editing && (
               <div className="form-pane">
                 <BotForm
-                  active={!modal && !userOpen}
+                  active={!modal && !userOpen && !learnMore}
                   key={editing === "new" ? "new" : editing.id}
                   bot={editing === "new" ? null : editing}
                   onClose={() => {
@@ -1139,10 +1159,7 @@ export default function V2() {
               </div>
             )}
           </div>
-          <div
-            className={userOpen ? "user-overlay open" : "user-overlay"}
-            aria-hidden={!userOpen}
-          >
+          <ProfilePanelOverlay open={userOpen}>
             {userOpen && (
               <UserProfile
                 user={user}
@@ -1150,16 +1167,24 @@ export default function V2() {
                 onSaved={savedUser}
               />
             )}
-          </div>
+          </ProfilePanelOverlay>
         </div>
       </div>
       {toastView}
       {modal?.kind === "share" && (
-        <ShareModal bot={modal.bot} initialView={modal.view} onClose={() => setModal(null)} />
+        <ShareModal
+          bot={modal.bot}
+          initialView={modal.view}
+          inactive={!!learnMore}
+          onClose={() => setModal(null)}
+          onLearnMore={() => openLearnMore("share")}
+        />
       )}
       {modal?.kind === "import" && (
         <ImportModal
+          inactive={!!learnMore}
           onClose={() => setModal(null)}
+          onLearnMore={() => openLearnMore("import")}
           onAdd={(parsed) => {
             setModal(null);
             createBot({
@@ -1181,6 +1206,9 @@ export default function V2() {
           }}
         />
       )}
+      <ProfilePanelOverlay open={!!learnMore} className="learn-more-overlay">
+        {learnMore && <LearnMorePanel kind={learnMore} onBack={backFromLearnMore} />}
+      </ProfilePanelOverlay>
     </div>
   );
 }

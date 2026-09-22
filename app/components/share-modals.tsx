@@ -23,12 +23,14 @@ function Shell({
   title,
   onClose,
   onBack,
+  inactive = false,
   headerContent,
   children,
 }: {
   title: string;
   onClose: () => void;
   onBack?: () => void;
+  inactive?: boolean;
   headerContent?: React.ReactNode;
   children: React.ReactNode;
 }) {
@@ -64,8 +66,8 @@ function Shell({
     }
   }
   return (
-    <div className="backdrop" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <div ref={dialogRef} className="modal" role="dialog" aria-modal="true" aria-label={title} onKeyDown={handleKeyDown}>
+    <div className="backdrop" inert={inactive} aria-hidden={inactive} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <div ref={dialogRef} className="modal" role="dialog" aria-modal={!inactive} aria-label={title} onKeyDown={handleKeyDown}>
         <div className="modal-head">
           {onBack && <BackButton onClick={onBack} aria-label="Back to sharing options">{null}</BackButton>}
           <h2>{title}</h2>
@@ -82,10 +84,14 @@ function Shell({
 export function ShareModal({
   bot,
   onClose,
+  onLearnMore,
+  inactive = false,
   initialView = "options",
 }: {
   bot: Bot;
   onClose: () => void;
+  onLearnMore?: () => void;
+  inactive?: boolean;
   initialView?: "options" | "code";
 }) {
   const [view, setView] = useState<"options" | "code">(initialView);
@@ -116,10 +122,11 @@ export function ShareModal({
       title={view === "code" ? "Share with code" : `Share ${bot.name}`}
       headerContent={view === "code" ? (
           <div className="share-code-intro">
-            <p>Copy this code to share <BotName color={avatar.color}>{bot.name}</BotName> with anyone. <button type="button" className="text-action share-learn-more">Learn more</button></p>
+            <p>Copy this code to share <BotName color={avatar.color}>{bot.name}</BotName> with anyone. {onLearnMore && <button type="button" className="text-action share-learn-more" onClick={onLearnMore}>Learn more</button>}</p>
           </div>
       ) : undefined}
       onClose={onClose}
+      inactive={inactive}
       onBack={view === "code" && initialView === "options" ? () => setView("options") : undefined}
     >
       {view === "options" ? (
@@ -204,9 +211,13 @@ export function ShareModal({
 export function ImportModal({
   onClose,
   onAdd,
+  onLearnMore,
+  inactive = false,
 }: {
   onClose: () => void;
   onAdd: (bot: Record<string, unknown>) => void;
+  onLearnMore?: () => void;
+  inactive?: boolean;
 }) {
   const [text, setText] = useState("");
   const codeRef = useRef<HTMLTextAreaElement>(null);
@@ -214,9 +225,9 @@ export function ImportModal({
   const parsed = text.trim() ? parseShare(text) : null;
   const bad = text.trim() !== "" && !parsed;
   return (
-    <Shell title="Import bot" onClose={onClose} headerContent={
+    <Shell title="Import bot" onClose={onClose} inactive={inactive} headerContent={
       <div className="share-code-intro">
-        <p>Paste a bot code to preview it before importing. <button type="button" className="text-action share-learn-more">Learn more</button></p>
+        <p>Paste a bot code to preview it before importing. {onLearnMore && <button type="button" className="text-action share-learn-more" onClick={onLearnMore}>Learn more</button>}</p>
       </div>
     }>
       <div className="import-content">

@@ -1,4 +1,5 @@
 import AppProviders from "./components/app-providers";
+import DesktopNotice from "./components/desktop-notice";
 import type { Metadata } from "next";
 import "./globals.css";
 import "./components/mascot-depth.css";
@@ -49,7 +50,7 @@ export default function RootLayout({
       </head>
       <body>
         <MascotDepthDefs />
-        <AppProviders>{children}</AppProviders>
+        <DesktopNotice><AppProviders>{children}</AppProviders></DesktopNotice>
       </body>
     </html>
   );

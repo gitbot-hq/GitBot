@@ -845,6 +845,30 @@
     visibility 0s;
 }
 
+.v2 > .learn-more-overlay {
+  position: fixed;
+  inset: 56px 4px 4px;
+  z-index: 51;
+}
+.v2 .learn-more-pane { padding: 0; }
+.v2 .learn-more-pane > .panel-nav { width: 100%; margin: 0; }
+.v2 .learn-more-pane .profile-pane-inner { width: calc(100% - 2 * var(--space-6)); max-width: 680px; margin-inline: auto; }
+.v2 .learn-more-cover-image { display: block; width: 100%; height: auto; border-radius: 24px; }
+.v2 .learn-more-cover-image.dark { display: none; }
+[data-theme="dark"] .v2 .learn-more-cover-image.light { display: none; }
+[data-theme="dark"] .v2 .learn-more-cover-image.dark { display: block; }
+
+.v2 .learn-more-article { padding: var(--space-8) 0 var(--space-12); }
+.v2 .learn-more-head { margin-bottom: var(--space-8); }
+.v2 .learn-more-head h2 { margin: 0; font-size: var(--text-2xl); font-weight: 600; letter-spacing: -0.02em; line-height: 1.2; }
+.v2 .learn-more-head p { margin: var(--space-4) 0 0; color: var(--text); font-size: var(--text-lg); line-height: 1.6; }
+.v2 .learn-more-section { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: var(--space-3); }
+.v2 .learn-more-section + .learn-more-section { margin-top: var(--space-8); }
+.v2 .learn-more-section-arrow { align-self: start; color: var(--muted); transform: translateY(2px); }
+.v2 .learn-more-section h3 { margin: 0 0 var(--space-2); font-size: var(--text-md); font-weight: 600; line-height: 1.45; }
+.v2 .learn-more-section p { margin: 0; color: var(--muted); font-size: var(--text-md); line-height: 1.7; }
+.v2 .learn-more-note { margin: var(--space-8) 0 0; padding-top: var(--space-5); border-top: 1px solid var(--border); color: var(--muted); font-size: var(--text-sm); line-height: 1.6; }
+
 /* User profile head: bio reads at half the column (the 880px inner
    column → ~440px), location + verification badge sit beneath it. */
 .v2 .profile-head p.user-bio {

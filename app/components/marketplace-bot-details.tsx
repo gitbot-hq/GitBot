@@ -24,7 +24,6 @@ import type { Bot } from "../lib/gitbot";
 export type MarketplaceBot = {
   name: string;
   description: string;
-  installs: string;
   author: string;
   authorPhoto?: string;
   body: string;
@@ -256,11 +255,6 @@ export default function MarketplaceBotDetails({ bot, open, onClose }: {
               </div>
               {installErrors[bot.name] && <p className="bot-details-install-error" role="alert">{installErrors[bot.name]}</p>}
             </div>
-          </div>
-          <div className="bot-details-facts">
-            <div><strong>{bot.installs.replace(" installs", "")}</strong><span>Installs</span></div>
-            <div><strong>{bot.verified ? "GitBot" : "Community"}</strong><span>Created by</span></div>
-            <div><strong>GitBot</strong><span>Works with</span></div>
           </div>
           <section className="bot-details-section"><h3>About this bot</h3><p>{details.about}</p></section>
           <section className="bot-details-section"><h3>What it can help with</h3><ul>{details.features.map((feature) => <li key={feature}><AnimatedActionIcon icon={CheckIcon} size={16} aria-hidden="true" /><span>{feature}</span></li>)}</ul></section>
