@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import BotMascot from "./bot-maker/BotMascot";
-import { activityExpressions, bodies } from "./bot-maker/registry";
+import { activityExpressions, bodies, type BotActivity } from "./bot-maker/registry";
 import type { AvatarMascot } from "../lib/avatar-prefs";
 
 // Ambient behavior (our own director; the bot-maker motion system is
@@ -31,12 +31,13 @@ function useMood(ambient: boolean, cheer: boolean, phase: number) {
 
   const poke = useCallback(() => {
     setSleeping(false);
-    if (!ambient) return;
     clearTimeout(sleepTimer.current);
+    if (!ambient) return;
     sleepTimer.current = window.setTimeout(() => setSleeping(true), SLEEP_AFTER);
   }, [ambient]);
 
   useEffect(() => {
+    if (!ambient) { poke(); return; }
     // Arm the sleep watch late per instance so rails don't doze as one.
     const arm = window.setTimeout(poke, phase * 1700);
     return () => {
@@ -87,6 +88,7 @@ export default function BotFace({
   size = 40,
   ambient = true,
   cheer = false,
+  activity,
   follow = false,
   still = false,
   unpowered = false,
@@ -99,6 +101,8 @@ export default function BotFace({
   ambient?: boolean;
   /** External delight signal (e.g. row hovered). Holds a smile. */
   cheer?: boolean;
+  /** Live task activity takes precedence over hover and idle sleep. */
+  activity?: BotActivity;
   /** Face tracks the cursor. Gated on no-preference. */
   follow?: boolean;
   /** Pose neutral and still (picker tiles). Preview + rail stay live. */
@@ -112,13 +116,15 @@ export default function BotFace({
    *  preserves existing behavior exactly. */
   phase?: number;
 }) {
-  const mood = useMood(ambient, cheer, phase);
-  const motion = unpowered || mood.reduced ? false : !still;
+  const mood = useMood(ambient && !activity, cheer, phase);
+  const motion = unpowered || mood.reduced ? false : !!activity || !still;
   const seq = activityExpressions[mood.activity] ?? activityExpressions.idle;
   const holdExpr = seq[phase % seq.length];
   const expression = unpowered
     ? "neutral"
-    : mood.happy
+    : activity
+      ? activityExpressions[activity][0]
+      : mood.happy
       ? "happy"
       : !mood.released
         ? holdExpr
@@ -130,7 +136,7 @@ export default function BotFace({
   const fitWidth = Math.round(size * Math.min(1, w / h));
   return (
     <span
-      className={`bot-avatar${follow && !unpowered ? " follow" : ""}${unpowered ? " unpowered" : ""}`}
+      className={`bot-avatar${follow && !unpowered && !activity ? " follow" : ""}${unpowered ? " unpowered" : ""}`}
       style={{ width: size, height: size }}
       aria-hidden="true"
       onMouseEnter={unpowered ? undefined : mood.onEnter}
@@ -141,7 +147,7 @@ export default function BotFace({
         color={color}
         size={fitWidth}
         expression={expression}
-        activity={mood.activity}
+        activity={activity ?? mood.activity}
         motion={motion}
         duration={duration}
       />

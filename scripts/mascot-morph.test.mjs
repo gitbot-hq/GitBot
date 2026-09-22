@@ -72,3 +72,15 @@ test('all eight gaze directions move the eyes farther than the mouth in the requ
     }
   }
 });
+
+test('hand expressions keep duplicate faces out of props and recolor placeholder hands', () => {
+  const artwork = JSON.parse(readFileSync(new URL('../app/components/bot-maker/artwork.json', import.meta.url), 'utf8'));
+  for (const name of ['Reading', 'Thinking', 'Working']) {
+    const id = name.toLowerCase();
+    const prop = artwork.accessories.find(p => p.id === id);
+    assert.ok(prop && morphs[id] && artwork.expressions.some(e => e.id === id));
+    const source = readFileSync(new URL(`../Design/Mascots2/HelloHands/${name}.svg`, import.meta.url), 'utf8');
+    for (const [facePath] of [...source.matchAll(/<path\b[^>]*\/>/g)].slice(0, 3)) assert.ok(!prop.markup.includes(facePath), `${name}: face duplicated over morph layer`);
+    assert.ok(!prop.markup.includes('#FF0000'), `${name}: placeholder hand color`);
+  }
+});

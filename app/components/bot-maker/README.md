@@ -1,6 +1,6 @@
 # Bot maker
 
-Preview at `/bot-maker`. Uses the original Mascots2 artwork, with 18 named bodies from `Bodyv2`, 18 SVG expressions plus a Looking around behavior and eight selectable gaze directions derived from two authored faces in `LookAround`. `Vector 111.svg` and `Vector 112.svg` are small separate pieces, excluded from body choices. Original files are unchanged.
+Preview at `/bot-maker`. Uses the original Mascots2 artwork, with 18 named bodies from `Bodyv2`, 21 SVG expressions plus a Looking around behavior and eight selectable gaze directions derived from two authored faces in `LookAround`. `Vector 111.svg` and `Vector 112.svg` are small separate pieces, excluded from body choices. Original files are unchanged.
 
 ## App integration
 
@@ -10,7 +10,7 @@ import BotMascot from './components/bot-maker/BotMascot';
 <BotMascot body="ghost" color="#FECE00" activity="thinking" size={80} />
 ```
 
-Activities: `idle`, `listening`, `thinking`, `working`, `success`, `error`, `sleeping`. Connect these to your app's state in the parent; the mascot does not fetch or contact the server. `activityExpressions` in `registry.ts` defines each cycle. Activity changes start with the first expression immediately.
+Activities: `idle`, `reading`, `listening`, `thinking`, `working`, `success`, `error`, `sleeping`. Connect these to your app's state in the parent; the mascot does not fetch or contact the server. `activityExpressions` in `registry.ts` defines each cycle. Activity changes start with the first expression immediately.
 
 Pass `expression="wink"` for direct control; this overrides activity. `motion={false}` disables ambient movement and makes expression changes immediate. `duration={420}` sets the geometry morph duration in milliseconds (clamped to 120–2000). An unknown body or expression falls back to ghost or neutral. `label` overrides the accessible image description.
 
@@ -49,3 +49,13 @@ The added faces are `calm`, `excited-wink`, `playful`, `playful-2`, `sassy`, and
 All six remain available in the maker and the success activity via `positiveExpressions` in `registry.ts`. Workspace idle behavior now looks around; smiles respond to interaction. Marketplace cards/details also look around at rest and smile on pointer hover, independently of live task status. Each new expression has its own small body reaction; reduced-motion settings still disable animation.
 
 Starry eyes ease into a slow 24-second revolution in opposite directions after the face morph settles. Switching expressions morphs from the currently rotated geometry. Rotation stops with `motion={false}` or reduced motion.
+
+While sleeping, only the body silhouette tilts −5° and drops to 30% saturation, retaining its depth shading. The face stays upright and unchanged. Waking restores the original angle and color; reduced motion disables the transition.
+
+## Reading, Thinking, and Working
+
+Original exports live in `Design/Mascots2/HelloHands`. The importer separates the first three face paths from the hands/props, removes Reading's duplicated face, and keeps the authored book and laptop gradient. Red placeholder hands inherit the bot color. Each rendered laptop receives a unique gradient ID.
+
+Use `expression="reading"`, `"thinking"`, or `"working"` (also selectable in the maker), or the corresponding `activity`. Reading gently moves the book and scans with its eyes; Thinking moves the hand slightly toward the chin; Working taps the hands in short, alternating bursts. Props fade in/out separately from facial morphs. Reduced motion and `motion={false}` stop prop animation. These expressions are not added to idle or marketplace rotations; those remain neutral with occasional glances and interaction-driven smiles.
+
+Live chat maps its existing status labels through `chatMascotActivity`: reasoning/reconnection → Thinking; Read/Grep/Glob/web-reading tools → Reading; writing and other tools → Working; approval waits → neutral. The selected sidebar mascot uses this mapping; the chat activity row uses a pixel-grid loader in the bot’s color. Live activity overrides hover and prevents sleep; completion, stop, and failure clear the activity and restore normal idle behavior.

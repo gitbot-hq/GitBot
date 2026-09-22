@@ -7,7 +7,7 @@
    face is separate DOM (an HTML-anchored overlay), so it stays crisp —
    exactly like the old eye layers did. */
 .bot-mascot .bm-body {
-  filter: url(#mascot-depth);
+  filter: url(#mascot-depth) saturate(var(--mascot-saturation, 1));
 }
 
 /* A bot that still needs setup is hardware, not a character yet. Keep its

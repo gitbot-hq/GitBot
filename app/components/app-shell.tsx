@@ -25,6 +25,7 @@ import ThemeButton from "./theme-button";
 import { ImportModal, ShareModal } from "./share-modals";
 import { useToast } from "./toast";
 import BotFace from "./bot-face";
+import { chatMascotActivity } from "../lib/chat-mascot-activity";
 import BotName from "./bot-name";
 import { botTile } from "./bot-avatar";
 import TopBar from "./top-bar";
@@ -862,8 +863,9 @@ export default function V2() {
                             <BotFace
                               mascot={avatarFor(b.id).mascot}
                               size={44}
+                              activity={!setupPending && b.id === bot?.id ? chatMascotActivity(botActivity) : undefined}
                               color={avatarFor(b.id).color}
-                              cheer={!setupPending && !mirrored && (hoverId === b.id || (b.id === bot?.id && activeLabel != null))}
+                              cheer={!setupPending && !mirrored && (hoverId === b.id)}
                               follow={mirrored}
                               still={setupPending || mirrored}
                               unpowered={setupPending}

@@ -790,12 +790,13 @@ export default function Chat({
       if (catchupRef.current) return;
       ensureLive();
       const chunk = String(data(ev).content ?? "");
-      if (chunk) appendLiveText(chunk);
+      if (chunk) { setActivity("Writing…"); appendLiveText(chunk); }
     });
     es.addEventListener("tool_use", (ev) => {
       if (catchupRef.current) return;
       ensureLive();
       const d = data(ev);
+      setActivity(`Running ${d.tool_name || "tool"}…`);
       appendLiveTool({ name: String(d.tool_name ?? "tool"), input: d.tool_input });
     });
     es.addEventListener("status", (ev) => {
@@ -1305,7 +1306,7 @@ export default function Chat({
           </p>
         )}
         {activity && (
-          <div className="thinking-row">
+          <div className="thinking-row" style={{ color: botAvatar?.color }}>
             <LoadingState label={activity} variant="Drive" />
           </div>
         )}

@@ -2641,7 +2641,7 @@ pre {
   width: 4px;
   height: 4px;
   border-radius: 1px;
-  background: var(--text);
+  background: currentColor;
 }
 
 .px-cell.round {
@@ -2673,6 +2673,8 @@ pre {
 
 .thinking-row {
   display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 /* Message entrances (live messages mount once — safe mid-stream) */
