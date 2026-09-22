@@ -53,6 +53,9 @@
   --text-xl: 22px;
   --text-2xl: 28px;
 
+  /* focused reading and marketing pages */
+  --content-max: 920px;
+
   /* spacing — 4px base, use these instead of ad-hoc values */
   --space-1: 4px;
   --space-2: 8px;

@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import {
   IconArrowBarToLeft,
   IconArrowBarToRight,
   IconArrowLeft,
+  IconShoppingBag,
   IconDownload,
   IconPencil,
   IconPlus,
@@ -543,7 +545,16 @@ export default function V2() {
     return (
       <div className="page v2">
         <TopBar
-          actions={<ThemeButton />}
+          actions={
+            <>
+              <Link href="/marketplace" className="topbar-marketplace-btn">
+                <IconShoppingBag size={16} stroke={2} aria-hidden="true" />
+                <span>Marketplace</span>
+              </Link>
+              <span className="topbar-action-separator" aria-hidden="true" />
+              <ThemeButton />
+            </>
+          }
           userName={user.name}
           userPhoto={user.photo}
           onProfile={() => setUserOpen((v) => !v)}
@@ -571,7 +582,16 @@ export default function V2() {
   return (
     <div className="page v2">
       <TopBar
-        actions={<ThemeButton />}
+        actions={
+          <>
+            <Link href="/marketplace" className="topbar-marketplace-btn">
+              <IconShoppingBag size={16} stroke={2} aria-hidden="true" />
+              <span>Marketplace</span>
+            </Link>
+            <span className="topbar-action-separator" aria-hidden="true" />
+            <ThemeButton />
+          </>
+        }
         userName={user.name}
         userPhoto={user.photo}
         onProfile={() => setUserOpen((v) => !v)}

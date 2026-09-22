@@ -25,15 +25,14 @@
   border-bottom: 0;
 }
 
-/* Theme switch sits left of the user chip (the chip's auto margin pushes
-   both right). */
+/* Top-bar actions sit together on the right, before the user chip. */
 .v2 .theme-btn {
   display: grid;
   place-items: center;
   width: 32px;
   height: 32px;
   flex: none;
-  margin-left: auto;
+  margin-left: 0;
   margin-right: var(--space-2);
   padding: 0;
   background: transparent;
@@ -50,6 +49,42 @@
 
 .v2 .user-chip {
   margin-left: 0;
+}
+
+/* Marketplace is a labeled destination, not an ambiguous icon. */
+.v2 .topbar-marketplace-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  margin-left: auto;
+  margin-right: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-lg);
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 550;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.v2 .topbar-action-separator {
+  width: 1px;
+  height: 16px;
+  flex: none;
+  margin-right: var(--space-2);
+  background: var(--border);
+}
+
+.v2 .topbar-marketplace-btn:hover {
+  background: rgb(255 255 255 / 0.08);
+}
+
+[data-theme="light"] .v2 .topbar-marketplace-btn:hover {
+  background: rgb(0 0 0 / 0.06);
 }
 
 /* v2 light mode: white cards on a gray canvas. Follows the saved/OS theme

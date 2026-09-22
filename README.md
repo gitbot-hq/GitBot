@@ -1,87 +1,76 @@
 # GitBot UI
 
-Next.js (v16 + React + Tailwind v4 + TypeScript) revamp of the GitBot
-interface. This branch is `codex/gitbot-ui-concepts`.
+GitBot UI is a local web app for managing coding agents and the work they do. Create purpose-built bots, start threads in the right workspace, and follow each conversation as it runs.
 
-## The two halves
+## What it includes
 
-This repo is **only the frontend**. The backend is Anil's code:
+- Bot setup with instructions, permissions, workspaces, and agent configuration
+- Thread creation with a workspace picker and agent selection
+- Live chat with streamed responses, approvals, and a one-message follow-up queue
+- Bot profiles, avatars, themes, and status-aware browser notifications
+- A same-origin API proxy for connecting the UI to a local GitBot service
 
-- **What it is:** the `gitbot-ai` npm package (global install), living at
-  `/opt/homebrew/lib/node_modules/gitbot-ai` — **read-only, never edit it.**
-- **What it does:** owns bots, threads, chat turns, permissions, and the
-  actual AI runs (Claude Code / Codex / OpenCode via the user's own plan).
-  State lives in `~/.gitbot` (`bots.json`, `threads.json`).
-- **How to run it:** `gitbot start -p 3100 -l` (serves `http://localhost:3100`).
-- **How we talk to it:** the browser calls same-origin
-  `app/api/gitbot/*`, a thin proxy (`app/api/gitbot/[...path]/route.ts`)
-  that forwards to `:3100`. The proxy exists only because the local test
-  browser can't hit `:3100` directly — merge prep is to delete it and point
-  the adapter at a relative base. **Merge rule: frontend-only, zero new
-  backend surface** (`app/lib/gitbot.ts` mirrors the server routes;
-  components take props, never fetch).
+## Run locally
 
-Frontend dev: `npm run dev` (`:3000`). `npx tsc --noEmit` must stay clean.
+You need Node.js and a running GitBot service. The UI expects the service at `http://localhost:3100` by default.
 
-## Routes
+```bash
+npm install
+```
 
-| Route | What |
-|---|---|
-| `/` | Main page. Shows onboarding when the user has no bots |
-| `/blank` | Previous build (light/dark system theme) |
-| `/onboarding` | Standalone first-run route (same flow as the empty state) |
-| `/bot-maker` | Character-studio playground (bot-maker system demo, internal) |
-| `/mascot-lab`, `/cta` | Internal demos, not public |
+Start the GitBot service in one terminal:
 
-## Key files
+```bash
+gitbot start -p 3100 -l
+```
 
-- `app/components/app-shell.tsx` — the app shell (bots sidebar +
-  threads + chat/tray). Theme in `app/v2-theme.css`.
-- `app/components/chat.tsx` — live chat (SSE, typewriter reveal because the
-  server emits whole messages, approvals, markdown).
-- `app/lib/api.ts` — backend adapter (incl. `browse()` folder picker,
-  `repoPath` thread creation).
-- `app/components/bot-form.tsx` — bot studio (preview + mascot/color
-  pickers + progressive form, original copy verbatim).
-- `app/components/bot-profile.tsx` — bot profile (generative cover,
-  facts, Share/Edit/Publish). Pencil badge + re-clicking the selected
-  row open it; Edit dives into the studio on top.
-- `app/components/bot-face.tsx` — avatar renderer + mood director (idle
-  cycles, hover cheer, 60s-idle sleep, reduced-motion aware).
-- `app/components/thread-panel.tsx` — new-thread folder picker; mirrors the
-  original client's `openFolderPicker` strings/flow verbatim.
-- `app/components/mascot-depth.{tsx,css}` — subtle 3D shading as an SVG
-  filter applied to body art only (faces stay crisp).
-- `app/lib/avatar-prefs.ts` — localStorage avatar picks (frontend-only).
-- `app/components/theme-button.tsx` + `TopBar actions` slot — light/dark switch.
-- `BRANDING.md` — palette/tokens source of truth. `AGENTS.md` — agent rules.
+Then start the UI in another:
 
-## Mascots: two generations
+```bash
+npm run dev
+```
 
-- **New (live): `app/components/bot-maker/`** — `BotMascot` (18 bodies,
-  12 expressions + looking-around, activity director, geometry morphs).
-  Artwork generated from `Design/Mascots2/` via `node
-  scripts/import-mascots.mjs`; morph math tested with
-  `node --test scripts/mascot-morph.test.mjs`. Adopted verbatim — don't
-  refactor it; integrate by wrapping.
-- **Old (retired from app surfaces):** `app/components/mascots/`,
-  `studio-mascots.tsx`, spider CSS, blink-desync rules. Still rendered by
-  the internal demo pages only. `mascot-art.tsx` stays — the logo imports
-  its faces. `app/components/logo.tsx` exports both `Logo` (lockup) and
-  `LogoMark` (mark only) from one shared live-face implementation.
+Open [http://localhost:3000](http://localhost:3000).
 
-## Gotchas (earned the hard way)
+## How it fits together
 
-- Turbopack dev goes stale — `edit` can report success on ghost paths.
-  Verify with grep/curl/screenshots; when in doubt kill dev, `rm -rf
-  .next`, restart.
-- Brave shows stale renders persistently; Playwright screenshots are
-  ground truth (the `N` circle bottom-left is the Next dev indicator).
-- `body` resolves `color` before scoped theme vars — re-resolve `color`
-  at theme boundaries (see `.page.v2`).
-- Server emits whole assistant messages (no token deltas) — the typewriter
-  simulates streaming.
-- `confirm()` dialogs need `pg.on('dialog', accept)` in tests. AI test
-  turns cost real runs — keep e2e prompts tiny.
-- Known residue: an inert "Set up X-Bot" setup thread (no delete
-  endpoint; X-Bot itself restored byte-for-byte).
+```text
+Browser  ->  Next.js UI  ->  /api/gitbot proxy  ->  GitBot service
+```
+
+The browser only talks to the Next.js app. The proxy forwards requests and server-sent events to the local GitBot service, which owns bot and thread state.
+
+## Project structure
+
+| Path | Purpose |
+| --- | --- |
+| `app/components/` | The app shell, chat, bot studio, profiles, and thread setup UI |
+| `app/lib/api.ts` | The single frontend HTTP boundary |
+| `app/lib/gitbot.ts` | TypeScript types for the service contract |
+| `app/api/gitbot/[...path]/route.ts` | Same-origin proxy to the GitBot service |
+| `app/v2-theme.css` and `app/globals.css` | Shared visual tokens and application styles |
+
+## Development checks
+
+Run the TypeScript check before sharing a UI change:
+
+```bash
+npx tsc --noEmit
+```
+
+Mascot changes also have a focused verification command:
+
+```bash
+node --test scripts/mascot-morph.test.mjs
+```
+
+## Development notes
+
+- Keep frontend requests in `app/lib/api.ts`. Components should not call `fetch` directly.
+- The GitBot backend is a separate package. This repository only contains the UI and proxy.
+- Use the visual tokens and avatar guidance in [BRANDING.md](./BRANDING.md) when extending the interface.
+- The UI includes internal demo routes for design exploration. The main application is available at `/`.
+
+## Contributing
+
+Keep changes focused, preserve the existing UI conventions, and include the relevant type check with your pull request. If a change needs a new backend capability, coordinate it with the GitBot service rather than adding server logic here.

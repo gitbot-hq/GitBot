@@ -9,6 +9,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@animateicons/react": "^0.5.0",
     "@tabler/icons-react": "^3.46.0",
     "flubber": "^0.4.2",
     "next": "latest",
