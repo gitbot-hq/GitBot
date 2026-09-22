@@ -1137,8 +1137,21 @@ pre {
   border-radius: var(--radius-sm);
   box-shadow: 0 6px 20px rgb(0 0 0 / 0.2);
   font-size: var(--text-xs);
+  font-weight: 600;
   line-height: 1.2;
   pointer-events: none;
+  animation: stop-confirm-shake 360ms ease-out;
+}
+
+@keyframes stop-confirm-shake {
+  0%, 100% { translate: 0; }
+  25% { translate: -3px; }
+  50% { translate: 3px; }
+  75% { translate: -2px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stop-confirm { animation: none; }
 }
 
 .stop-confirm kbd {
