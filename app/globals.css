@@ -1156,7 +1156,8 @@ pre {
 
 .stop-confirm kbd {
   padding: 2px 5px;
-  border: 1px solid currentColor;
+  background: var(--bg);
+  color: var(--text);
   border-radius: 4px;
   font: inherit;
   font-weight: 600;
