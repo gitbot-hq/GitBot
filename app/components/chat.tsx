@@ -1,20 +1,18 @@
 "use client";
 
+import ShareDropdown, { moveMenuFocus } from "./share-dropdown";
 import AnimatedActionIcon from "./animated-action-icon";
 import { ArrowDownIcon } from "@animateicons/react/lucide/arrow-down-icon";
 import { ArrowUpIcon } from "@animateicons/react/lucide/arrow-up-icon";
 import { CheckIcon } from "@animateicons/react/lucide/check-icon";
-import { CodeIcon } from "@animateicons/react/lucide/code-icon";
 import { CopyIcon } from "@animateicons/react/lucide/copy-icon";
 import { CircleStopIcon } from "@animateicons/react/lucide/circle-stop-icon";
 import { EllipsisIcon } from "@animateicons/react/lucide/ellipsis-icon";
 import { MessageSquarePlusIcon } from "@animateicons/react/lucide/message-square-plus-icon";
 import { RefreshCwIcon } from "@animateicons/react/lucide/refresh-cw-icon";
-import { ShareIcon } from "@animateicons/react/lucide/share-icon";
-import { StoreIcon } from "@animateicons/react/lucide/store-icon";
 import { UserIcon } from "@animateicons/react/lucide/user-icon";
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -56,6 +54,7 @@ type Msg = {
   id: string;
   role: "user" | "assistant";
   segs: Seg[];
+  retryPrompt?: string;
   /** End-of-turn receipt (client-side overlay, see below). */
   summary?: { secs: number; stopped: boolean };
 };
@@ -74,7 +73,7 @@ function flatten(
   const segs: Seg[] = [];
   const pushText = (text: string) => {
     const last = segs[segs.length - 1];
-    if (last && last.kind === "text") last.text += text;
+    if (last && last.kind === "text") last.text += `\n\n${text}`;
     else segs.push({ kind: "text", text });
   };
   const pushTool = (name: string, input: unknown) => {
@@ -108,7 +107,10 @@ function RichText({ text }: { text: string }) {
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{
-          a: ({ node, ...props }) => <a target="_blank" rel="noreferrer" {...props} />,
+          a: ({ node, href, children, ...props }) =>
+            href && /^https?:\/\//i.test(href)
+              ? <a href={href} target="_blank" rel="noreferrer" {...props}>{children}</a>
+              : <span>{children}</span>,
         }}
       >
         {text}
@@ -301,10 +303,11 @@ export default function Chat({
   // Steer: abort the running turn and send this text the moment it ends.
   const pendingSteer = useRef<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [copyErrorId, setCopyErrorId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [escapeStopArmed, setEscapeStopArmed] = useState(false);
   const [activeMenu, setActiveMenu] = useState<"share" | "more" | null>(null);
-  const shareButtonRef = useRef<HTMLButtonElement | null>(null);
+  const setShareOpen = useCallback((open: boolean) => setActiveMenu(open ? "share" : null), []);
   const moreButtonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -391,14 +394,14 @@ export default function Chat({
   }, [streaming, activeMenu, setup]);
 
   useEffect(() => {
-    if (!activeMenu) return;
+    if (activeMenu !== "more") return;
     const frame = window.requestAnimationFrame(() => {
       menuRef.current?.querySelector<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)')?.focus();
     });
     function closeOnEscape(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       setActiveMenu(null);
-      (activeMenu === "share" ? shareButtonRef : moreButtonRef).current?.focus();
+      moreButtonRef.current?.focus();
     }
     document.addEventListener("keydown", closeOnEscape);
     return () => {
@@ -407,23 +410,6 @@ export default function Chat({
     };
   }, [activeMenu]);
 
-  function moveMenuFocus(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-    const items = Array.from(
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)'),
-    );
-    if (!items.length) return;
-    event.preventDefault();
-    const current = items.indexOf(document.activeElement as HTMLButtonElement);
-    const next = event.key === "Home"
-      ? 0
-      : event.key === "End"
-        ? items.length - 1
-        : event.key === "ArrowUp"
-          ? (current <= 0 ? items.length - 1 : current - 1)
-          : (current + 1) % items.length;
-    items[next]?.focus();
-  }
 
   function resetBox() {
     if (boxRef.current) boxRef.current.style.height = "auto";
@@ -471,7 +457,7 @@ export default function Chat({
   function flattenMsgs(messages: HistoryMsg[]): Msg[] {
     const pushSeg = (list: Seg[], s: Seg) => {
       const tail = list[list.length - 1];
-      if (s.kind === "text" && tail?.kind === "text") tail.text += s.text;
+      if (s.kind === "text" && tail?.kind === "text") tail.text += `\n\n${s.text}`;
       else if (s.kind === "tools" && tail?.kind === "tools")
         tail.tools.push(...s.tools);
       else
@@ -502,7 +488,13 @@ export default function Chat({
         (s) => s.kind === "tools" || s.text.trim().length > 0,
       );
     }
-    return out.filter((m) => m.segs.length > 0);
+    const visible = out.filter((m) => m.segs.length > 0);
+    visible.forEach((m, i) => {
+      if (m.role === "assistant" && visible[i - 1]?.role === "user") {
+        m.retryPrompt = msgText(visible[i - 1]);
+      }
+    });
+    return visible;
   }
 
   // Load history on thread switch; drop any live turn.
@@ -534,6 +526,7 @@ export default function Chat({
     queueRef.current = null;
     setQueue(null);
     pendingSteer.current = null;
+    lastPrompt.current = "";
     const nextDraft = thread?.id ? (drafts.current[thread.id] ?? "") : "";
     draftRef.current = nextDraft;
     setDraft(nextDraft);
@@ -647,13 +640,13 @@ export default function Chat({
   }
 
   function appendLiveText(chunk: string) {
-    liveTextRef.current += chunk;
+    liveTextRef.current += `${liveTextRef.current ? "\n\n" : ""}${chunk}`;
     setLive((prev) => {
       if (!prev) return prev;
       const segs = [...prev.segs];
       const tail = segs[segs.length - 1];
       if (tail && tail.kind === "text") {
-        segs[segs.length - 1] = { kind: "text", text: tail.text + chunk };
+        segs[segs.length - 1] = { kind: "text", text: `${tail.text}\n\n${chunk}` };
       } else {
         segs.push({ kind: "text", text: chunk });
       }
@@ -976,11 +969,18 @@ export default function Chat({
     setQueue(null);
   }
 
-  function copyText(id: string, text: string) {
-    navigator.clipboard.writeText(text).catch(() => {});
-    setCopiedId(id);
+  async function copyText(id: string, text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(id);
+      setCopyErrorId(null);
+    } catch {
+      setCopiedId(null);
+      setCopyErrorId(id);
+    }
     window.setTimeout(() => {
       setCopiedId((prev) => (prev === id ? null : prev));
+      setCopyErrorId((prev) => (prev === id ? null : prev));
     }, 1500);
   }
 
@@ -1030,36 +1030,7 @@ export default function Chat({
 
   const toolbar = (onShare || onOpenBot || onNewThread) && (
     <div className="chat-toolbar" aria-label="Chat actions">
-      {onShare && (
-        <div className="chat-toolbar-action">
-          <button
-            ref={shareButtonRef}
-            type="button"
-            className={`icon-btn${activeMenu === "share" ? " is-active" : ""}`}
-            onClick={() => setActiveMenu((menu) => menu === "share" ? null : "share")}
-            aria-label="Share bot"
-            aria-expanded={activeMenu === "share"}
-            aria-haspopup="menu"
-            aria-controls="chat-share-menu"
-            data-tip="Share bot"
-          >
-            <AnimatedActionIcon icon={ShareIcon} size={17} aria-hidden="true" />
-          </button>
-          {activeMenu === "share" && (
-            <div ref={menuRef} id="chat-share-menu" className="chat-options-menu chat-share-menu" role="menu" aria-label="Share bot" onKeyDown={moveMenuFocus}>
-              <button type="button" role="menuitem" onClick={() => { setActiveMenu(null); onShare("code"); }}>
-                <AnimatedActionIcon icon={CodeIcon} size={15} aria-hidden="true" />
-                <span className="chat-menu-label">Share with code</span>
-              </button>
-              <button type="button" role="menuitem" disabled>
-                <AnimatedActionIcon icon={StoreIcon} size={15} aria-hidden="true" />
-                <span className="chat-menu-label">Publish to Marketplace</span>
-                <span className="chat-menu-status">Soon</span>
-              </button>
-            </div>
-          )}
-        </div>
-      )}
+      {onShare && <ShareDropdown open={activeMenu === "share"} onOpenChange={setShareOpen} onShare={onShare} />}
       {(onOpenBot || onNewThread) && (
         <div className="chat-toolbar-action">
           <button
@@ -1093,7 +1064,7 @@ export default function Chat({
           )}
         </div>
       )}
-      {activeMenu && (
+      {activeMenu === "more" && (
         <button type="button" className="menu-scrim" onClick={() => setActiveMenu(null)} aria-label="Close menu" tabIndex={-1} />
       )}
     </div>
@@ -1209,8 +1180,8 @@ export default function Chat({
                     type="button"
                     className="icon-btn"
                     onClick={() => copyText(m.id, setup ? presentSetupText(msgText(m)) : msgText(m))}
-                    aria-label="Copy reply"
-                    data-tip="Copy reply"
+                    aria-label={copyErrorId === m.id ? "Copy failed" : copiedId === m.id ? "Copied reply" : "Copy reply"}
+                    data-tip={copyErrorId === m.id ? "Copy failed" : "Copy reply"}
                   >
                     {copiedId === m.id ? (
                       <AnimatedActionIcon icon={CheckIcon} size={15} aria-hidden="true" />
@@ -1218,15 +1189,18 @@ export default function Chat({
                       <AnimatedActionIcon icon={CopyIcon} size={15} aria-hidden="true" />
                     )}
                   </button>
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    onClick={() => lastPrompt.current && sendPrompt(lastPrompt.current)}
-                    aria-label="Try again"
-                    data-tip="Try again"
-                  >
-                    <AnimatedActionIcon icon={RefreshCwIcon} size={15} aria-hidden="true" />
-                  </button>
+                  {copyErrorId === m.id && <span className="copy-reply-error" role="status">Copy failed. Select the reply to copy it.</span>}
+                  {m.retryPrompt && (
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      onClick={() => sendPrompt(m.retryPrompt!)}
+                      aria-label="Try again"
+                      data-tip="Try again"
+                    >
+                      <AnimatedActionIcon icon={RefreshCwIcon} size={15} aria-hidden="true" />
+                    </button>
+                  )}
                 </span>
               )}
             </article>
@@ -1317,9 +1291,11 @@ export default function Chat({
           type="button"
           className="jump-latest"
           onClick={() => {
-            stick.current = true;
-            setStuck(true);
-            requestAnimationFrame(scrollDown);
+            const el = scrollRef.current;
+            el?.scrollTo({
+              top: el.scrollHeight,
+              behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+            });
           }}
           aria-label="Jump to latest"
           data-tip="Jump to latest"

@@ -162,7 +162,14 @@ export default function V2() {
     getBots()
       .then(({ bots }) => {
         setBots(bots);
-        setSelectedId((prev) => prev ?? bots[0]?.id ?? null);
+        let installedId: string | null = null;
+        try {
+          installedId = sessionStorage.getItem("gitbot-marketplace-installed-bot");
+          sessionStorage.removeItem("gitbot-marketplace-installed-bot");
+        } catch {}
+        setSelectedId((prev) => installedId && bots.some((bot) => bot.id === installedId)
+          ? installedId
+          : prev ?? bots[0]?.id ?? null);
       })
       .catch((e) => setBotsError(e instanceof Error ? e.message : "Failed to load bots"))
       .finally(() => setBotsLoading(false));
@@ -1106,7 +1113,7 @@ export default function V2() {
                 active={!editing && !modal && !userOpen}
                 onBack={() => setProfileId(null)}
                 onEdit={() => openBotEditor(profileBot)}
-                onShare={() => setModal({ kind: "share", bot: profileBot })}
+                onShare={(view) => setModal({ kind: "share", bot: profileBot, view })}
               />
             )}
           </div>

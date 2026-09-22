@@ -19,6 +19,7 @@ import MarketplaceInstallButton from "./marketplace-install-button";
 import MarketplaceAuthor from "./marketplace-author";
 import MarketplaceMascot from "./marketplace-mascot";
 import type { BotActivity } from "./bot-maker/registry";
+import type { Bot } from "../lib/gitbot";
 
 export type MarketplaceBot = {
   name: string;
@@ -83,6 +84,16 @@ const DETAILS: Record<string, { category: string; about: string; features: strin
   },
 };
 
+function instructionsFor(bot: MarketplaceBot, details: (typeof DETAILS)[string]) {
+  return [
+    `You are ${bot.name}. ${bot.description}`,
+    "Help the user with these tasks:",
+    ...details.features.map((feature) => `- ${feature}`),
+    "Inspect the relevant repository context before making recommendations. Explain findings clearly and reference files where useful. Ask before destructive changes or publishing anything.",
+    `Example request: ${details.prompt}`,
+  ].join("\n");
+}
+
 export default function MarketplaceBotDetails({ bot, open, onClose }: {
   bot: MarketplaceBot | null;
   open: boolean;
@@ -95,6 +106,7 @@ export default function MarketplaceBotDetails({ bot, open, onClose }: {
   const [installs, setInstalls] = useState<Record<string, "installing" | "completing" | "installed">>({});
   const [installTiming, setInstallTiming] = useState<Record<string, { startedAt: number; duration: number }>>({});
   const [installErrors, setInstallErrors] = useState<Record<string, string>>({});
+  const [savedBots, setSavedBots] = useState<Bot[]>([]);
   const pendingInstalls = useRef(new Set<string>());
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -119,6 +131,15 @@ export default function MarketplaceBotDetails({ bot, open, onClose }: {
 
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
+    getBots().then(({ bots }) => {
+      if (!cancelled) setSavedBots(bots);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape" && !event.defaultPrevented) {
         event.preventDefault();
@@ -136,9 +157,16 @@ export default function MarketplaceBotDetails({ bot, open, onClose }: {
   const scrollEdge = useScrollEdge(scrollRef, `${open}:${bot?.name ?? ""}`);
 
   const details = bot ? DETAILS[bot.name] : null;
+  const installedBot = bot && details
+    ? savedBots.find((candidate) => candidate.name === bot.name && candidate.instructions === instructionsFor(bot, details))
+    : null;
+  const pendingState = bot ? installs[bot.name] : undefined;
+  const installState = pendingState === "installing" || pendingState === "completing"
+    ? pendingState
+    : installedBot ? "installed" : "idle";
 
   async function installBot() {
-    if (!bot || !details || pendingInstalls.current.has(bot.name) || installs[bot.name] === "installed") return;
+    if (!bot || !details || pendingInstalls.current.has(bot.name) || installedBot) return;
     const selected = bot;
     const name = selected.name;
     const color = dialogRef.current
@@ -150,15 +178,10 @@ export default function MarketplaceBotDetails({ bot, open, onClose }: {
     setInstallTiming((previous) => ({ ...previous, [name]: { startedAt, duration } }));
     setInstalls((previous) => ({ ...previous, [name]: "installing" }));
     setInstallErrors((previous) => ({ ...previous, [name]: "" }));
-    const instructions = [
-      `You are ${name}. ${selected.description}`,
-      "Help the user with these tasks:",
-      ...details.features.map((feature) => `- ${feature}`),
-      "Inspect the relevant repository context before making recommendations. Explain findings clearly and reference files where useful. Ask before destructive changes or publishing anything.",
-      `Example request: ${details.prompt}`,
-    ].join("\n");
+    const instructions = instructionsFor(selected, details);
     try {
       const { bots } = await getBots();
+      setSavedBots(bots);
       const existing = bots.find((candidate) => candidate.name === name && candidate.instructions === instructions);
       if (!existing) {
         const { bot: created } = await createBot({
@@ -170,6 +193,7 @@ export default function MarketplaceBotDetails({ bot, open, onClose }: {
           permissionMode: "ask-permissions",
         });
         setAvatarPref(created.id, { mascot: selected.body, color });
+        setSavedBots((previous) => [...previous, created]);
       }
       // Keep the presentation at least 2–2.5s, but never finish before the API.
       await new Promise((resolve) => setTimeout(resolve, Math.max(0, duration - 180 - (performance.now() - startedAt))));
@@ -219,12 +243,16 @@ export default function MarketplaceBotDetails({ bot, open, onClose }: {
             <div className="bot-details-author"><MarketplaceAuthor name={bot.author} photo={bot.authorPhoto} verified={bot.verified} caption="Created by" /></div>
             <div className="bot-details-install-area">
               <MarketplaceInstallButton
-                state={installs[bot.name] ?? "idle"}
+                state={installState}
                 timing={installTiming[bot.name]}
                 onInstall={installBot}
               />
               <div className="bot-details-install-status" role="status">
-                {installs[bot.name] === "installed" ? <Link href="/">Open workspace →</Link> : installs[bot.name] ? "Installing…" : "Add to your workspace"}
+                {installState === "installed" && installedBot ? (
+                  <Link href="/" onClick={() => {
+                    try { sessionStorage.setItem("gitbot-marketplace-installed-bot", installedBot.id); } catch {}
+                  }}>Open workspace →</Link>
+                ) : installState !== "idle" ? "Installing…" : "Add to your workspace"}
               </div>
               {installErrors[bot.name] && <p className="bot-details-install-error" role="alert">{installErrors[bot.name]}</p>}
             </div>

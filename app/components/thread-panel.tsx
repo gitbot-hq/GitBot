@@ -142,7 +142,6 @@ export default function ThreadPanel({
             <h2>
               What should <BotName color={avatar.color}>{bot.name}</BotName> work on?
             </h2>
-            <p>Choose a workspace and AI to get started.</p>
           </div>
         </header>
 

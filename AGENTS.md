@@ -72,6 +72,23 @@ Frontend-only Next.js 16 + React + Tailwind v4 + TypeScript repo. The backend is
   only; `mascot-art.tsx` stays (logo imports its faces), `logo.tsx` exports both
   `Logo` and `LogoMark`.
 - Avatar prefs: `app/lib/avatar-prefs.ts` (localStorage, frontend-only).
+
+### Note for Anil/Madhan: include mascot details in share codes (pending)
+
+Bot share codes currently omit the mascot: its body ID (`mascot`) and color
+live only in local avatar preferences. The import preview therefore cannot
+show the original mascot, and importing does not preserve its appearance.
+
+When implementing this, include the mascot body ID and color in the JSON
+payload encoded as Base64URL after `gitbot:v1:` (`app/lib/share.ts`). Validate
+both fields on import, show the mascot in the import preview, and save its
+appearance under the newly created bot's ID using `avatar-prefs.ts`. Keep
+older codes without mascot details working with the existing defaults.
+Preserve the share field allowlist and exclusions for chats and machine-local
+state. This is a pending implementation note, not an implemented feature.
+
+### Other local preferences
+
 - User profiles are localStorage-only (`gitbot-user`); email verification is a
   placeholder for a future server capability, not something to grant in client UI.
 - Theme (`gitbot-theme`) and panel widths (`gitbot-v2-side-width`,

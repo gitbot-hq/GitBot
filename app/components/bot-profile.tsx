@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { PanelBack } from "./panel-controls";
+import ShareDropdown from "./share-dropdown";
 import BotFace from "./bot-face";
 import { getThreads } from "../lib/api";
 import type { Bot, ThreadFull } from "../lib/gitbot";
@@ -92,9 +93,11 @@ export default function BotProfile({
   pref: AvatarPref;
   onBack: () => void;
   onEdit: () => void;
-  onShare: () => void;
+  onShare: (view: "code") => void;
   active?: boolean;
 }) {
+  const [shareOpen, setShareOpen] = useState(false);
+  useEffect(() => { if (!active) setShareOpen(false); }, [active]);
   const [threads, setThreads] = useState<ThreadFull[] | null>(null);
 
   useEffect(() => {
@@ -114,11 +117,11 @@ export default function BotProfile({
 
   useEffect(() => {
     function esc(ev: KeyboardEvent) {
-      if (active && ev.key === "Escape") onBack();
+      if (active && !shareOpen && ev.key === "Escape") onBack();
     }
     document.addEventListener("keydown", esc);
     return () => document.removeEventListener("keydown", esc);
-  }, [active, onBack]);
+  }, [active, onBack, shareOpen]);
 
   const chat = (threads ?? []).filter((t) => t.kind !== "setup");
   const setupPending = !!bot.setupInstructions && bot.setupStatus !== "complete";
@@ -164,9 +167,7 @@ export default function BotProfile({
           {bot.description ? <p>{bot.description}</p> : null}
         </div>
         <div className="profile-acts">
-          <button type="button" className="btn-primary" onClick={onShare}>
-            Share bot
-          </button>
+          <ShareDropdown open={shareOpen} onOpenChange={setShareOpen} onShare={onShare} label />
           <button type="button" className="btn-secondary" onClick={onEdit}>
             Edit
           </button>

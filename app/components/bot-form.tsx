@@ -261,7 +261,7 @@ export default function BotForm({
     <PanelBack onClick={onClose} disabled={busy} />
     <div className="modal inline" aria-label={editing ? "Edit bot" : "Create bot"}>
       {guard && switchTo && (
-        <div className="backdrop">
+        <div className="backdrop" onClick={(event) => { if (event.target === event.currentTarget && !busy) cancelGuard(); }}>
           <div
             className="modal"
             role="dialog"

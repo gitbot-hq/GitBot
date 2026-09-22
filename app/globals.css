@@ -347,13 +347,13 @@ pre {
   position: absolute;
   inset: 0 0 auto;
   z-index: 0;
-  height: 112px;
+  height: var(--scroll-edge-height, 112px);
   opacity: 0;
   background: rgb(255 255 255 / 0.001);
   -webkit-backdrop-filter: blur(4px) saturate(1.15);
   backdrop-filter: blur(4px) saturate(1.15);
-  -webkit-mask-image: linear-gradient(to bottom, #000 0 48px, transparent 112px);
-  mask-image: linear-gradient(to bottom, #000 0 48px, transparent 112px);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0 var(--scroll-edge-solid, 48px), transparent var(--scroll-edge-height, 112px));
+  mask-image: linear-gradient(to bottom, #000 0 var(--scroll-edge-solid, 48px), transparent var(--scroll-edge-height, 112px));
   transition: opacity 240ms cubic-bezier(0.22, 1, 0.36, 1);
   pointer-events: none;
 }
@@ -605,14 +605,14 @@ pre {
 
 .chat-scroll-edge-top {
   top: 0;
-  -webkit-mask-image: linear-gradient(to bottom, #000 0 48px, transparent 112px);
-  mask-image: linear-gradient(to bottom, #000 0 48px, transparent 112px);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0 var(--scroll-edge-solid, 48px), transparent var(--scroll-edge-height, 112px));
+  mask-image: linear-gradient(to bottom, #000 0 var(--scroll-edge-solid, 48px), transparent var(--scroll-edge-height, 112px));
 }
 
 .chat-scroll-edge-bottom {
   bottom: 0;
-  -webkit-mask-image: linear-gradient(to top, #000 0 48px, transparent 112px);
-  mask-image: linear-gradient(to top, #000 0 48px, transparent 112px);
+  -webkit-mask-image: linear-gradient(to top, #000 0 var(--scroll-edge-solid, 48px), transparent var(--scroll-edge-height, 112px));
+  mask-image: linear-gradient(to top, #000 0 var(--scroll-edge-solid, 48px), transparent var(--scroll-edge-height, 112px));
 }
 
 .chat-scroll-edge.is-visible { opacity: 1; }
@@ -1260,7 +1260,9 @@ pre {
   display: grid;
   place-items: center;
   padding: var(--space-4);
-  background: rgb(0 0 0 / 0.45);
+  background: rgb(0 0 0 / 0.55);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
   overflow-y: auto;
 }
 
@@ -1281,7 +1283,7 @@ pre {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--space-6);
 }
 
 .modal-head h2 {
@@ -1546,11 +1548,46 @@ pre {
 
 .share-method-arrow { color: var(--muted); }
 
-.share-flow-back {
-  margin: -6px 0 var(--space-4);
+.modal:has(.share-code-content) > .modal-head {
+  margin-inline: calc(-1 * var(--space-6));
+  padding-inline: var(--space-6);
 }
-
-.modal .share-code-field { margin-bottom: var(--space-3); }
+.modal-head:has(.back-btn) { justify-content: flex-start; gap: var(--space-2); }
+.modal-head:has(.back-btn) h2 { flex: 1; }
+.modal-head:has(.share-code-intro) { flex-wrap: wrap; row-gap: 0; }
+.share-code-intro { flex-basis: 100%; margin-top: 0; }
+.share-code-intro > p { margin: 0; font-size: 15px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.text-action.share-learn-more { display: inline; margin: 0; padding: 0; font: inherit; color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.text-action.share-learn-more:hover { background: transparent; }
+.share-bot-summary { display: flex; align-items: center; gap: var(--space-4); padding: var(--space-4); margin-bottom: var(--space-3); border-radius: var(--radius-md); background: var(--surface-2); }
+.share-bot-summary > div { min-width: 0; overflow-wrap: anywhere; }
+.share-bot-summary h3 { margin: 0; font-size: 20px; line-height: 1.3; letter-spacing: -.02em; font-weight: 600; }
+.share-bot-summary p { margin: var(--space-2) 0 0; color: var(--muted); font-size: 14px; line-height: 1.5; white-space: pre-line; }
+.share-intro strong { color: var(--text); font-weight: 500; overflow-wrap: anywhere; }
+.modal .share-code-field { position: relative; margin: 0 0 var(--space-3); padding: 0; gap: 0; overflow: hidden; background: var(--surface-2); border: 0; border-radius: var(--radius-md); }
+.modal .share-code-field > label { position: absolute; inset: 0 0 auto; z-index: 2; padding: var(--space-4) var(--space-4) var(--space-2); pointer-events: none; }
+.modal .share-code-field:focus-within { outline: 1px solid var(--muted); outline-offset: 2px; }
+.share-code-viewport { position: relative; border-radius: inherit; clip-path: inset(0 round var(--radius-md)); --scroll-edge-height: 24px; --scroll-edge-solid: 6px; }
+.share-code-viewport .chat-scroll-edge-top { --scroll-edge-height: 48px; --scroll-edge-solid: 32px; }
+.share-code-viewport .chat-scroll-edge { background: color-mix(in srgb, var(--surface-2) 80%, transparent); }
+.share-code-viewport textarea { display: block; }
+.share-code-format { margin-left: auto; color: var(--muted); font-size: var(--text-xs); font-weight: 400; }
+.modal .share-code-field textarea { height: 144px; min-height: 144px; resize: none; padding: 44px var(--space-4) var(--space-4); background: transparent; color: var(--muted); border: 0; border-radius: 0; }
+.share-copy-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-3); margin-top: var(--space-3); margin-bottom: 0; }
+.share-copy-privacy { display: flex; flex: 1 1 220px; align-items: flex-start; gap: var(--space-2); margin-right: auto; color: var(--muted); font-size: var(--text-xs); line-height: 1.5; }
+.share-privacy-icon { display: grid; place-items: center; flex: none; width: 36px; height: 36px; background: var(--surface-2); border-radius: var(--radius-sm); }
+.share-privacy-icon svg path:first-child { fill: currentColor; }
+.share-privacy-icon svg path:last-child { stroke: #000; }
+.share-copy-privacy p { margin: 0; }
+.share-copy-status { color: var(--muted); font-size: var(--text-xs); }
+.import-content { display: grid; gap: var(--space-6); }
+.import-content .share-code-field, .import-content > .share-bot-summary, .import-content > .share-copy-actions, .import-content > .chat-error { margin: 0; }
+.share-copy-button { display: grid; flex: none; }
+.share-copy-button > span { grid-area: 1 / 1; display: flex; align-items: center; justify-content: center; gap: var(--space-2); transition: opacity 180ms ease, transform 180ms ease; }
+.share-copy-button > span:last-child { opacity: 0; transform: translateY(4px); }
+.share-copy-button[data-copied="true"] > span:first-child { opacity: 0; transform: translateY(-4px); }
+.share-copy-button[data-copied="true"] > span:last-child { opacity: 1; transform: translateY(0); }
+@media (prefers-reduced-motion: reduce) { .share-copy-button > span { transition: none; transform: none !important; } }
 
 @media (max-width: 520px) {
   .share-method {
@@ -2991,8 +3028,9 @@ button.file-chip:hover {
 
 .jump-latest {
   position: absolute;
-  right: var(--space-6);
+  left: 50%;
   bottom: 104px;
+  transform: translateX(-50%);
   z-index: 2;
   display: inline-flex;
   align-items: center;
@@ -3018,6 +3056,12 @@ button.file-chip:hover {
   display: flex;
   gap: var(--space-1);
   margin-top: var(--space-2);
+}
+
+.copy-reply-error {
+  align-self: center;
+  color: var(--danger);
+  font-size: var(--text-xs);
 }
 
 .icon-btn {
@@ -3216,6 +3260,8 @@ button.file-chip:hover {
   align-items: center;
   gap: var(--space-5);
   margin-bottom: var(--space-8);
+  padding-bottom: var(--space-6);
+  border-bottom: 1px solid var(--border);
 }
 
 .thread-pane-head > .bot-avatar {
@@ -3805,8 +3851,8 @@ button.file-chip:hover {
   background: rgb(255 255 255 / 0.001);
   -webkit-backdrop-filter: blur(4px) saturate(1.15);
   backdrop-filter: blur(4px) saturate(1.15);
-  -webkit-mask-image: linear-gradient(to bottom, #000 0 48px, transparent 112px);
-  mask-image: linear-gradient(to bottom, #000 0 48px, transparent 112px);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0 var(--scroll-edge-solid, 48px), transparent var(--scroll-edge-height, 112px));
+  mask-image: linear-gradient(to bottom, #000 0 var(--scroll-edge-solid, 48px), transparent var(--scroll-edge-height, 112px));
   transition: opacity 240ms cubic-bezier(0.22, 1, 0.36, 1);
   pointer-events: none;
 }

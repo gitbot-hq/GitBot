@@ -1,40 +1,76 @@
 "use client";
 
 import AnimatedActionIcon from "./animated-action-icon";
+import BotFace from "./bot-face";
+import BotName from "./bot-name";
+import { botTile } from "./bot-avatar";
+import { defaultMascotFor, getAvatarPref, resolveAvatar } from "../lib/avatar-prefs";
 import { ArrowRightIcon } from "@animateicons/react/lucide/arrow-right-icon";
 import { CheckIcon } from "@animateicons/react/lucide/check-icon";
-import { CodeIcon } from "@animateicons/react/lucide/code-icon";
 import { CopyIcon } from "@animateicons/react/lucide/copy-icon";
+import { CodeIcon } from "@animateicons/react/lucide/code-icon";
 import { StoreIcon } from "@animateicons/react/lucide/store-icon";
+import { ShieldCheckIcon } from "@animateicons/react/lucide/shield-check-icon";
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { BackButton, CloseButton } from "./panel-controls";
 import { parseShare, shareCode, sharePrefix } from "../lib/share";
+import { useScrollEdge } from "../lib/use-scroll-edge";
 import type { Bot } from "../lib/gitbot";
 
 function Shell({
   title,
   onClose,
+  onBack,
+  headerContent,
   children,
 }: {
   title: string;
   onClose: () => void;
+  onBack?: () => void;
+  headerContent?: React.ReactNode;
   children: React.ReactNode;
 }) {
-  useEffect(() => {
-    function esc(ev: KeyboardEvent) {
-      if (ev.key === "Escape") onClose();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    return () => { if (opener?.isConnected) opener.focus(); };
+  }, []);
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    (dialog?.querySelector<HTMLElement>("[data-initial-focus]") ?? dialog?.querySelector<HTMLElement>("button"))?.focus();
+  }, [title]);
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+      return;
     }
-    document.addEventListener("keydown", esc);
-    return () => document.removeEventListener("keydown", esc);
-  }, [onClose]);
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), a[href], textarea:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])',
+    ) ?? []);
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last?.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first?.focus();
+    }
+  }
   return (
-    <div className="backdrop">
-      <div className="modal" role="dialog" aria-modal="true" aria-label={title}>
+    <div className="backdrop" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <div ref={dialogRef} className="modal" role="dialog" aria-modal="true" aria-label={title} onKeyDown={handleKeyDown}>
         <div className="modal-head">
+          {onBack && <BackButton onClick={onBack} aria-label="Back to sharing options">{null}</BackButton>}
           <h2>{title}</h2>
           <CloseButton onClick={onClose} />
+          {headerContent}
         </div>
         {children}
       </div>
@@ -53,32 +89,50 @@ export function ShareModal({
   initialView?: "options" | "code";
 }) {
   const [view, setView] = useState<"options" | "code">(initialView);
-  const [blocked, setBlocked] = useState(false);
-  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current); }, []);
+  const codeRef = useRef<HTMLTextAreaElement>(null);
+  const scrollEdge = useScrollEdge(codeRef, `${view}:${bot.id}`);
   const code = shareCode(bot as unknown as Record<string, unknown>);
   async function copyCode() {
-    setBlocked(false);
     try {
       await navigator.clipboard.writeText(code);
-      setCopiedCode(code);
+      setCopyError(false);
+      setCopied(true);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(false), 2500);
     } catch {
-      setCopiedCode(null);
-      setBlocked(true);
+      setCopied(false);
+      setCopyError(true);
+      codeRef.current?.focus();
+      codeRef.current?.select();
     }
   }
+  const avatar = resolveAvatar(getAvatarPref(bot.id), { mascot: defaultMascotFor(bot.id), color: botTile(bot.id) });
   return (
-    <Shell title={`Share ${bot.name}`} onClose={onClose}>
+    <Shell
+      title={view === "code" ? "Share with code" : `Share ${bot.name}`}
+      headerContent={view === "code" ? (
+          <div className="share-code-intro">
+            <p>Copy this code to share <BotName color={avatar.color}>{bot.name}</BotName> with anyone. <button type="button" className="text-action share-learn-more">Learn more</button></p>
+          </div>
+      ) : undefined}
+      onClose={onClose}
+      onBack={view === "code" && initialView === "options" ? () => setView("options") : undefined}
+    >
       {view === "options" ? (
         <>
           <p className="share-intro">Choose how you want to share this bot.</p>
           <div className="share-methods">
-            <button type="button" className="share-method" onClick={() => setView("code")} autoFocus>
+            <button type="button" className="share-method" onClick={() => setView("code")} data-initial-focus>
               <span className="share-method-icon" aria-hidden="true">
                 <AnimatedActionIcon icon={CodeIcon} size={19} />
               </span>
               <span className="share-method-copy">
                 <strong>Share with code</strong>
-                <span>Copy a private code someone else can use to import the bot.</span>
+                <span>Send a code someone else can use to import the bot.</span>
               </span>
               <AnimatedActionIcon icon={ArrowRightIcon} className="share-method-arrow" size={17} aria-hidden="true" />
             </button>
@@ -98,32 +152,46 @@ export function ShareModal({
         </>
       ) : (
         <>
-          <BackButton className="share-flow-back" onClick={() => setView("options")}>Sharing options</BackButton>
-          {blocked && (
-            <p className="chat-error" role="alert">
-              Copying was blocked by the browser. Select the code below and copy it manually.
-            </p>
-          )}
-          <div className="field share-code-field">
-            <label htmlFor="bot-share-code">Share code</label>
-            <textarea
-              id="bot-share-code"
-              className="code"
-              readOnly
-              value={code}
-              onFocus={(e) => e.target.select()}
-              aria-label="Share code"
-            />
+          <div className="share-bot-summary">
+            <BotFace mascot={avatar.mascot} color={avatar.color} size={72} />
+            <div>
+              <h3>{bot.name}</h3>
+              {bot.description?.trim() && <p>{bot.description}</p>}
+            </div>
           </div>
-          <p className="copy-status" role="status">{copiedCode === code ? "Code copied to clipboard" : "Anyone with this code can import the bot. Chat history is not included."}</p>
-          <div className="acts">
-            <div className="spacer" />
-            <button type="button" className="btn-primary" onClick={copyCode}>
-              {copiedCode === code ? <AnimatedActionIcon icon={CheckIcon} size={16} aria-hidden="true" /> : <AnimatedActionIcon icon={CopyIcon} size={16} aria-hidden="true" />}
-              {copiedCode === code ? "Copied" : "Copy code"}
-            </button>
-            <button type="button" className="btn-secondary" onClick={onClose}>
-              Done
+          <div className="share-code-content">
+            <div className="field share-code-field">
+              <label htmlFor="bot-share-code">Bot code<span className="share-code-format">Base64URL</span></label>
+              <div className="share-code-viewport">
+              <div className={`chat-scroll-edge chat-scroll-edge-top${scrollEdge === "top" ? " is-visible" : ""}`} aria-hidden="true" />
+              <textarea
+                ref={codeRef}
+                id="bot-share-code"
+                className="code"
+                readOnly
+                rows={3}
+                spellCheck={false}
+                value={code}
+                onFocus={(e) => e.target.select()}
+                aria-describedby="share-code-privacy"
+              />
+              <div className={`chat-scroll-edge chat-scroll-edge-bottom${scrollEdge === "bottom" ? " is-visible" : ""}`} aria-hidden="true" />
+              </div>
+            </div>
+          </div>
+          <div className="share-copy-actions">
+            <div className="share-copy-privacy">
+              <span className="share-privacy-icon" style={{ color: avatar.color }} aria-hidden="true">
+                <AnimatedActionIcon icon={ShieldCheckIcon} size={22} />
+              </span>
+              <div>
+                <p id="share-code-privacy">Only bot settings and instructions are shared.<br />Chats and local files stay private.</p>
+                <span className="share-copy-status" role="status">{copyError ? "Select the code and copy it manually." : ""}</span>
+              </div>
+            </div>
+            <button type="button" className="btn-primary share-copy-button" data-initial-focus data-copied={copied} onClick={copyCode} aria-label={copied ? "Copied" : "Copy code"}>
+              <span aria-hidden="true"><AnimatedActionIcon icon={CopyIcon} size={16} />Copy code</span>
+              <span aria-hidden="true"><AnimatedActionIcon icon={CheckIcon} size={16} />Copied</span>
             </button>
           </div>
         </>
@@ -141,45 +209,62 @@ export function ImportModal({
   onAdd: (bot: Record<string, unknown>) => void;
 }) {
   const [text, setText] = useState("");
+  const codeRef = useRef<HTMLTextAreaElement>(null);
+  const scrollEdge = useScrollEdge(codeRef);
   const parsed = text.trim() ? parseShare(text) : null;
   const bad = text.trim() !== "" && !parsed;
   return (
-    <Shell title="Import bot" onClose={onClose}>
-      <div className="field">
-        <label>
-          Share code<span className="hint"> paste what someone shared with you</span>
-        </label>
-        <textarea
-          className="code"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder={`${sharePrefix()}…`}
-          aria-label="Share code"
-        />
+    <Shell title="Import bot" onClose={onClose} headerContent={
+      <div className="share-code-intro">
+        <p>Paste a bot code to preview it before importing. <button type="button" className="text-action share-learn-more">Learn more</button></p>
       </div>
+    }>
+      <div className="import-content">
+      <div className="share-code-content">
+        <div className="field share-code-field">
+          <label htmlFor="bot-import-code">Bot code<span className="share-code-format">Base64URL / JSON</span></label>
+          <div className="share-code-viewport">
+            <div className={`chat-scroll-edge chat-scroll-edge-top${scrollEdge === "top" ? " is-visible" : ""}`} aria-hidden="true" />
+            <textarea
+              ref={codeRef}
+              id="bot-import-code"
+              className="code"
+              data-initial-focus
+              spellCheck={false}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder={`${sharePrefix()}…`}
+              aria-invalid={bad}
+              aria-describedby={bad ? "bot-import-error" : undefined}
+            />
+            <div className={`chat-scroll-edge chat-scroll-edge-bottom${scrollEdge === "bottom" ? " is-visible" : ""}`} aria-hidden="true" />
+          </div>
+        </div>
+      </div>
+      {bad && <p className="chat-error" id="bot-import-error" role="alert">This code isn’t valid. Check that you copied the entire bot code.</p>}
       {parsed && (
-        <div className="preview">
-          <div className="nm">{String(parsed.name)}</div>
-          <div className="ds">{String(parsed.description || "No description.")}</div>
-          {typeof parsed.setupInstructions === "string" && parsed.setupInstructions.trim() !== "" && (
-            <div className="ds">Needs setup on this machine — a setup thread starts when you add it.</div>
-          )}
+        <div className="share-bot-summary" aria-live="polite">
+          <span className="share-method-icon" aria-hidden="true"><AnimatedActionIcon icon={CodeIcon} size={24} /></span>
+          <div>
+            <h3>{String(parsed.name)}</h3>
+            {typeof parsed.description === "string" && parsed.description.trim() && <p>{parsed.description}</p>}
+            {typeof parsed.setupInstructions === "string" && parsed.setupInstructions.trim() !== "" && (
+              <p>Needs setup on this machine — a setup thread starts when you add it.</p>
+            )}
+          </div>
         </div>
       )}
-      {bad && <div className="preview"><div className="bad">That does not look like a bot share code.</div></div>}
-      <div className="acts">
-        <div className="spacer" />
-        <button type="button" className="btn-secondary" onClick={onClose}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="btn-primary"
-          disabled={!parsed}
-          onClick={() => parsed && onAdd(parsed)}
-        >
+      <div className="share-copy-actions">
+        <div className="share-copy-privacy">
+          <span className="share-privacy-icon" style={{ color: "var(--brand-sun)" }} aria-hidden="true">
+            <AnimatedActionIcon icon={ShieldCheckIcon} size={22} />
+          </span>
+          <p>Only bot settings and instructions are imported.<br />No chat history or local files are transferred.</p>
+        </div>
+        <button type="button" className="btn-primary" disabled={!parsed} onClick={() => parsed && onAdd(parsed)}>
           Import bot
         </button>
+      </div>
       </div>
     </Shell>
   );

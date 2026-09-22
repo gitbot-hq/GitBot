@@ -7,13 +7,11 @@ import { ArrowUpRightIcon } from "@animateicons/react/lucide/arrow-up-right-icon
 import { DownloadIcon } from "@animateicons/react/lucide/download-icon";
 
 
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import Link from "../components/page-link";
 import { useUserProfile } from "../components/app-providers";
 
-import { UsersIcon, type UsersIconHandle } from "@animateicons/react/lucide/users-icon";
-import { ShieldCheckIcon, type ShieldCheckIconHandle } from "@animateicons/react/lucide/shield-check-icon";
-import { BoltIcon, type BoltIconHandle } from "@animateicons/react/lucide/bolt-icon";
+import { ShieldCheckIcon } from "@animateicons/react/lucide/shield-check-icon";
 import { useScrollEdge } from "../lib/use-scroll-edge";
 import MarketplaceAuthor from "../components/marketplace-author";
 import ThemeButton from "../components/theme-button";
@@ -44,27 +42,11 @@ const GITBOT_TEAM_BOTS: PopularBot[] = [
 // 0.5s: One confident promise in generous space, followed by three quiet reasons to trust it.
 export default function MarketplacePage() {
   const marketplaceBodyRef = useRef<HTMLDivElement>(null);
-  const usersIconRef = useRef<UsersIconHandle>(null);
-  const shieldIconRef = useRef<ShieldCheckIconHandle>(null);
-  const boltIconRef = useRef<BoltIconHandle>(null);
   const { user, saveUser: savedUser } = useUserProfile();
   const [userOpen, setUserOpen] = useState(false);
   const scrollEdge = useScrollEdge(marketplaceBodyRef);
   const [selectedBot, setSelectedBot] = useState<MarketplaceBot | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
-
-
-  // Match each icon's movement to its card's entrance in the one-second sequence.
-  useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const timers = [
-      window.setTimeout(() => usersIconRef.current?.startAnimation(), 340),
-      window.setTimeout(() => shieldIconRef.current?.startAnimation(), 420),
-      window.setTimeout(() => boltIconRef.current?.startAnimation(), 500),
-    ];
-    return () => timers.forEach((timer) => window.clearTimeout(timer));
-  }, []);
-
 
 
   function trackMarketplaceBot(event: ReactPointerEvent<HTMLSpanElement>) {
@@ -139,23 +121,23 @@ export default function MarketplacePage() {
             </div>
             <h1 id="marketplace-heading">Find GitBots you can trust.</h1>
             <p>
-              Discover GitBots for your workflow. Explore their instructions and make them your own.
+              Explore each GitBot&apos;s instructions before making it your own.
             </p>
           </section>
 
           <section className="marketplace-benefits" aria-label="Marketplace benefits">
             <article className="marketplace-benefit">
-              <UsersIcon ref={usersIconRef} size={20} duration={0.45} color="var(--text)" aria-hidden="true" />
+              <span className="marketplace-benefit-art community" aria-hidden="true" />
               <h2>Community-built, GitBot-ready</h2>
               <p>Useful helpers made by people who understand the work around a repo.</p>
             </article>
             <article className="marketplace-benefit">
-              <ShieldCheckIcon ref={shieldIconRef} size={20} duration={0.45} color="var(--text)" aria-hidden="true" />
+              <span className="marketplace-benefit-art permissions" aria-hidden="true" />
               <h2>Permissions you control</h2>
               <p>New marketplace installs start with permission checks enabled.</p>
             </article>
             <article className="marketplace-benefit">
-              <BoltIcon ref={boltIconRef} size={20} duration={0.45} color="var(--text)" aria-hidden="true" />
+              <span className="marketplace-benefit-art install" aria-hidden="true" />
               <h2>Install in a few clicks</h2>
               <p>Bring a new GitBot into your workspace without breaking your flow.</p>
             </article>

@@ -105,7 +105,7 @@
 
 .marketplace-hero p {
   max-width: 680px;
-  margin: var(--space-8) 0 0;
+  margin: var(--space-5) 0 0;
   color: var(--muted);
   font-size: var(--market-text-lead);
   line-height: 1.5;
@@ -116,7 +116,10 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-8);
-  margin-top: clamp(72px, 9vh, 96px);
+  margin-top: clamp(40px, 5vh, 56px);
+  padding: var(--space-8);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
 }
 
 .marketplace-benefit {
@@ -131,6 +134,22 @@
 .marketplace-benefit:nth-child(3) {
   animation-delay: 500ms;
 }
+
+.marketplace-benefit-art {
+  display: block;
+  width: 90px;
+  height: 90px;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+
+.marketplace-benefit-art.community { background-image: url("/marketplace/community-light.webp"); }
+.marketplace-benefit-art.permissions { background-image: url("/marketplace/permissions-light.webp"); }
+.marketplace-benefit-art.install { background-image: url("/marketplace/install-light.webp"); }
+[data-theme="dark"] .marketplace-benefit-art.community { background-image: url("/marketplace/community-dark.webp"); }
+[data-theme="dark"] .marketplace-benefit-art.permissions { background-image: url("/marketplace/permissions-dark.webp"); }
+[data-theme="dark"] .marketplace-benefit-art.install { background-image: url("/marketplace/install-dark.webp"); }
 
 .marketplace-benefit h2 {
   margin: var(--space-4) 0 0;
@@ -446,7 +465,8 @@
   .marketplace-benefits {
     grid-template-columns: 1fr;
     gap: var(--space-8);
-    margin-top: 64px;
+    margin-top: 40px;
+    padding: var(--space-6);
   }
 
   .marketplace-popular {
