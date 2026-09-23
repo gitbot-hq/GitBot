@@ -1,0 +1,32 @@
+{
+  "name": "gitbot-landing",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build --webpack",
+    "start": "next start",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@animateicons/react": "^0.5.0",
+    "@tabler/icons-react": "^3.46.0",
+    "flubber": "^0.4.2",
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "latest",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "eslint": "latest",
+    "eslint-config-next": "latest",
+    "svgpath": "^2.6.0",
+    "tailwindcss": "latest",
+    "typescript": "latest"
+  }
+}

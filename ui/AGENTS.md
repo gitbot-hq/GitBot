@@ -10,14 +10,15 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 # GitBot UI — agent guide
 
-Frontend-only Next.js 16 + React + Tailwind v4 + TypeScript repo. The backend is
-**not here**: it's the read-only `gitbot-ai` npm package
-(`/opt/homebrew/lib/node_modules/gitbot-ai` — never edit). Run it with
-`gitbot start -p 3100 -l`; its state lives in `~/.gitbot` (`bots.json`, `threads.json`).
+Next.js 16 + React + Tailwind v4 + TypeScript UI for the GitBot CLI repository.
+The backend lives in the repository root under `src/`, serves the static export,
+and stores machine-local state in `~/.gitbot` (`bots.json`, `threads.json`).
 
 ## Commands
 
-- `npm run dev` → `:3000` (expects backend on `:3100`).
+- From `ui/`, `npm run dev` starts the standalone Next.js development server.
+- From the repository root, `npm run dev` starts the GitBot backend and
+  `npm run build` builds both the CLI and the static UI export.
 - `npm run build` uses `next build --webpack`; `npm start` serves the production build.
 - `npx tsc --noEmit` must stay clean (no typecheck script; README mandates it).
 - `npm run lint` is broken repo-wide (no `eslint.config.*` — fails whether or not
@@ -29,13 +30,10 @@ Frontend-only Next.js 16 + React + Tailwind v4 + TypeScript repo. The backend is
 ## Architecture (where things live)
 
 - Entry: `app/page.tsx` → `app/components/app-shell.tsx` (bots sidebar + threads + chat/tray). Theme in `app/v2-theme.css`.
-- HTTP boundary: `app/lib/api.ts` is the **only** fetch layer (same-origin
-  `BASE = "/api/gitbot"`); `app/lib/gitbot.ts` is frontend-only types mirroring
+- HTTP boundary: `app/lib/api.ts` is the **only** fetch layer (same-origin API);
+  `app/lib/gitbot.ts` is frontend-only types mirroring
   server routes — no fetches there. Use existing service endpoints through the
   adapter; never invent new backend endpoints or implement backend capabilities here.
-- Proxy: `app/api/gitbot/[...path]/route.ts` forwards to `$GITBOT_URL` (default
-  `http://localhost:3100`), incl. SSE passthrough. Exists only because the local
-  test browser can't hit `:3100` directly.
 - No CI, no `opencode.json`.
 - Live chat: `app/components/chat.tsx` (SSE via `streamUrl(sessionId)`, approvals,
   markdown). Bot studio: `bot-form.tsx`; profile: `bot-profile.tsx`;
@@ -64,8 +62,8 @@ Frontend-only Next.js 16 + React + Tailwind v4 + TypeScript repo. The backend is
 
 ## Conventions for new changes
 
-- **Merge rule: frontend-only, zero new backend surface.** Additions go in
-  `app/components/` + `app/lib/`; components take props, HTTP stays in `api.ts`.
+- UI additions go in `app/components/` + `app/lib/`; components take props and
+  HTTP stays in `api.ts`. Backend changes belong in the repository root `src/`.
 - `app/components/bot-maker/` (live `BotMascot`: 18 bodies, 12 expressions) was
   adopted verbatim — integrate by wrapping, don't refactor.
 - Old mascot set (`mascots/`, `studio-mascots.tsx`) renders on internal demo pages
@@ -116,5 +114,3 @@ state. This is a pending implementation note, not an implemented feature.
   boundaries (see `.page.v2`).
 - `confirm()` dialogs need `pg.on('dialog', accept)` in tests. AI e2e turns cost
   real backend runs — keep prompts tiny.
-- Known residue: an inert "Set up X-Bot" setup thread (no delete
-  endpoint; X-Bot itself restored byte-for-byte).

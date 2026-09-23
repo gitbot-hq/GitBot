@@ -1,9 +1,8 @@
-// HTTP adapter for the live GitBot server. Components never import this;
-// blank/page.tsx calls it and passes plain data down as props.
+// HTTP adapter for the live GitBot server. The CLI serves this exported UI
+// and the API from one origin, so requests stay relative to the current host.
+const BASE = "";
 
-// Same-origin proxy (app/api/gitbot/...) → live GitBot server.
-// The browser never talks cross-origin; Node forwards server-side.
-const BASE = "/api/gitbot";
+export type SessionPermissionMode = "ask-permissions" | "allow-all-edits" | "yolo";
 
 export class ApiError extends Error {
   status: number;
@@ -32,6 +31,10 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     );
   }
   return body as T;
+}
+
+export function getAgents() {
+  return req<{ agents: string[] }>("/agents");
 }
 
 export function getBots() {
@@ -92,6 +95,19 @@ export function postChat(threadId: string, prompt: string, permissionMode: ChatP
   });
 }
 
+export function patchPermissionMode(sessionId: string, permissionMode: SessionPermissionMode) {
+  return req<{ sessionId: string; permissionMode: SessionPermissionMode }>(
+    `/sessions/${encodeURIComponent(sessionId)}`,
+    { method: "PATCH", body: JSON.stringify({ permissionMode }) },
+  );
+}
+
+export function getSessionConfig(sessionId: string) {
+  return req<{ permissionMode: SessionPermissionMode }>(
+    `/sessions/${encodeURIComponent(sessionId)}/config`,
+  );
+}
+
 export function postPermission(
   sessionId: string,
   toolUseID: string,
@@ -121,6 +137,7 @@ export type BotInput = {
   model?: string;
   permissionMode?: string;
   allowedTools?: string[];
+  disallowedTools?: string[];
 };
 
 export function createBot(body: BotInput) {
@@ -139,6 +156,12 @@ export function patchBot(id: string, body: BotInput) {
 
 export function deleteBot(id: string) {
   return req<{ deleted: boolean }>(`/bots/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function deleteThread(id: string) {
+  return req<{ deleted: boolean }>(`/threads/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
 }
