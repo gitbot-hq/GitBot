@@ -4014,7 +4014,7 @@ button.file-chip:hover {
   gap: var(--space-2);
   width: 100%;
   min-width: 0;
-  padding: var(--space-2) 34px var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
   background: none;
   border: 0;
   border-radius: inherit;
@@ -4027,7 +4027,7 @@ button.file-chip:hover {
 .thread-kill {
   position: absolute;
   top: 50%;
-  right: 6px;
+  right: 7px;
   display: grid;
   place-items: center;
   width: 24px;
@@ -4039,13 +4039,15 @@ button.file-chip:hover {
   color: var(--muted);
   opacity: 0;
   cursor: pointer;
+  pointer-events: none;
   transform: translateY(-50%);
 }
 .thread-row:hover .thread-kill,
-.thread-row:focus-within .thread-kill { opacity: 1; }
+.thread-kill:focus-visible { opacity: 1; pointer-events: auto; }
+.thread-row:hover .thread-selected-mark,
+.thread-row:has(.thread-kill:focus-visible) .thread-selected-mark { opacity: 0; }
 .thread-kill:hover,
 .thread-kill:focus-visible { background: var(--surface-2); color: var(--danger); }
-@media (hover: none) { .thread-kill { opacity: 1; } }
 .thread-selected-mark { flex: none; margin-left: auto; }
 
 /* Keyboard actions keep a strong ring; editable fields use their own quiet border cue. */
