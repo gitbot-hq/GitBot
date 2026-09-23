@@ -109,7 +109,6 @@ function errText(e: unknown) {
 // Assistant markdown (GFM). Raw HTML is off by default — no XSS surface.
 function MarketplaceListingCard({ listing, color }: { listing: MarketplaceListing; color?: string }) {
   const facts = [
-    ["Category", listing.category],
     ["Agent", listing.agent],
     ["Permissions", listing.permissionMode],
   ].filter((fact): fact is [string, string] => !!fact[1]);
@@ -118,6 +117,7 @@ function MarketplaceListingCard({ listing, color }: { listing: MarketplaceListin
       <header className="marketplace-listing-head">
         <span className="marketplace-listing-emoji" aria-hidden="true">{listing.emoji || "🤖"}</span>
         <div>
+          {listing.category && <span className="marketplace-listing-category">{listing.category}</span>}
           <h3>{listing.name}</h3>
           <p>{listing.description}</p>
         </div>
@@ -133,7 +133,7 @@ function MarketplaceListingCard({ listing, color }: { listing: MarketplaceListin
       {!!listing.capabilities?.length && (
         <section className="marketplace-listing-section">
           <h4>Capabilities</h4>
-          <ul>{listing.capabilities.map((item) => <li key={item}>{item}</li>)}</ul>
+          <ul>{listing.capabilities.map((item) => <li key={item}><AnimatedActionIcon icon={CheckIcon} size={15} aria-hidden="true" /><span>{item}</span></li>)}</ul>
         </section>
       )}
       {listing.starterPrompt && <section className="marketplace-listing-section"><h4>Starter prompt</h4><blockquote>{listing.starterPrompt}</blockquote></section>}
