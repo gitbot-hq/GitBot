@@ -12,6 +12,10 @@ const destDir = join(root, "dist", "ui");
 
 // The pages users actually reach in the exported app.
 const REQUIRED = ["index.html", "onboarding.html", "marketplace.html", "v2.html", "404.html", "_next"];
+// Design tools that live in ui/app for `next dev` only (mascot lab, CTA
+// states, bot maker). They are dropped from the export so the package
+// never serves them.
+const INTERNAL_PAGES = ["bot-maker", "cta", "mascot-lab"];
 
 const run = (cmd) => execSync(cmd, { cwd: uiDir, stdio: "inherit" });
 
@@ -29,6 +33,12 @@ cpSync(outDir, destDir, {
   recursive: true,
   filter: (src) => !src.endsWith(".DS_Store"),
 });
+
+for (const page of INTERNAL_PAGES) {
+  for (const entry of [page, `${page}.html`, `${page}.txt`]) {
+    rmSync(join(destDir, entry), { recursive: true, force: true });
+  }
+}
 
 const missing = REQUIRED.filter((entry) => !existsSync(join(destDir, entry)));
 if (missing.length > 0) {

@@ -1,5 +1,5 @@
 // Kawaii face collection — inner artwork extracted from
-// public/kawaii-expressions/*.svg (hand-drawn flat kawaii set, expressionsv2).
+// Design/expressions/kawaii-expressions/*.svg (hand-drawn flat kawaii set, expressionsv2).
 // Fills are normalized to semantic classes (see kawaii.css):
 // .kf-ink (face ink, themable), .kf-white, .kf-blush, .kf-heart, .kf-star.
 // viewBox is preserved per face so each keeps its authored proportions.

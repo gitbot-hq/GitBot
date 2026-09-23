@@ -104,8 +104,10 @@ export default function BotForm({
   const [setupInstructions, setSetupInstructions] = useState(bot ? bot.setupInstructions || "" : "");
   const [repoPath, setRepoPath] = useState(bot ? bot.repoPath || "" : "");
   const [model, setModel] = useState(bot ? bot.model || "" : "");
+  // New bots ask first: auto-approve is opt-in, never the default a
+  // freshly imported or created bot runs tools with.
   const [permissionMode, setPermissionMode] = useState(
-    bot ? bot.permissionMode : "auto-approve",
+    bot ? bot.permissionMode : "ask-permissions",
   );
   const [allowedTools, setAllowedTools] = useState(
     bot && bot.allowedTools ? bot.allowedTools.join(", ") : "",

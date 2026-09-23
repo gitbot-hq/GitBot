@@ -1,4 +1,4 @@
-// Mascot artwork traced from the design files in public/figma-expressions/.
+// Mascot artwork traced from the design files in Design/expressions/figma-expressions/.
 // The silhouette is shared across expressions; eye whites + pupils are
 // per-expression. The body takes the bot's brand color via the `color`
 // prop — eyes stay white, pupils stay dark.

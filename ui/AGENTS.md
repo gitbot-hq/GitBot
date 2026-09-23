@@ -23,7 +23,8 @@ and stores machine-local state in `~/.gitbot` (`bots.json`, `threads.json`).
 - `npx tsc --noEmit` must stay clean (no typecheck script; README mandates it).
 - `npm run lint` is broken repo-wide (no `eslint.config.*` — fails whether or not
   your change is involved). Trust `npx tsc --noEmit` instead.
-- No test runner. Mascot morph math only: `node --test scripts/mascot-morph.test.mjs`.
+- No test runner. Small checks live in `scripts/*.test.mjs`; the ones that import
+  `.ts` need Node's type stripping: `node --experimental-strip-types --test scripts/*.test.mjs`.
 - Regenerate mascot art after `Design/Mascots2/` changes:
   `node scripts/import-mascots.mjs` (writes `app/components/bot-maker/artwork.json` + `morphs.json`).
 
@@ -46,7 +47,10 @@ and stores machine-local state in `~/.gitbot` (`bots.json`, `threads.json`).
   `public/notif/` (8 files: 4 states × light/dark).
 - Routes: `/` is the app (onboarding empty state when no bots);
   `/onboarding`, `/bot-maker`, `/mascot-lab`, `/cta`
-  are standalone/internal demos, not public.
+  are standalone/internal demos, not public. `scripts/build-ui.mjs` strips
+  `/bot-maker`, `/mascot-lab` and `/cta` from the shipped export.
+- Source art (Figma/kawaii expression SVGs, `creature-expressions.svg`) lives in
+  `Design/expressions/`, not `public/` — nothing loads it at runtime.
 - `/marketplace` is linked from the app. Its catalog, authors, and install counts
   are currently hardcoded UI data in `app/marketplace/page.tsx`, not a live catalog
   or installation service. Styles live in `app/marketplace/marketplace.css`.
@@ -71,7 +75,7 @@ and stores machine-local state in `~/.gitbot` (`bots.json`, `threads.json`).
   `Logo` and `LogoMark`.
 - Avatar prefs: `app/lib/avatar-prefs.ts` (localStorage, frontend-only).
 
-### Note for Anil/Madhan: include mascot details in share codes (pending)
+### Pending: include mascot details in share codes
 
 Bot share codes currently omit the mascot: its body ID (`mascot`) and color
 live only in local avatar preferences. The import preview therefore cannot
