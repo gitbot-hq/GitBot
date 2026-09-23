@@ -9,7 +9,7 @@ import { StoreIcon } from "@animateicons/react/lucide/store-icon";
 export function moveMenuFocus(event: React.KeyboardEvent<HTMLDivElement>) {
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     const items = Array.from(
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)'),
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not(:disabled), button[role="menuitemradio"]:not(:disabled)'),
     );
     if (!items.length) return;
     event.preventDefault();

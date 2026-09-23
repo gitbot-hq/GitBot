@@ -641,6 +641,8 @@ pre {
   mask-image: linear-gradient(to top, #000 0 var(--scroll-edge-solid, 48px), transparent var(--scroll-edge-height, 112px));
 }
 
+.chat > .chat-scroll-edge-bottom { bottom: 64px; }
+
 .chat-scroll-edge.is-visible { opacity: 1; }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1103,10 +1105,10 @@ pre {
 }
 
 .composer-pill {
-  display: flex;
-  /* Keep the composer actions docked to the lower edge as the textarea grows. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-end;
-  gap: var(--space-2);
+  column-gap: var(--space-2);
   padding: var(--space-2);
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1115,8 +1117,9 @@ pre {
 }
 
 .composer-pill textarea {
-  flex: 1;
+  grid-column: 1 / -1;
   min-width: 0;
+  min-height: 56px;
   padding: var(--space-2) 0 var(--space-2) var(--space-3);
   background: transparent;
   color: var(--text);
@@ -1133,6 +1136,63 @@ pre {
 .composer-pill textarea:disabled {
   opacity: 0.6;
 }
+
+.composer-permissions { position: relative; justify-self: start; min-width: 0; }
+.composer-permission-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  max-width: 100%;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 18px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.composer-permission-trigger:hover,
+.composer-permission-trigger.is-active { background: var(--surface-2); color: var(--text); }
+.composer-permission-trigger:focus-visible,
+.composer-permission-menu button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.composer-permission-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 60;
+  width: min(286px, calc(100vw - 48px));
+  padding: 6px;
+  background: var(--surface-active);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.24);
+}
+.composer-permission-menu-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px 10px; font-size: var(--text-sm); font-weight: 600; color: var(--muted); }
+.composer-permission-menu .composer-permission-learn-more { width: auto; min-height: 0; padding: 0; border: 0; background: none; color: var(--muted); font: inherit; font-weight: 500; cursor: pointer; }
+.composer-permission-menu .composer-permission-learn-more:hover { color: var(--text); text-decoration: underline; }
+.composer-permission-menu button[role="menuitemradio"] {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  min-height: 54px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.composer-permission-menu button[role="menuitemradio"]:hover { background: var(--surface-2); }
+.composer-permission-menu button[role="menuitemradio"][aria-checked="true"] { background: var(--surface); }
+.composer-permission-option-copy { display: grid; gap: 2px; flex: 1; }
+.composer-permission-option-copy strong { font-size: var(--text-md); font-weight: 600; }
+.composer-permission-option-copy small { font-size: var(--text-sm); color: var(--muted); }
+.composer-permission-menu p { margin: 6px 4px 2px; padding: 10px 6px 2px; border-top: 1px solid var(--border); color: var(--muted); font-size: var(--text-sm); line-height: 1.4; }
 
 .send-btn {
   flex: none;
@@ -3073,7 +3133,7 @@ button.file-chip:hover {
 .jump-latest {
   position: absolute;
   left: 50%;
-  bottom: 104px;
+  bottom: calc(100% + 12px);
   transform: translateX(-50%);
   z-index: 2;
   display: inline-flex;

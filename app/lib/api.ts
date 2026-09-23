@@ -77,11 +77,18 @@ export function browse(path?: string | null) {
   );
 }
 
+export type ChatPermissionMode = "ask-permissions" | "auto-approve" | "plan";
+
 /** Starts a turn. Returns the session id to stream + abort + approve on. */
-export function postChat(threadId: string, prompt: string) {
+export function postChat(threadId: string, prompt: string, permissionMode: ChatPermissionMode) {
   return req<{ sessionId: string }>("/chat", {
     method: "POST",
-    body: JSON.stringify({ threadId, prompt }),
+    body: JSON.stringify({
+      threadId,
+      prompt,
+      permissionMode: permissionMode === "ask-permissions" ? "ask-permissions" : "yolo",
+      mode: permissionMode === "plan" ? "plan" : "build",
+    }),
   });
 }
 

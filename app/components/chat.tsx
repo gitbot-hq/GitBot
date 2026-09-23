@@ -11,11 +11,15 @@ import { EllipsisIcon } from "@animateicons/react/lucide/ellipsis-icon";
 import { MessageSquarePlusIcon } from "@animateicons/react/lucide/message-square-plus-icon";
 import { RefreshCwIcon } from "@animateicons/react/lucide/refresh-cw-icon";
 import { UserIcon } from "@animateicons/react/lucide/user-icon";
+import { ShieldCheckIcon } from "@animateicons/react/lucide/shield-check-icon";
+import { ZapIcon } from "@animateicons/react/lucide/zap-icon";
+import { FileTextIcon } from "@animateicons/react/lucide/file-text-icon";
+import { ChevronDownIcon } from "@animateicons/react/lucide/chevron-down-icon";
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+
 import LoadingState from "./loading-state";
 import BotFace from "./bot-face";
 import BotName from "./bot-name";
@@ -28,6 +32,7 @@ import {
   postChat,
   postPermission,
   streamUrl,
+  type ChatPermissionMode,
 } from "../lib/api";
 import type { HistoryMsg, PermRequest, ThreadFull } from "../lib/gitbot";
 import type { AvatarPref } from "../lib/avatar-prefs";
@@ -113,7 +118,7 @@ function RichText({ text }: { text: string }) {
               : <span>{children}</span>,
         }}
       >
-        {text}
+      {text}
       </Markdown>
     </div>
   );
@@ -183,6 +188,17 @@ function ConversationEmptySkeleton({ withButton = false }: { withButton?: boolea
       {withButton && <i className="conversation-empty-skel-button" aria-hidden="true" />}
     </div>
   );
+}
+
+const permissionOptions = [
+  { mode: "ask-permissions", label: "Ask before tools", detail: "Approve each tool action.", icon: ShieldCheckIcon },
+  { mode: "auto-approve", label: "Auto-approve", detail: "Tools can run without asking.", icon: ZapIcon },
+  { mode: "plan", label: "Plan only", detail: "Explore without making edits.", icon: FileTextIcon },
+] as const;
+const threadPermissionKey = "gitbot-thread-permissions";
+
+function safePermissionMode(mode?: string): ChatPermissionMode {
+  return mode === "auto-approve" || mode === "plan" ? mode : "ask-permissions";
 }
 
 type SetupMode = {
@@ -267,6 +283,7 @@ export default function Chat({
   thread,
   botId,
   botName,
+  botPermissionMode,
   botAvatar,
   autoSend,
   onAutoSent,
@@ -274,6 +291,7 @@ export default function Chat({
   onWorkingChange,
   onActivityChange,
   onShare,
+  onLearnMorePermissions,
   onOpenBot,
   onNewThread,
   booting,
@@ -282,6 +300,7 @@ export default function Chat({
   thread: ThreadFull | null;
   botId?: string;
   botName: string;
+  botPermissionMode?: string;
   botAvatar?: AvatarPref;
   autoSend: string | null;
   onAutoSent: () => void;
@@ -291,6 +310,7 @@ export default function Chat({
    *  Lets the shell show what the bot is doing outside the chat. */
   onActivityChange?: (activity: string | null) => void;
   onShare?: (view?: "options" | "code") => void;
+  onLearnMorePermissions?: () => void;
   onOpenBot?: () => void;
   onNewThread?: () => void;
   /** True while the app is still loading bots/threads on boot. Shows a
@@ -319,10 +339,14 @@ export default function Chat({
   const [copyErrorId, setCopyErrorId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [escapeStopArmed, setEscapeStopArmed] = useState(false);
-  const [activeMenu, setActiveMenu] = useState<"share" | "more" | null>(null);
+  const [activeMenu, setActiveMenu] = useState<"share" | "more" | "permissions" | null>(null);
   const setShareOpen = useCallback((open: boolean) => setActiveMenu(open ? "share" : null), []);
   const moreButtonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const permissionButtonRef = useRef<HTMLButtonElement | null>(null);
+  const permissionMenuRef = useRef<HTMLDivElement | null>(null);
+  const permissionModesRef = useRef<Record<string, ChatPermissionMode>>({});
+  const [permissionModes, setPermissionModes] = useState<Record<string, ChatPermissionMode>>({});
 
   const esRef = useRef<EventSource | null>(null);
   const sessionRef = useRef<string | null>(null);
@@ -374,6 +398,18 @@ export default function Chat({
   const scrollEdge = useScrollEdge(scrollRef, thread?.id ?? "no-thread");
 
   useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(threadPermissionKey) ?? "{}");
+      if (!saved || typeof saved !== "object" || Array.isArray(saved)) return;
+      const modes = Object.fromEntries(
+        Object.entries(saved).filter(([, mode]) => permissionOptions.some((option) => option.mode === mode)),
+      ) as Record<string, ChatPermissionMode>;
+      permissionModesRef.current = modes;
+      setPermissionModes(modes);
+    } catch {}
+  }, []);
+
+  useEffect(() => {
     setActiveMenu(null);
   }, [thread?.id]);
 
@@ -415,6 +451,24 @@ export default function Chat({
       if (event.key !== "Escape") return;
       setActiveMenu(null);
       moreButtonRef.current?.focus();
+    }
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [activeMenu]);
+
+  useEffect(() => {
+    if (activeMenu !== "permissions") return;
+    const frame = window.requestAnimationFrame(() => {
+      permissionMenuRef.current?.querySelector<HTMLButtonElement>('button[aria-checked="true"]')?.focus();
+    });
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setActiveMenu(null);
+      permissionButtonRef.current?.focus();
     }
     document.addEventListener("keydown", closeOnEscape);
     return () => {
@@ -907,7 +961,11 @@ export default function Chat({
     stick.current = true;
     requestAnimationFrame(scrollDown);
     try {
-      const { sessionId } = await postChat(thread.id, prompt);
+      const { sessionId } = await postChat(
+        thread.id,
+        prompt,
+        permissionModesRef.current[thread.id] ?? safePermissionMode(botPermissionMode),
+      );
       if (threadRef.current !== thread.id) return;
       sessionRef.current = sessionId;
       openStream(sessionId);
@@ -1029,13 +1087,16 @@ export default function Chat({
         return !text.startsWith("[GitBot setup run]");
       })
     : msgs;
-
   const latestAssistant = [...msgs].reverse().find((message) => message.role === "assistant");
   const setupAwaitingInput = !!setup && (
     readSetupNeedsInput(liveTextRef.current) ||
     (!!latestAssistant && readSetupNeedsInput(msgText(latestAssistant)))
   );
   const showThreadEmpty = !loading && visibleMsgs.length === 0 && !historyError && !setup;
+  const permissionMode = thread
+    ? permissionModes[thread.id] ?? safePermissionMode(botPermissionMode)
+    : safePermissionMode(botPermissionMode);
+  const permissionOption = permissionOptions.find((option) => option.mode === permissionMode)!;
   useMascotPointerFollow({
     group: botId,
     enabled: !!botId && !setup && (!thread || showThreadEmpty),
@@ -1132,6 +1193,26 @@ export default function Chat({
     );
   }
 
+  const jumpLatest = !stuck && (
+    <button
+      type="button"
+      className="jump-latest"
+      onClick={() => {
+        const el = scrollRef.current;
+        el?.scrollTo({
+          top: el.scrollHeight,
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        });
+      }}
+      aria-label="Jump to latest"
+      data-tip="Jump to latest"
+      data-tip-pos="above"
+    >
+      <AnimatedActionIcon icon={ArrowDownIcon} size={15} aria-hidden="true" />
+      Latest
+    </button>
+  );
+
   return (
     <main className="chat" aria-label={setup ? "Bot setup" : "Chat"}>
       {toolbar}
@@ -1176,13 +1257,9 @@ export default function Chat({
                 ) : null,
               )}
               {m.role === "assistant" &&
-                m.segs.some(
-                  (s) => s.kind === "tools" && s.tools.length > 0,
-                ) && (
+                m.segs.some((s) => s.kind === "tools" && s.tools.length > 0) && (
                   <RunSummary
-                    tools={m.segs.flatMap((s) =>
-                      s.kind === "tools" ? s.tools : [],
-                    )}
+                    tools={m.segs.flatMap((s) => s.kind === "tools" ? s.tools : [])}
                     secs={m.summary?.secs}
                     stopped={m.summary?.stopped}
                   />
@@ -1269,14 +1346,10 @@ export default function Chat({
             <div key={p.toolUseID} className="perm-card">
               <b>Allow {p.toolName}?</b>
               <pre>{JSON.stringify(p.input, null, 2)}</pre>
-            <div className="perm-acts">
-              <button type="button" className="btn-primary" onClick={() => answerPerm(p, true)}>
-                Allow
-              </button>
-              <button type="button" className="btn-secondary" onClick={() => answerPerm(p, false)}>
-                Deny
-              </button>
-            </div>
+              <div className="perm-acts">
+                <button type="button" className="btn-primary" onClick={() => answerPerm(p, true)}>Allow</button>
+                <button type="button" className="btn-secondary" onClick={() => answerPerm(p, false)}>Deny</button>
+              </div>
             </div>
           ) : (
             <p key={p.toolUseID} className="perm-note">
@@ -1301,27 +1374,9 @@ export default function Chat({
         )}
       </section>
       <div className={`chat-scroll-edge chat-scroll-edge-bottom${scrollEdge === "bottom" ? " is-visible" : ""}`} aria-hidden="true" />
-      {!stuck && (
-        <button
-          type="button"
-          className="jump-latest"
-          onClick={() => {
-            const el = scrollRef.current;
-            el?.scrollTo({
-              top: el.scrollHeight,
-              behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-            });
-          }}
-          aria-label="Jump to latest"
-          data-tip="Jump to latest"
-          data-tip-pos="above"
-        >
-          <AnimatedActionIcon icon={ArrowDownIcon} size={15} aria-hidden="true" />
-          Latest
-        </button>
-      )}
       {setup && streaming ? (
         <div className="composer setup-resume-composer">
+          {jumpLatest}
           <div className="setup-resume-card" role="status">
             <span>
               <b>Setup in progress</b>
@@ -1339,6 +1394,7 @@ export default function Chat({
         </div>
       ) : setup && !setupAwaitingInput ? (
         <div className="composer setup-resume-composer">
+          {jumpLatest}
           <div className="setup-resume-card" role="status">
             <span>
               <b>{setup.paused ? "Setup pending" : autoSend ? "Starting setup" : "Setup incomplete"}</b>
@@ -1370,6 +1426,7 @@ export default function Chat({
             resetBox();
           }}
         >
+          {jumpLatest}
           <QueueTray
             text={queue}
             onSteer={steerNow}
@@ -1411,6 +1468,59 @@ export default function Chat({
               }
               aria-label={setup ? "Setup response" : "Message"}
             />
+            <div className="composer-permissions">
+              <button
+                ref={permissionButtonRef}
+                type="button"
+                className={`composer-permission-trigger${activeMenu === "permissions" ? " is-active" : ""}`}
+                onClick={() => setActiveMenu((menu) => menu === "permissions" ? null : "permissions")}
+                aria-label={`Permissions: ${permissionOption.label}`}
+                aria-expanded={activeMenu === "permissions"}
+                aria-haspopup="menu"
+                aria-controls="chat-permission-menu"
+              >
+                <AnimatedActionIcon icon={permissionOption.icon} size={16} />
+                <span>{permissionOption.label}</span>
+                <AnimatedActionIcon icon={ChevronDownIcon} size={13} />
+              </button>
+              {activeMenu === "permissions" && <>
+                <div ref={permissionMenuRef} id="chat-permission-menu" className="composer-permission-menu" role="menu" aria-label="Permissions" onKeyDown={moveMenuFocus}>
+                  <div className="composer-permission-menu-title">
+                    <span>Permissions</span>
+                    {onLearnMorePermissions && <button type="button" role="menuitem" className="composer-permission-learn-more" onClick={() => {
+                      setActiveMenu(null);
+                      permissionButtonRef.current?.focus();
+                      onLearnMorePermissions();
+                    }}>Learn more</button>}
+                  </div>
+                  {permissionOptions.map((option) => (
+                    <button
+                      key={option.mode}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={permissionMode === option.mode}
+                      onClick={() => {
+                        if (!thread) return;
+                        const next = { ...permissionModesRef.current };
+                        if (option.mode === safePermissionMode(botPermissionMode)) delete next[thread.id];
+                        else next[thread.id] = option.mode;
+                        permissionModesRef.current = next;
+                        setPermissionModes(permissionModesRef.current);
+                        try { localStorage.setItem(threadPermissionKey, JSON.stringify(permissionModesRef.current)); } catch {}
+                        setActiveMenu(null);
+                        permissionButtonRef.current?.focus();
+                      }}
+                    >
+                      <AnimatedActionIcon icon={option.icon} size={17} />
+                      <span className="composer-permission-option-copy"><strong>{option.label}</strong><small>{option.detail}</small></span>
+                      {permissionMode === option.mode && <AnimatedActionIcon icon={CheckIcon} size={15} />}
+                    </button>
+                  ))}
+                  <p>Applies to the next message in this conversation.</p>
+                </div>
+                <button type="button" className="menu-scrim" onClick={() => setActiveMenu(null)} aria-label="Close permissions" tabIndex={-1} />
+              </>}
+            </div>
             {streaming ? (
               <div className="composer-action">
                 {escapeStopArmed && (

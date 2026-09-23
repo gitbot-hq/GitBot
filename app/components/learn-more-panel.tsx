@@ -6,7 +6,7 @@ import { ArrowRightIcon } from "@animateicons/react/lucide/arrow-right-icon";
 import AnimatedActionIcon from "./animated-action-icon";
 import { PanelBack } from "./panel-controls";
 
-export type LearnMoreKind = "marketplace" | "share" | "import";
+export type LearnMoreKind = "marketplace" | "share" | "import" | "permissions";
 
 const sharingSections = [
   {
@@ -53,6 +53,19 @@ const content = {
     ],
     back: "Back to import",
   },
+  permissions: {
+    title: "Choose how your bot works",
+    lead: "Permissions decide when your bot needs your approval to use tools. Choose a mode for each conversation before you send a message.",
+    light: "/marketplace/learn-more-permissions-light.webp",
+    dark: "/marketplace/learn-more-permissions-dark.webp",
+    sections: [
+      { title: "Ask before tools", text: "Review each tool action before it runs. Choose this when you want to stay closely involved in the work." },
+      { title: "Auto-approve", text: "The bot can run tools without asking, including actions that may edit files or run commands. Use this only when you trust the bot and the task." },
+      { title: "Plan only", text: "The bot can explore the task and suggest an approach without making edits. Switch modes when you are ready for it to act." },
+    ],
+    note: "A change applies to the next message in this conversation. It does not change the bot’s default or a reply already in progress.",
+    back: "Back to conversation",
+  },
 } as const;
 
 export default function LearnMorePanel({ kind, onBack }: { kind: LearnMoreKind; onBack: () => void }) {
@@ -63,14 +76,21 @@ export default function LearnMorePanel({ kind, onBack }: { kind: LearnMoreKind; 
 
   useEffect(() => {
     panelRef.current?.querySelector<HTMLButtonElement>(".back-btn")?.focus({ preventScroll: true });
+    function handleOutsideClick(event: PointerEvent) {
+      if (event.target instanceof Node && !panelRef.current?.parentElement?.contains(event.target)) {
+        backRef.current();
+      }
+    }
     function handleEscape(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopImmediatePropagation();
       backRef.current();
     }
+    document.addEventListener("pointerdown", handleOutsideClick);
     document.addEventListener("keydown", handleEscape, true);
     return () => {
+      document.removeEventListener("pointerdown", handleOutsideClick);
       document.removeEventListener("keydown", handleEscape, true);
     };
   }, []);
@@ -93,8 +113,10 @@ export default function LearnMorePanel({ kind, onBack }: { kind: LearnMoreKind; 
     <div ref={panelRef} className="profile-pane learn-more-pane" role="dialog" aria-modal="true" aria-labelledby="learn-more-title" onKeyDown={keepFocus}>
       <PanelBack onClick={onBack} aria-label={item.back} />
       <div className="profile-pane-inner">
-        <Image className="learn-more-cover-image light" src={item.light} alt="" width={1360} height={433} sizes="(max-width: 728px) calc(100vw - 48px), 680px" />
-        <Image className="learn-more-cover-image dark" src={item.dark} alt="" width={1360} height={433} sizes="(max-width: 728px) calc(100vw - 48px), 680px" />
+        {"light" in item && <>
+          <Image className="learn-more-cover-image light" src={item.light} alt="" width={1360} height={433} sizes="(max-width: 728px) calc(100vw - 48px), 680px" />
+          <Image className="learn-more-cover-image dark" src={item.dark} alt="" width={1360} height={433} sizes="(max-width: 728px) calc(100vw - 48px), 680px" />
+        </>}
         <article className="learn-more-article">
           <header className="learn-more-head">
             <h2 id="learn-more-title">{item.title}</h2>

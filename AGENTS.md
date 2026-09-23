@@ -46,8 +46,8 @@ Frontend-only Next.js 16 + React + Tailwind v4 + TypeScript repo. The backend is
   + standout `document.title` while hidden). Driven from `chat.tsx` signal
   (attention > error > working > done flash > idle). SVGs live in
   `public/notif/` (8 files: 4 states × light/dark).
-- Routes: `/` is the app (onboarding empty state when no bots); `/blank` is the
-  previous build; `/onboarding`, `/bot-maker`, `/mascot-lab`, `/cta`
+- Routes: `/` is the app (onboarding empty state when no bots);
+  `/onboarding`, `/bot-maker`, `/mascot-lab`, `/cta`
   are standalone/internal demos, not public.
 - `/marketplace` is linked from the app. Its catalog, authors, and install counts
   are currently hardcoded UI data in `app/marketplace/page.tsx`, not a live catalog

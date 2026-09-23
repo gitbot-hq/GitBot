@@ -1,5 +1,5 @@
-/* v2 theme: black canvas, floating panel cards. Scoped tokens so the
-   light/dark system and /blank stay untouched. Build 2. */
+/* v2 theme: black canvas, floating panel cards. Scoped tokens keep the
+   light/dark system isolated. Build 2. */
 
 .page.v2 {
   color-scheme: dark;

@@ -493,7 +493,7 @@ export default function V2() {
     setUserOpen((open) => !open);
   }
 
-  function openLearnMore(kind: "share" | "import") {
+  function openLearnMore(kind: "share" | "import" | "permissions") {
     learnMoreTriggerRef.current = document.activeElement as HTMLElement | null;
     setLearnMore(kind);
   }
@@ -1085,12 +1085,14 @@ export default function V2() {
                 thread={activeThread}
                 botId={bot?.id}
                 botName={bot?.name ?? "bot"}
+                botPermissionMode={bot?.permissionMode}
                 botAvatar={bot ? avatarFor(bot.id) : undefined}
                 autoSend={autoSend}
                 onAutoSent={() => setAutoSend(null)}
                 onActivityChange={setBotActivity}
                 onTurnDone={refreshAfterTurn}
                 onShare={bot ? (view) => setModal({ kind: "share", bot, view }) : undefined}
+                onLearnMorePermissions={() => openLearnMore("permissions")}
                 onOpenBot={bot ? () => openBotProfile(bot.id) : undefined}
                 onNewThread={bot && !setupRequired ? newThread : undefined}
                 booting={botsLoading || threadsLoading}
