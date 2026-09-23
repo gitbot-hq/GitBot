@@ -309,7 +309,7 @@ export default function Chat({
   /** Live activity sentence ("Thinking…", "Running Bash…", null when idle).
    *  Lets the shell show what the bot is doing outside the chat. */
   onActivityChange?: (activity: string | null) => void;
-  onShare?: (view?: "options" | "code") => void;
+  onShare?: (view?: "options" | "code" | "publish") => void;
   onLearnMorePermissions?: () => void;
   onOpenBot?: () => void;
   onNewThread?: () => void;

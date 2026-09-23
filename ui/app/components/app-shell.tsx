@@ -79,7 +79,7 @@ function needsSetup(bot: Bot) {
   return !!bot.setupInstructions && bot.setupStatus !== "complete";
 }
 
-type Modal = { kind: "share"; bot: Bot; view?: "options" | "code" } | { kind: "import" } | null;
+type Modal = { kind: "share"; bot: Bot; view?: "options" | "code" | "publish" } | { kind: "import" } | null;
 
 export default function V2() {
   const [bots, setBots] = useState<Bot[]>([]);

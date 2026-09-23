@@ -16,6 +16,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { BackButton, CloseButton } from "./panel-controls";
 import { parseShare, shareCode, sharePrefix } from "../lib/share";
+import { MARKETPLACE_REPO_URL, marketplacePublishPrompt } from "../lib/marketplace-publish";
 import { useScrollEdge } from "../lib/use-scroll-edge";
 import type { Bot } from "../lib/gitbot";
 
@@ -92,11 +93,13 @@ export function ShareModal({
   onClose: () => void;
   onLearnMore?: () => void;
   inactive?: boolean;
-  initialView?: "options" | "code";
+  initialView?: "options" | "code" | "publish";
 }) {
-  const [view, setView] = useState<"options" | "code">(initialView);
+  const [view, setView] = useState<"options" | "code" | "publish">(initialView);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
+  const [promptCopied, setPromptCopied] = useState(false);
+  const [promptCopyError, setPromptCopyError] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current); }, []);
   const codeRef = useRef<HTMLTextAreaElement>(null);
@@ -117,9 +120,22 @@ export function ShareModal({
     }
   }
   const avatar = resolveAvatar(getAvatarPref(bot.id), { mascot: defaultMascotFor(bot.id), color: botTile(bot.id) });
+  const publishPrompt = marketplacePublishPrompt(bot, avatar);
+  async function copyPublishPrompt() {
+    try {
+      await navigator.clipboard.writeText(publishPrompt);
+      setPromptCopyError(false);
+      setPromptCopied(true);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setPromptCopied(false), 2500);
+    } catch {
+      setPromptCopied(false);
+      setPromptCopyError(true);
+    }
+  }
   return (
     <Shell
-      title={view === "code" ? "Share with code" : `Share ${bot.name}`}
+      title={view === "code" ? "Share with code" : view === "publish" ? "Publish to Marketplace" : `Share ${bot.name}`}
       headerContent={view === "code" ? (
           <div className="share-code-intro">
             <p>Copy this code to share <BotName color={avatar.color}>{bot.name}</BotName> with anyone. {onLearnMore && <button type="button" className="text-action share-learn-more" onClick={onLearnMore}>Learn more</button>}</p>
@@ -127,7 +143,7 @@ export function ShareModal({
       ) : undefined}
       onClose={onClose}
       inactive={inactive}
-      onBack={view === "code" && initialView === "options" ? () => setView("options") : undefined}
+      onBack={view !== "options" && initialView === "options" ? () => setView("options") : undefined}
     >
       {view === "options" ? (
         <>
@@ -143,21 +159,19 @@ export function ShareModal({
               </span>
               <AnimatedActionIcon icon={ArrowRightIcon} className="share-method-arrow" size={17} aria-hidden="true" />
             </button>
-            <button type="button" className="share-method" disabled aria-describedby="marketplace-share-status">
+            <button type="button" className="share-method" onClick={() => setView("publish")}>
               <span className="share-method-icon" aria-hidden="true">
                 <AnimatedActionIcon icon={StoreIcon} size={19} />
               </span>
               <span className="share-method-copy">
-                <span className="share-method-title">
-                  <strong>Publish to Marketplace</strong>
-                  <span className="share-method-status" id="marketplace-share-status">Coming soon</span>
-                </span>
+                <strong>Publish to Marketplace</strong>
                 <span>Make your bot discoverable by the GitBot community.</span>
               </span>
+              <AnimatedActionIcon icon={ArrowRightIcon} className="share-method-arrow" size={17} aria-hidden="true" />
             </button>
           </div>
         </>
-      ) : (
+      ) : view === "code" ? (
         <>
           <div className="share-bot-summary">
             <BotFace mascot={avatar.mascot} color={avatar.color} size={72} />
@@ -202,6 +216,56 @@ export function ShareModal({
             </button>
           </div>
         </>
+      ) : (
+        <div className="publish-content">
+          <div className="share-bot-summary">
+            <BotFace mascot={avatar.mascot} color={avatar.color} size={64} />
+            <div>
+              <h3>Publish <BotName color={avatar.color}>{bot.name}</BotName></h3>
+              <p>Choose how you want to prepare the marketplace pull request.</p>
+            </div>
+          </div>
+
+          <div className="publish-options">
+            <section className="publish-option">
+              <div className="publish-option-head">
+                <span className="share-method-icon" aria-hidden="true"><AnimatedActionIcon icon={StoreIcon} size={19} /></span>
+                <div>
+                  <span className="share-method-status">Recommended</span>
+                  <h3>Ask this bot to publish</h3>
+                </div>
+              </div>
+              <p>Copy a guided prompt. The bot drafts missing listing details, checks the final diff, and waits for approval before creating a PR.</p>
+              <button type="button" className="btn-primary share-copy-button" data-initial-focus data-copied={promptCopied} onClick={copyPublishPrompt} aria-label={promptCopied ? "Publishing prompt copied" : "Copy publishing prompt"}>
+                <span aria-hidden="true"><AnimatedActionIcon icon={CopyIcon} size={16} />Copy prompt</span>
+                <span aria-hidden="true"><AnimatedActionIcon icon={CheckIcon} size={16} />Prompt copied</span>
+              </button>
+            </section>
+
+            <section className="publish-option">
+              <div className="publish-option-head">
+                <span className="share-method-icon" aria-hidden="true"><AnimatedActionIcon icon={CodeIcon} size={19} /></span>
+                <div><h3>Create manually</h3></div>
+              </div>
+              <p>Open the GitBot repository, add the listing under <code>library/</code>, and submit a pull request for review.</p>
+              <a className="btn-secondary publish-repo-link" href={MARKETPLACE_REPO_URL} target="_blank" rel="noreferrer">Open GitHub repository<AnimatedActionIcon icon={ArrowRightIcon} size={16} aria-hidden="true" /></a>
+            </section>
+          </div>
+
+          <section className="publish-safety" aria-labelledby="publish-safety-title">
+            <span className="share-privacy-icon" style={{ color: avatar.color }} aria-hidden="true"><AnimatedActionIcon icon={ShieldCheckIcon} size={22} /></span>
+            <div>
+              <h3 id="publish-safety-title">Nothing is shared yet</h3>
+              <p>The copied prompt keeps the submission focused and requires a final review before anything is pushed.</p>
+              <ul>
+                <li>Chats, local files, workspace paths, setup state, and GitHub credentials stay out.</li>
+                <li>The proposed files are scanned for secrets and personal information.</li>
+                <li>You see the exact public fields and files before the pull request is created.</li>
+              </ul>
+            </div>
+          </section>
+          <p className="publish-note" role="status">{promptCopyError ? "Could not copy the prompt. Check clipboard access and try again." : "Automated checks can miss sensitive information. Review the final diff before approving the PR."}</p>
+        </div>
       )}
     </Shell>
   );
