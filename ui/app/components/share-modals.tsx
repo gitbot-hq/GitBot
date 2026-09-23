@@ -218,14 +218,6 @@ export function ShareModal({
         </>
       ) : (
         <div className="publish-content">
-          <div className="share-bot-summary">
-            <BotFace mascot={avatar.mascot} color={avatar.color} size={64} />
-            <div>
-              <h3>Publish <BotName color={avatar.color}>{bot.name}</BotName></h3>
-              <p>Choose how you want to prepare the marketplace pull request.</p>
-            </div>
-          </div>
-
           <div className="publish-options">
             <section className="publish-option">
               <div className="publish-option-head">
@@ -251,19 +243,6 @@ export function ShareModal({
               <a className="btn-secondary publish-repo-link" href={MARKETPLACE_REPO_URL} target="_blank" rel="noreferrer">Open GitHub repository<AnimatedActionIcon icon={ArrowRightIcon} size={16} aria-hidden="true" /></a>
             </section>
           </div>
-
-          <section className="publish-safety" aria-labelledby="publish-safety-title">
-            <span className="share-privacy-icon" style={{ color: avatar.color }} aria-hidden="true"><AnimatedActionIcon icon={ShieldCheckIcon} size={22} /></span>
-            <div>
-              <h3 id="publish-safety-title">Nothing is shared yet</h3>
-              <p>The copied prompt keeps the submission focused and requires a final review before anything is pushed.</p>
-              <ul>
-                <li>Chats, local files, workspace paths, setup state, and GitHub credentials stay out.</li>
-                <li>The proposed files are scanned for secrets and personal information.</li>
-                <li>You see the exact public fields and files before the pull request is created.</li>
-              </ul>
-            </div>
-          </section>
           <p className="publish-note" role="status">{promptCopyError ? "Could not copy the prompt. Check clipboard access and try again." : "Automated checks can miss sensitive information. Review the final diff before approving the PR."}</p>
         </div>
       )}
