@@ -172,6 +172,19 @@ function ChatSkeleton({ label }: { label: string }) {
   );
 }
 
+function ConversationEmptySkeleton({ withButton = false }: { withButton?: boolean }) {
+  return (
+    <div className="skel conversation-empty conversation-empty-skel" role="status" aria-label="Loading conversation">
+      <i className="conversation-empty-skel-mascot" aria-hidden="true" />
+      <div className="conversation-empty-skel-copy" aria-hidden="true">
+        <i className="conversation-empty-skel-title" />
+        <i className="conversation-empty-skel-description" />
+      </div>
+      {withButton && <i className="conversation-empty-skel-button" aria-hidden="true" />}
+    </div>
+  );
+}
+
 type SetupMode = {
   status: string;
   instructions: string;
@@ -1086,7 +1099,7 @@ export default function Chat({
             />
           )}
           {booting || setup ? (
-            <ChatSkeleton label={setup ? "Preparing setup" : "Loading chat"} />
+            setup ? <ChatSkeleton label="Preparing setup" /> : <ConversationEmptySkeleton withButton={!!onNewThread} />
           ) : (
             <div className="conversation-empty">
               {botAvatar && (
@@ -1230,7 +1243,9 @@ export default function Chat({
             )}
           </article>
         )}
-        {loading && <ChatSkeleton label="Loading history" />}
+        {loading && (thread.messageCount === 0 && !setup
+          ? <ConversationEmptySkeleton />
+          : <ChatSkeleton label="Loading history" />)}
         {showThreadEmpty && (
           <div className="conversation-empty" data-bot-follow={botId}>
             {botAvatar && (

@@ -246,13 +246,13 @@ export default function MarketplaceBotDetails({ bot, open, onClose }: {
                 timing={installTiming[bot.name]}
                 onInstall={installBot}
               />
-              <div className="bot-details-install-status" role="status">
+              {installState !== "idle" && <div className="bot-details-install-status" role="status">
                 {installState === "installed" && installedBot ? (
                   <Link href="/" onClick={() => {
                     try { sessionStorage.setItem("gitbot-marketplace-installed-bot", installedBot.id); } catch {}
                   }}>Open workspace →</Link>
-                ) : installState !== "idle" ? "Installing…" : "Add to your workspace"}
-              </div>
+                ) : "Installing…"}
+              </div>}
               {installErrors[bot.name] && <p className="bot-details-install-error" role="alert">{installErrors[bot.name]}</p>}
             </div>
           </div>
@@ -269,9 +269,12 @@ export default function MarketplaceBotDetails({ bot, open, onClose }: {
             <p className="bot-details-provider-note">When you chat, your chosen AI provider processes your prompts and relevant task context.</p>
           </section>
           <section className="bot-details-section bot-details-example">
-            <div className="bot-details-example-heading"><h3>Start with a simple ask</h3><button type="button" onClick={copyPrompt} aria-label={copied ? "Prompt copied" : "Copy prompt"}>{copied ? <AnimatedActionIcon icon={CheckIcon} size={14} aria-hidden="true" /> : <AnimatedActionIcon icon={CopyIcon} size={14} aria-hidden="true" />}<span>{copied ? "Copied" : "Copy prompt"}</span></button></div>
+            <h3>Start with a simple ask</h3>
             <p>“{details.prompt}”</p>
-            <span className="bot-details-copy-status" role="status">{copyError ? "Select the prompt to copy it." : copied ? "Copied to clipboard" : "Example prompt"}</span>
+            <div className="bot-details-example-footer">
+              <span className="bot-details-copy-status" role="status">{copyError ? "Select the prompt to copy it." : copied ? "Copied to clipboard" : "Example prompt"}</span>
+              <button type="button" onClick={copyPrompt} aria-label={copied ? "Prompt copied" : "Copy prompt"}>{copied ? <AnimatedActionIcon icon={CheckIcon} size={14} aria-hidden="true" /> : <AnimatedActionIcon icon={CopyIcon} size={14} aria-hidden="true" />}<span>{copied ? "Copied" : "Copy prompt"}</span></button>
+            </div>
           </section>
         </div>
         <div className={`chat-scroll-edge chat-scroll-edge-bottom${scrollEdge === "bottom" ? " is-visible" : ""}`} aria-hidden="true" />

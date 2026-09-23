@@ -552,7 +552,7 @@
   font-size: var(--market-text-meta);
 }
 .bot-details-toolbar > * { pointer-events: auto; }
-.bot-details-example-heading button {
+.bot-details-example-footer button {
   display: grid;
   place-items: center;
   width: 34px;
@@ -564,28 +564,27 @@
   cursor: pointer;
   transition: var(--transition-control);
 }
-.bot-details-example-heading button:hover { color: var(--text); background: var(--border); }
+.bot-details-example-footer button:hover { color: var(--text); background: var(--border); }
 .bot-details button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .bot-details-scroll { overflow-y: auto; overscroll-behavior: contain; padding: 68px 44px 44px; }
-.bot-details-hero { padding: 20px 0 36px; text-align: center; }
-.bot-details-art { display: grid; place-items: center; height: 164px; margin-bottom: 20px; }
+.bot-details-hero { padding: 0 0 24px; text-align: center; }
+.bot-details-art { display: grid; place-items: center; height: 132px; margin-bottom: 12px; }
 .bot-details-art .bot-mascot { filter: drop-shadow(0 14px 16px rgb(0 0 0 / 0.12)); }
 .bot-details-category { color: var(--muted); font-size: var(--market-text-meta); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; }
 .bot-details-hero h2 { margin: 10px 0; font-size: var(--market-text-detail-title); font-weight: 600; letter-spacing: -0.035em; line-height: 1.1; }
 .bot-details-hero > p { max-width: 330px; margin: 0 auto; color: var(--muted); font-size: var(--market-text-body); line-height: 1.6; }
-.bot-details-author { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 20px; color: var(--muted); font-size: var(--market-text-meta); }
+.bot-details-author { display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--muted); font-size: var(--market-text-meta); }
 
 .bot-details-section { margin-top: 36px; }
-.bot-details-hero + .bot-details-section { margin-top: 0; }
+.bot-details-hero + .bot-details-section { margin-top: 0; padding-top: 20px; border-top: 1px solid var(--border); }
 .bot-details-section h3 { margin: 0 0 12px; font-size: var(--market-text-lead); font-weight: 600; letter-spacing: -0.02em; }
 .bot-details-section p { margin: 0; color: var(--muted); font-size: var(--market-text-body); line-height: 1.7; }
 .bot-details-section ul { display: grid; gap: 16px; margin: 20px 0 0; padding: 0; list-style: none; }
 .bot-details-section li { display: flex; align-items: flex-start; gap: 10px; font-size: var(--market-text-body); line-height: 1.55; }
 .bot-details-section li svg { flex: none; margin-top: 2px; color: var(--muted); }
 .bot-details-example { padding: 24px; border-radius: 18px; background: var(--surface-2); }
-.bot-details-example-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; }
-.bot-details-example-heading h3 { margin: 0; }
-.bot-details-example-heading button {
+.bot-details-example-footer { display: flex; justify-content: space-between; align-items: end; gap: 12px; margin-top: 18px; }
+.bot-details-example-footer button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -603,7 +602,7 @@
   font-weight: 500;
   white-space: nowrap;
 }
-.bot-details-copy-status { display: block; margin-top: 14px; font-size: var(--market-text-meta); color: var(--faint); }
+.bot-details-copy-status { font-size: var(--market-text-meta); color: var(--faint); }
 .bot-details-footnote { max-width: 340px; margin: 28px auto 0; text-align: center; font-size: var(--market-text-meta); line-height: 1.6; color: var(--muted); }
 @media (hover: none) {
   .popular-bot-open { opacity: 1; pointer-events: auto; transform: none; }
@@ -651,7 +650,7 @@
 .marketplace-author-identity .verify-mark { width: 9.9px; height: 11px; }
 .marketplace-author-caption { color: var(--muted); font-size: var(--market-text-meta); line-height: 1.5; }
 .marketplace-author-name { font-weight: 500; }
-.bot-details-author { margin-top: 22px; }
+.bot-details-author { margin-top: 16px; }
 .bot-details-author .marketplace-author { gap: 10px; }
 .bot-details-author .marketplace-author-avatar { width: 38px; height: 38px; padding: 3px; font-size: 12px; }
 .bot-details-author .marketplace-author-brand .marketplace-author-avatar { padding: 6px; }
@@ -667,7 +666,7 @@
 .marketplace-page:has(.learn-more-overlay.open) .marketplace-body { visibility: hidden; }
 .marketplace-body.is-profile-open { overflow: hidden; }
 
-.bot-details-install-area { margin-top: 26px; }
+.bot-details-install-area { margin-top: 18px; }
 .bot-details-install {
   position: relative;
   display: inline-grid;

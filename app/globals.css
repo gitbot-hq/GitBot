@@ -706,6 +706,24 @@ pre {
   min-width: 168px;
 }
 
+.skel.conversation-empty-skel {
+  display: flex;
+  max-width: 520px;
+  gap: var(--space-5);
+  padding: var(--space-8) var(--space-4);
+}
+.skel.conversation-empty-skel i { height: 14px; }
+.skel.conversation-empty-skel .conversation-empty-skel-mascot {
+  width: 144px;
+  height: 144px;
+  margin-bottom: var(--space-2);
+  border-radius: 36%;
+}
+.conversation-empty-skel-copy { display: grid; justify-items: center; gap: var(--space-3); width: 100%; }
+.skel.conversation-empty-skel .conversation-empty-skel-title { width: 240px; max-width: 70%; height: 26px; }
+.skel.conversation-empty-skel .conversation-empty-skel-description { width: 360px; max-width: 90%; }
+.skel.conversation-empty-skel .conversation-empty-skel-button { width: 168px; height: 40px; border-radius: var(--radius-sm); }
+
 .bubble {
   max-width: 65ch;
   padding: var(--space-3) var(--space-4);
