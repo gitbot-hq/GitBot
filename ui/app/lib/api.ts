@@ -80,7 +80,9 @@ export function browse(path?: string | null) {
   );
 }
 
-export type ChatPermissionMode = "ask-permissions" | "auto-approve" | "plan";
+/** What the chat's permission menu offers: the server's three session
+ *  modes as-is, plus "plan" — yolo with the agent held to planning. */
+export type ChatPermissionMode = SessionPermissionMode | "plan";
 
 /** Starts a turn. Returns the session id to stream + abort + approve on. */
 export function postChat(threadId: string, prompt: string, permissionMode: ChatPermissionMode) {
@@ -89,7 +91,7 @@ export function postChat(threadId: string, prompt: string, permissionMode: ChatP
     body: JSON.stringify({
       threadId,
       prompt,
-      permissionMode: permissionMode === "ask-permissions" ? "ask-permissions" : "yolo",
+      permissionMode: permissionMode === "plan" ? "yolo" : permissionMode,
       mode: permissionMode === "plan" ? "plan" : "build",
     }),
   });
@@ -103,7 +105,7 @@ export function patchPermissionMode(sessionId: string, permissionMode: SessionPe
 }
 
 export function getSessionConfig(sessionId: string) {
-  return req<{ permissionMode: SessionPermissionMode }>(
+  return req<{ permissionMode: SessionPermissionMode; mode?: string | null }>(
     `/sessions/${encodeURIComponent(sessionId)}/config`,
   );
 }

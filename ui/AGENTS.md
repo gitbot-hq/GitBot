@@ -46,7 +46,10 @@ and stores machine-local state in `~/.gitbot` (`bots.json`, `threads.json`).
   `public/notif/` (8 files: 4 states × light/dark).
 - Routes: `/` is the app (onboarding empty state when no bots);
   `/onboarding`, `/bot-maker`, `/mascot-lab`, `/cta`
-  are standalone/internal demos, not public.
+  are standalone/internal demos, not public. `scripts/build-ui.mjs` strips
+  `/bot-maker`, `/mascot-lab` and `/cta` from the shipped export.
+- Source art (Figma/kawaii expression SVGs, `creature-expressions.svg`) lives in
+  `Design/expressions/`, not `public/` — nothing loads it at runtime.
 - `/marketplace` is linked from the app. Its catalog, authors, and install counts
   are currently hardcoded UI data in `app/marketplace/page.tsx`, not a live catalog
   or installation service. Styles live in `app/marketplace/marketplace.css`.

@@ -57,6 +57,10 @@ export type HistoryMsg = {
   content: HistoryBlock[];
 };
 
+/** Tools the "Allow all edits" shortcut on an approval card covers
+ *  (the server's allow-all-edits mode auto-approves exactly these). */
+export const EDIT_TOOLS = ["Edit", "Write", "NotebookEdit"];
+
 export type PermRequest = {
   toolUseID: string;
   toolName: string;

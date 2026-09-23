@@ -148,7 +148,8 @@ body {
 .desktop-notice { display: none; }
 
 @media (max-width: 1100px) {
-  body { overflow: hidden; }
+  /* Only while the notice is up; once dismissed the app scrolls as usual. */
+  body:has(.desktop-notice) { overflow: hidden; }
 
   .desktop-notice {
     position: fixed;
@@ -169,6 +170,7 @@ body {
   .desktop-notice-icon svg { stroke-width: 1; }
   .desktop-notice h1 { margin: 0; font-size: clamp(24px, 5vw, 30px); line-height: 1.15; letter-spacing: -0.035em; font-weight: 700; outline: none; }
   .desktop-notice p { margin: 16px 0 0; color: var(--muted); font-size: 15px; line-height: 1.55; }
+  .desktop-notice-continue { margin-top: 24px; }
 }
 
 code,
@@ -2119,7 +2121,7 @@ pre {
   object-fit: cover;
 }
 
-/* Live logo — cycles lifted from public/creature-expressions.svg */
+/* Live logo — cycles lifted from Design/expressions/creature-expressions.svg */
 .logo-float {
   transform-box: fill-box;
   transform-origin: center;

@@ -194,7 +194,13 @@ export async function runAgent(store: SessionStore): Promise<void> {
       for await (const ev of events) {
         handleEvent(ev, store);
         if (ev.type === "turn.completed") receivedCompletion = true;
-        if (ev.type === "turn.failed" || ev.type === "error") receivedCompletion = true;
+        if (ev.type === "turn.failed") {
+          // codex keeps retrying after reporting a failed turn, and abort is
+          // refused once the session is no longer running. Stop reading so the
+          // SDK kills the child rather than leaving it running unreachably.
+          receivedCompletion = true;
+          break;
+        }
       }
     } catch (err: any) {
       if (err?.name === "AbortError" || abortController.signal.aborted) {
@@ -250,6 +256,7 @@ export async function runAgent(store: SessionStore): Promise<void> {
     console.log("[codex] stream ended without completion event — treating as error");
     emitEvent(store, "error", { message: "Codex process exited unexpectedly" });
     store.status = "error";
+    notifyPermissionsChanged();
     scheduleCleanup(store);
     return;
   }
@@ -281,8 +288,12 @@ function handleEvent(ev: ThreadEvent, store: SessionStore): void {
       store.status = "error";
       return;
     case "error":
-      emitEvent(store, "error", { message: ev.message });
-      store.status = "error";
+      // The SDK types these as unrecoverable, but codex also reports retries
+      // and transport fallbacks here and then carries on. Surface the message
+      // without ending the turn; a real failure still arrives as turn.failed,
+      // a non-zero exit, or a stream that stops before turn.completed.
+      console.log(`[codex] ${ev.message}`);
+      emitEvent(store, "agent_error", { message: ev.message });
       return;
     case "item.started":
     case "item.updated":
@@ -370,8 +381,9 @@ function handleItem(eventType: string, item: ThreadItem, store: SessionStore): v
       return;
     }
     case "error": {
+      // The SDK types this item as non-fatal, so it must not close the stream.
       if (eventType === "item.completed") {
-        emitEvent(store, "error", { message: item.message });
+        emitEvent(store, "agent_error", { message: item.message });
       }
       return;
     }
@@ -811,7 +823,7 @@ const ENVELOPE_PATTERNS: RegExp[] = [
   /<user_instructions>[\s\S]*?<\/user_instructions>/g,
   /<permissions instructions>[\s\S]*?<\/permissions instructions>/g,
   /<INSTRUCTIONS>[\s\S]*?<\/INSTRUCTIONS>/g,
-  /^# AGENTS\.md instructions for [^\n]*\n*/g,
+  /^\s*# AGENTS\.md instructions(?: for [^\n]*)?(?:\n+|$)/g,
 ];
 
 // codex splits the image envelope across separate content blocks. Drop block-only markers.

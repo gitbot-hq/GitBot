@@ -43,7 +43,7 @@ import {
 } from "../lib/api";
 import { getAvatarPref, setAvatarPref, resolveAvatar, defaultMascotFor, type AvatarPref } from "../lib/avatar-prefs";
 import type { Bot, ThreadFull } from "../lib/gitbot";
-import { setupPrompt, type SetupOutcome, type SetupRunKind } from "../lib/setup";
+import { setupPrompt, type SetupRunKind } from "../lib/setup";
 import { useScrollEdge } from "../lib/use-scroll-edge";
 import "../v2-theme.css";
 import "../onboarding/onboarding.css";
@@ -104,7 +104,9 @@ export default function V2() {
   const [profileId, setProfileId] = useState<string | null>(null);
   // New-thread folder picker: slides over the chat column only.
   const [threadPanel, setThreadPanel] = useState(false);
-  const [autoSend, setAutoSend] = useState<string | null>(null);
+  // The setup prompt waiting to be sent, tagged with its bot so a switch
+  // mid-flight can never deliver it into another bot's thread.
+  const [autoSend, setAutoSend] = useState<{ botId: string; prompt: string } | null>(null);
   const [setupRetrying, setSetupRetrying] = useState(false);
   const [pausedSetupIds, setPausedSetupIds] = useState<Record<string, boolean>>({});
   const setupLaunchRef = useRef<string | null>(null);
@@ -329,6 +331,11 @@ export default function V2() {
     }
   }, [bot?.id, botsLoading, refreshThreads]);
 
+  // A pending setup prompt belongs to the bot it was made for.
+  useEffect(() => {
+    setAutoSend((prev) => (prev && prev.botId !== bot?.id ? null : prev));
+  }, [bot?.id]);
+
   const activeThread = setupRequired
     ? setupThread
     : workThreads.find((t) => t.id === (bot ? threadByBot[bot.id] : undefined)) ??
@@ -349,12 +356,13 @@ export default function V2() {
     if (setupThread) {
       if (!setupThread.messageCount && setupLaunchRef.current !== setupThread.id) {
         setupLaunchRef.current = setupThread.id;
-        setAutoSend(
-          setupPrompt({
+        setAutoSend({
+          botId: bot.id,
+          prompt: setupPrompt({
             setupInstructions: bot.setupInstructions ?? "",
             botInstructions: bot.instructions,
           }),
-        );
+        });
       }
       return;
     }
@@ -546,14 +554,14 @@ export default function V2() {
         setThreads(list);
         const found = list.find((t) => t.kind === "setup");
         if (found) {
-          if (kind !== "start" || !found.messageCount) setAutoSend(prompt);
+          if (kind !== "start" || !found.messageCount) setAutoSend({ botId, prompt });
           return;
         }
         return botSetupAction(botId, "reset").then(() => getThreads(botId)).then(({ threads: fresh }) => {
           setThreads(fresh);
           const t = fresh.find((x) => x.kind === "setup");
           if (t) {
-            setAutoSend(prompt);
+            setAutoSend({ botId, prompt });
           }
         });
       })
@@ -662,27 +670,26 @@ export default function V2() {
 
   function refreshAfterTurn() {
     if (!bot) return;
-    refreshThreads(bot.id);
-    // A normal turn may still change bot metadata server-side.
+    const current = bot;
+    refreshThreads(current.id);
+    // A turn may change bot metadata server-side. In particular a setup
+    // run's verdict is recorded by the server from the agent's own reply
+    // (never from sub-agent output), so the bot is re-read rather than
+    // judged here from streamed text.
     getBots().then(
       ({ bots: nextBots }) => {
         setBots(nextBots);
+        const updated = nextBots.find((candidate) => candidate.id === current.id);
+        if (!updated || !needsSetup(current)) return;
+        if (updated.setupStatus === "complete") {
+          setPausedSetupIds((prev) => ({ ...prev, [updated.id]: false }));
+          toast(`${updated.name} is ready`);
+        } else if (updated.setupStatus === "failed") {
+          setPausedSetupIds((prev) => ({ ...prev, [updated.id]: false }));
+        }
       },
       () => {},
     );
-  }
-
-  async function recordSetupOutcome(outcome: SetupOutcome) {
-    if (!bot) return;
-    const { bot: updated } = await botSetupAction(
-      bot.id,
-      outcome === "complete" ? "complete" : "fail",
-    );
-    setBots((prev) => prev.map((candidate) =>
-      candidate.id === updated.id ? updated : candidate,
-    ));
-    setPausedSetupIds((prev) => ({ ...prev, [updated.id]: false }));
-    if (outcome === "complete") toast(`${updated.name} is ready`);
   }
 
   function threadCreated(thread: ThreadFull) {
@@ -1132,7 +1139,7 @@ export default function V2() {
                 botName={bot?.name ?? "bot"}
                 botPermissionMode={bot?.permissionMode}
                 botAvatar={bot ? avatarFor(bot.id) : undefined}
-                autoSend={autoSend}
+                autoSend={autoSend && autoSend.botId === bot?.id ? autoSend.prompt : null}
                 onAutoSent={() => setAutoSend(null)}
                 onActivityChange={setBotActivity}
                 onTurnDone={refreshAfterTurn}
@@ -1150,7 +1157,6 @@ export default function V2() {
                         paused: !!pausedSetupIds[bot.id],
                         onRetry: retrySetup,
                         onPause: () => setPausedSetupIds((prev) => ({ ...prev, [bot.id]: true })),
-                        onOutcome: recordSetupOutcome,
                       }
                     : undefined
                 }

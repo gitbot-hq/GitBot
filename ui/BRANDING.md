@@ -58,7 +58,7 @@ Hover containers use `--surface-2`, active/selected containers use
   random per render — color is identity, it must not shift.
 - The mascot body itself carries the bot's brand color. Artwork is
   traced from the design files (`app/components/mascot-art.tsx`,
-  extracted from `public/figma-expressions/`): shared silhouette,
+  extracted from `Design/expressions/figma-expressions/`): shared silhouette,
   per-expression eye whites (stay white) and pupils (stay `#24211f`).
 - No tile or box behind the mascot — it floats free with a soft drop
   shadow for depth: `drop-shadow(0 3px 8px rgb(0 0 0 / 0.3))`.

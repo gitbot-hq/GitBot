@@ -12,6 +12,7 @@ import { MessageSquarePlusIcon } from "@animateicons/react/lucide/message-square
 import { RefreshCwIcon } from "@animateicons/react/lucide/refresh-cw-icon";
 import { UserIcon } from "@animateicons/react/lucide/user-icon";
 import { ShieldCheckIcon } from "@animateicons/react/lucide/shield-check-icon";
+import { PencilIcon } from "@animateicons/react/lucide/pencil-icon";
 import { ZapIcon } from "@animateicons/react/lucide/zap-icon";
 import { FileTextIcon } from "@animateicons/react/lucide/file-text-icon";
 import { ChevronDownIcon } from "@animateicons/react/lucide/chevron-down-icon";
@@ -27,25 +28,22 @@ import {
   ApiError,
   getMessages,
   getPendingPermissions,
+  getSessionConfig,
   getSessionStatus,
+  patchPermissionMode,
   postAbort,
   postChat,
   postPermission,
   streamUrl,
   type ChatPermissionMode,
 } from "../lib/api";
-import type { HistoryMsg, PermRequest, ThreadFull } from "../lib/gitbot";
+import { EDIT_TOOLS, type HistoryMsg, type PermRequest, type ThreadFull } from "../lib/gitbot";
 import type { AvatarPref } from "../lib/avatar-prefs";
 import { useMascotPointerFollow } from "../lib/use-mascot-pointer-follow";
 import { useScrollEdge } from "../lib/use-scroll-edge";
 import { useStatusFavicon } from "../lib/status-favicon";
 import { groupTools, type ToolChip } from "../lib/tool-ui";
-import {
-  presentSetupText,
-  readSetupNeedsInput,
-  readSetupOutcome,
-  type SetupOutcome,
-} from "../lib/setup";
+import { presentSetupText, readSetupNeedsInput } from "../lib/setup";
 import RunSummary, { ActionRow } from "./run-summary";
 import QueueTray from "./queue-tray";
 
@@ -190,15 +188,26 @@ function ConversationEmptySkeleton({ withButton = false }: { withButton?: boolea
   );
 }
 
+// Menu entries speak the server's session vocabulary: the first three are
+// PermissionMode values sent as-is (and patched onto a running session);
+// "plan" is yolo + mode:"plan" (see postChat) and only takes effect on the
+// next message, because a running session cannot change mode.
 const permissionOptions = [
   { mode: "ask-permissions", label: "Ask before tools", detail: "Approve each tool action.", icon: ShieldCheckIcon },
-  { mode: "auto-approve", label: "Auto-approve", detail: "Tools can run without asking.", icon: ZapIcon },
+  { mode: "allow-all-edits", label: "Auto-approve edits", detail: "File edits run without asking; other tools still ask.", icon: PencilIcon },
+  { mode: "yolo", label: "Auto-approve all", detail: "Every tool runs without asking.", icon: ZapIcon },
   { mode: "plan", label: "Plan only", detail: "Explore without making edits.", icon: FileTextIcon },
 ] as const;
 const threadPermissionKey = "gitbot-thread-permissions";
 
+/** The bot's own vocabulary ("auto-approve") → the chat's. */
 function safePermissionMode(mode?: string): ChatPermissionMode {
-  return mode === "auto-approve" || mode === "plan" ? mode : "ask-permissions";
+  if (mode === "auto-approve") return "yolo";
+  return mode === "plan" ? "plan" : "ask-permissions";
+}
+
+function isChatPermissionMode(mode: unknown): mode is ChatPermissionMode {
+  return permissionOptions.some((option) => option.mode === mode);
 }
 
 type SetupMode = {
@@ -208,7 +217,6 @@ type SetupMode = {
   paused: boolean;
   onRetry: () => void;
   onPause: () => void;
-  onOutcome: (outcome: SetupOutcome) => Promise<void>;
 };
 
 function SetupIntro({
@@ -352,7 +360,13 @@ export default function Chat({
   const sessionRef = useRef<string | null>(null);
   const liveIdRef = useRef<string | null>(null);
   const liveTextRef = useRef("");
-  const reportedSetupOutcome = useRef<string | null>(null);
+  // True from the moment a turn starts until its end is fully processed
+  // (history swapped in, queue flushed). `streaming` alone clears ~300ms
+  // earlier, and a send in that window would start a second turn on the
+  // same thread — before any session exists for the server to 409.
+  const turnActiveRef = useRef(false);
+  // Safety net for a stop whose `aborted` event never arrives.
+  const stopTimer = useRef<number | null>(null);
   // Progressive reveal: the server emits whole messages, so the live
   // bubble types out at reading pace instead of popping in at once.
   const [live, setLive] = useState<{
@@ -402,7 +416,10 @@ export default function Chat({
       const saved = JSON.parse(localStorage.getItem(threadPermissionKey) ?? "{}");
       if (!saved || typeof saved !== "object" || Array.isArray(saved)) return;
       const modes = Object.fromEntries(
-        Object.entries(saved).filter(([, mode]) => permissionOptions.some((option) => option.mode === mode)),
+        Object.entries(saved)
+          // Older builds stored the bot vocabulary here.
+          .map(([tid, mode]) => [tid, mode === "auto-approve" ? "yolo" : mode])
+          .filter(([, mode]) => isChatPermissionMode(mode)),
       ) as Record<string, ChatPermissionMode>;
       permissionModesRef.current = modes;
       setPermissionModes(modes);
@@ -575,7 +592,11 @@ export default function Chat({
     sessionRef.current = null;
     liveIdRef.current = null;
     liveTextRef.current = "";
-    reportedSetupOutcome.current = null;
+    turnActiveRef.current = false;
+    if (stopTimer.current) {
+      window.clearTimeout(stopTimer.current);
+      stopTimer.current = null;
+    }
     setLive(null);
     threadRef.current = thread?.id ?? null;
     setMsgs([]);
@@ -622,9 +643,18 @@ export default function Chat({
               pendingFilter.current = pending;
               catchupRef.current = true;
               sessionRef.current = sid;
+              turnActiveRef.current = true;
               setStreaming(true);
               setActivity("Thinking…");
               openStream(sid);
+              // The running turn may be in a mode picked earlier (or from
+              // another tab); mirror it so the menu and cards tell the truth.
+              getSessionConfig(sid)
+                .then(({ permissionMode, mode }) => {
+                  if (threadRef.current !== tid) return;
+                  rememberMode(tid, mode === "plan" ? "plan" : permissionMode);
+                })
+                .catch(() => {});
             });
         })
         .catch(() => {});
@@ -638,8 +668,10 @@ export default function Chat({
 
   // Setup runs auto-send their opening or continuation prompt once history
   // has settled. Continuations intentionally run in non-empty setup threads.
+  // Only ever into the setup thread: the prompt is a setup prompt, and the
+  // shell drops it when the bot changes.
   useEffect(() => {
-    if (!thread || !autoSend || loading || streaming) return;
+    if (!thread || !autoSend || !setup || loading || streaming) return;
     onAutoSent();
     sendPrompt(autoSend);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -760,6 +792,7 @@ export default function Chat({
    *  queue) as the next turn on the same thread. */
   function maybeFlush(tid: string | null) {
     if (!tid || threadRef.current !== tid) return;
+    turnActiveRef.current = false;
     const next = pendingSteer.current ?? queueRef.current;
     pendingSteer.current = null;
     if (queueRef.current) {
@@ -769,8 +802,12 @@ export default function Chat({
     if (next) startTurn(next);
   }
 
-  function finish(refetch: boolean, stopped = false, notifyTurnDone = true) {
+  function finish(refetch: boolean, stopped = false) {
     closeStream();
+    if (stopTimer.current) {
+      window.clearTimeout(stopTimer.current);
+      stopTimer.current = null;
+    }
     const tid = threadRef.current;
     setStreaming(false);
     setActivity(null);
@@ -824,14 +861,16 @@ export default function Chat({
             setMsgs(flat);
             maybeFlush(tid);
           })
-          .catch(() => {});
+          // History failed to load; the turn is still over, so release the
+          // queue rather than leaving the composer parked forever.
+          .catch(() => maybeFlush(tid));
       }, 300);
-      if (notifyTurnDone) onTurnDone();
+      onTurnDone();
     } else {
       setLive(null);
       requestAnimationFrame(scrollDown);
       maybeFlush(tid);
-      if (notifyTurnDone) onTurnDone();
+      onTurnDone();
     }
   }
 
@@ -877,23 +916,30 @@ export default function Chat({
       );
       setActivity("Waiting for your approval…");
     });
+    // The agent reported a problem (provider refused, bad model, a connection
+    // retry). Not terminal on its own, so the reason is kept only until the
+    // turn ends: `done` clears it, `error` replaces it with the real cause.
+    es.addEventListener("agent_error", (ev) => {
+      if (catchupRef.current) return;
+      setTurnError(String(data(ev).message ?? "The agent reported an error"));
+    });
     es.addEventListener("aborted", () => {
       setMsgs((prev) => [
         ...prev,
         { id: nid(), role: "assistant", segs: [{ kind: "text", text: setup ? "_Setup paused._" : "_Stopped._" }] },
       ]);
+      setTurnError(null);
       catchupRef.current = false;
       pendingFilter.current = null;
       finish(true, true);
     });
     es.addEventListener("done", () => {
+      setTurnError(null);
       catchupRef.current = false;
       pendingFilter.current = null;
-      const tid = threadRef.current;
-      const setupOutcomeReported = !!tid && reportSetupOutcome(tid, liveTextRef.current);
-      // The setup outcome request updates the bot directly. Avoid racing it
-      // with the generic post-turn bot refresh.
-      finish(true, false, !setupOutcomeReported);
+      // A setup run's verdict is recorded server-side from the agent's own
+      // reply (sub-agent output excluded); onTurnDone refetches the bot.
+      finish(true);
     });
     es.addEventListener("error", (ev) => {
       const me = ev as MessageEvent;
@@ -917,7 +963,7 @@ export default function Chat({
   // queue (flushed by finish()), sending while idle starts a turn.
   async function sendPrompt(prompt: string) {
     if (!thread || !prompt.trim()) return;
-    if (streaming) {
+    if (streaming || turnActiveRef.current) {
       enqueue(prompt.trim());
       return;
     }
@@ -952,6 +998,7 @@ export default function Chat({
     pendingRun.current = null;
     liveTextRef.current = "";
     turnStart.current = Date.now();
+    turnActiveRef.current = true;
     setMsgs((prev) => [
       ...prev,
       { id: nid(), role: "user", segs: [{ kind: "text", text: prompt }] },
@@ -971,6 +1018,7 @@ export default function Chat({
       openStream(sessionId);
     } catch (e) {
       if (threadRef.current !== thread.id) return;
+      turnActiveRef.current = false;
       setStreaming(false);
       setActivity(null);
       setTurnError(errText(e));
@@ -980,9 +1028,13 @@ export default function Chat({
   function abortCurrent() {
     const sid = sessionRef.current;
     if (sid) postAbort(sid).catch(() => {});
-    // The `aborted` event finishes the turn; safety net below.
-    setTimeout(() => {
-      if (esRef.current) {
+    // The `aborted` event finishes the turn; safety net below. Keyed to
+    // this stream so a stale timer can never close a later turn's stream.
+    const es = esRef.current;
+    if (stopTimer.current) window.clearTimeout(stopTimer.current);
+    stopTimer.current = window.setTimeout(() => {
+      stopTimer.current = null;
+      if (es && esRef.current === es) {
         setTurnError("Stop timed out — stream closed");
         finish(true);
       }
@@ -1055,19 +1107,6 @@ export default function Chat({
     }, 1500);
   }
 
-  function reportSetupOutcome(tid: string, text: string): boolean {
-    const outcome = readSetupOutcome(text);
-    if (!setup || !outcome) return false;
-    const key = `${tid}:${outcome}`;
-    if (reportedSetupOutcome.current === key) return true;
-    reportedSetupOutcome.current = key;
-    setup.onOutcome(outcome).catch((error) => {
-      if (reportedSetupOutcome.current === key) reportedSetupOutcome.current = null;
-      setTurnError(`Setup finished, but GitBot could not save the result: ${errText(error)}`);
-    });
-    return true;
-  }
-
   function answerPerm(p: PermRequest, approved: boolean) {
     const sid = sessionRef.current;
     if (!sid) return;
@@ -1078,6 +1117,44 @@ export default function Chat({
         ),
       )
       .catch((e) => setTurnError(errText(e)));
+  }
+
+  /** Remember the thread's chosen mode; the bot's own default = no entry. */
+  function rememberMode(tid: string, mode: ChatPermissionMode) {
+    const next = { ...permissionModesRef.current };
+    if (mode === safePermissionMode(botPermissionMode)) delete next[tid];
+    else next[tid] = mode;
+    permissionModesRef.current = next;
+    setPermissionModes(next);
+    try { localStorage.setItem(threadPermissionKey, JSON.stringify(next)); } catch {}
+  }
+
+  /** Switch permission mode. Between turns it rides along on the next
+   *  /chat; mid-turn the server applies it at once and resolves any waiting
+   *  approvals the new mode covers — re-read the pending set to mirror that.
+   *  "plan" cannot be applied to a running session, so it only stores. */
+  function changeMode(mode: ChatPermissionMode) {
+    if (!thread) return;
+    const tid = thread.id;
+    const before = permissionModesRef.current[tid] ?? safePermissionMode(botPermissionMode);
+    rememberMode(tid, mode);
+    const sid = sessionRef.current;
+    if (!sid || mode === "plan") return;
+    patchPermissionMode(sid, mode)
+      .then(() => getPendingPermissions(sid))
+      .then(({ pending }) => {
+        if (threadRef.current !== tid) return;
+        setPerms((prev) =>
+          prev.map((x) =>
+            x.verdict === undefined && pending.indexOf(x.toolUseID) === -1 ? { ...x, verdict: true } : x,
+          ),
+        );
+      })
+      .catch((e) => {
+        if (threadRef.current !== tid) return;
+        rememberMode(tid, before);
+        setTurnError(errText(e));
+      });
   }
 
   const visibleMsgs = setup
@@ -1349,6 +1426,25 @@ export default function Chat({
               <div className="perm-acts">
                 <button type="button" className="btn-primary" onClick={() => answerPerm(p, true)}>Allow</button>
                 <button type="button" className="btn-secondary" onClick={() => answerPerm(p, false)}>Deny</button>
+                {EDIT_TOOLS.indexOf(p.toolName) !== -1 && permissionMode === "ask-permissions" ? (
+                  <button
+                    type="button"
+                    className="btn-secondary perm-all"
+                    title="Stop asking about file edits in this thread"
+                    onClick={() => changeMode("allow-all-edits")}
+                  >
+                    Allow all edits
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-secondary perm-all"
+                    title="Stop asking in this thread — auto-approve every tool"
+                    onClick={() => changeMode("yolo")}
+                  >
+                    Allow all
+                  </button>
+                )}
               </div>
             </div>
           ) : (
@@ -1500,13 +1596,7 @@ export default function Chat({
                       role="menuitemradio"
                       aria-checked={permissionMode === option.mode}
                       onClick={() => {
-                        if (!thread) return;
-                        const next = { ...permissionModesRef.current };
-                        if (option.mode === safePermissionMode(botPermissionMode)) delete next[thread.id];
-                        else next[thread.id] = option.mode;
-                        permissionModesRef.current = next;
-                        setPermissionModes(permissionModesRef.current);
-                        try { localStorage.setItem(threadPermissionKey, JSON.stringify(permissionModesRef.current)); } catch {}
+                        changeMode(option.mode);
                         setActiveMenu(null);
                         permissionButtonRef.current?.focus();
                       }}
@@ -1516,7 +1606,11 @@ export default function Chat({
                       {permissionMode === option.mode && <AnimatedActionIcon icon={CheckIcon} size={15} />}
                     </button>
                   ))}
-                  <p>Applies to the next message in this conversation.</p>
+                  <p>
+                    {streaming
+                      ? "Applies to the running turn and later messages. Plan only starts with the next message."
+                      : "Applies to the next message in this conversation."}
+                  </p>
                 </div>
                 <button type="button" className="menu-scrim" onClick={() => setActiveMenu(null)} aria-label="Close permissions" tabIndex={-1} />
               </>}

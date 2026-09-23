@@ -3,9 +3,10 @@ export type SetupOutcome = "complete" | "failed";
 export type SetupRunKind = "start" | "continue" | "changed";
 
 /**
- * Codex and OpenCode do not currently receive the backend's setup system
- * prompt, so the frontend carries the same completion contract in the first
- * setup message. Claude also accepts this safely; its backend prompt agrees.
+ * The server frames every setup run for all three agents (src/bot-prompt.ts)
+ * and records the verdict from the agent's own final reply. This client
+ * prompt repeats the same completion contract so a continued or changed run
+ * can say which kind it is; the markers below match the server's exactly.
  */
 export function setupPrompt({
   setupInstructions,

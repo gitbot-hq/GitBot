@@ -98,7 +98,7 @@ When the agent wants to run a command, edit a file or fetch a URL, an approval c
 <img src="assets/screenshots/approval.png" alt="An approval card asking to allow a file write, with Allow, Deny and Allow all edits buttons" width="620" />
 </div>
 
-Each bot has a default permission mode — **Ask before each tool**, **Auto-approve tools**, or **Plan only (no edits)**. Within a thread you can switch at any time, even mid-turn, between *Ask every time*, *Auto-approve edits* and *Auto-approve all*.
+Each bot has a default permission mode — **Ask before each tool**, **Auto-approve tools**, or **Plan only (no edits)**. Within a thread the menu under the composer switches at any time, even mid-turn, between *Ask before tools*, *Auto-approve edits* and *Auto-approve all*; *Plan only* applies from the next message. Approval cards offer the same shortcuts as *Allow all edits* / *Allow all*.
 
 Codex works differently: it has no approval cards. Its permission mode picks a sandbox instead — see [Agents](#agents).
 
