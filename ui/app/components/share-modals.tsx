@@ -81,6 +81,79 @@ function Shell({
   );
 }
 
+export function CreateBotWithAgentModal({ onClose }: { onClose: () => void }) {
+  const [prompt, setPrompt] = useState("");
+  const [loadError, setLoadError] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  const scrollEdge = useScrollEdge(promptRef, prompt);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/prompts/create-gitbot-bot.md", { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error("Prompt unavailable");
+        return response.text();
+      })
+      .then(setPrompt)
+      .catch((error) => { if (error.name !== "AbortError") setLoadError(true); });
+    return () => controller.abort();
+  }, []);
+
+  async function copyPrompt() {
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2500);
+    } catch {
+      promptRef.current?.focus();
+      promptRef.current?.select();
+    }
+  }
+
+  return (
+    <Shell title="Create bot with an agent" onClose={onClose}>
+      <div className="agent-create-content">
+        <p className="share-intro">Use Claude Code, Codex, or OpenCode to turn your idea into a complete GitBot bot.</p>
+        <ol className="agent-create-steps">
+          <li>Copy the prompt and paste it into your coding agent.</li>
+          <li>Answer its questions, then review the full bot definition.</li>
+          <li>Approve it only when it looks right. The agent will add and verify the bot for you.</li>
+        </ol>
+        <div className="field share-code-field agent-create-prompt">
+          <label htmlFor="bot-author-prompt">Agent prompt<span className="share-code-format">Markdown</span></label>
+          <div className="share-code-viewport">
+            <div className={`chat-scroll-edge chat-scroll-edge-top${scrollEdge === "top" ? " is-visible" : ""}`} aria-hidden="true" />
+            <textarea
+              ref={promptRef}
+              id="bot-author-prompt"
+              className="code"
+              readOnly
+              spellCheck={false}
+              value={prompt}
+              placeholder={loadError ? "The prompt could not be loaded." : "Loading prompt…"}
+              onFocus={(event) => event.target.select()}
+            />
+            <div className={`chat-scroll-edge chat-scroll-edge-bottom${scrollEdge === "bottom" ? " is-visible" : ""}`} aria-hidden="true" />
+          </div>
+        </div>
+        <div className="share-copy-actions">
+          <div className="share-copy-privacy">
+            <span className="share-privacy-icon" style={{ color: "var(--brand-sun)" }} aria-hidden="true">
+              <AnimatedActionIcon icon={ShieldCheckIcon} size={22} />
+            </span>
+            <p>The agent must show you the complete definition before writing. Existing bots are preserved and backed up.</p>
+          </div>
+          <button type="button" className="btn-primary share-copy-button" data-initial-focus data-copied={copied} disabled={!prompt} onClick={copyPrompt} aria-label={copied ? "Prompt copied" : "Copy agent prompt"}>
+            <span aria-hidden="true"><AnimatedActionIcon icon={CopyIcon} size={16} />Copy prompt</span>
+            <span aria-hidden="true"><AnimatedActionIcon icon={CheckIcon} size={16} />Prompt copied</span>
+          </button>
+        </div>
+      </div>
+    </Shell>
+  );
+}
+
 // Sharing is explicit: opening the dialog never changes the clipboard.
 export function ShareModal({
   bot,

@@ -8,6 +8,8 @@ import { ShoppingBagIcon } from "@animateicons/react/lucide/shopping-bag-icon";
 import { DownloadIcon } from "@animateicons/react/lucide/download-icon";
 import { UserIcon } from "@animateicons/react/lucide/user-icon";
 import { PlusIcon } from "@animateicons/react/lucide/plus-icon";
+import { PencilIcon } from "@animateicons/react/lucide/pencil-icon";
+import { CodeIcon } from "@animateicons/react/lucide/code-icon";
 import { SearchIcon } from "@animateicons/react/lucide/search-icon";
 import { TrashIcon } from "@animateicons/react/lucide/trash-icon";
 
@@ -25,7 +27,8 @@ import LearnMorePanel, { type LearnMoreKind } from "./learn-more-panel";
 import ThreadPanel from "./thread-panel";
 import OnboardingFlow from "./onboarding-flow";
 import ThemeButton from "./theme-button";
-import { ImportModal, ShareModal } from "./share-modals";
+import { CreateBotWithAgentModal, ImportModal, ShareModal } from "./share-modals";
+import { moveMenuFocus } from "./share-dropdown";
 import { useToast } from "./toast";
 import BotFace from "./bot-face";
 import { chatMascotActivity } from "../lib/chat-mascot-activity";
@@ -79,7 +82,7 @@ function needsSetup(bot: Bot) {
   return !!bot.setupInstructions && bot.setupStatus !== "complete";
 }
 
-type Modal = { kind: "share"; bot: Bot; view?: "options" | "code" | "publish" } | { kind: "import" } | null;
+type Modal = { kind: "share"; bot: Bot; view?: "options" | "code" | "publish" } | { kind: "import" } | { kind: "create-agent" } | null;
 
 export default function V2() {
   const [bots, setBots] = useState<Bot[]>([]);
@@ -136,9 +139,25 @@ export default function V2() {
   // Header search: the row morphs — title/collapse/import collapse away,
   // the box opens between search and +, and + rotates 45° into its close.
   const [searchOpen, setSearchOpen] = useState(false);
+  const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement | null>(null);
   const searchBtnRef = useRef<HTMLButtonElement | null>(null);
+  const createBtnRef = useRef<HTMLButtonElement | null>(null);
+  const createMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!createMenuOpen) return;
+    const frame = requestAnimationFrame(() => createMenuRef.current?.querySelector<HTMLButtonElement>("button")?.focus());
+    function escape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setCreateMenuOpen(false);
+      createBtnRef.current?.focus();
+    }
+    document.addEventListener("keydown", escape);
+    return () => { cancelAnimationFrame(frame); document.removeEventListener("keydown", escape); };
+  }, [createMenuOpen]);
 
   function closeSearch() {
     setSearchOpen(false);
@@ -376,6 +395,7 @@ export default function V2() {
   }, [bot?.id, setupRequired, setupThread?.id, setupThread?.messageCount, threadsLoading]);
 
   function toggleCollapse() {
+    setCreateMenuOpen(false);
     if (settleTimer.current) {
       clearTimeout(settleTimer.current);
       settleTimer.current = null;
@@ -801,7 +821,7 @@ export default function V2() {
           }}
           aria-label="Bots"
         >
-          <div ref={botsHeaderRef} className={`side-head bots-panel-header${searchOpen ? " searching" : ""}${iconSet === "solo" ? " solo" : ""}${botsScrolled ? " is-scrolled" : ""}`}>
+          <div ref={botsHeaderRef} className={`side-head bots-panel-header${searchOpen ? " searching" : ""}${iconSet === "solo" ? " solo" : ""}${botsScrolled ? " is-scrolled" : ""}${createMenuOpen ? " menu-open" : ""}`}>
             {iconSet === "full" && (
               <h2 className="side-title">Your bots</h2>
             )}
@@ -866,15 +886,33 @@ export default function V2() {
               >
                 <AnimatedActionIcon icon={DownloadIcon} size={18} aria-hidden="true" />
               </button>
-              <button
-                type="button"
-                className="collapse-btn plus-btn"
-                aria-label={searchOpen ? "Close search" : "Create bot"}
-                data-tip={searchOpen ? "Close search" : "Create bot"}
-                onClick={() => (searchOpen ? closeSearch() : openBotEditor("new"))}
-              >
-                <AnimatedActionIcon icon={PlusIcon} size={18} aria-hidden="true" />
-              </button>
+              <span className="bot-create-action">
+                <button
+                  ref={createBtnRef}
+                  type="button"
+                  className={`collapse-btn plus-btn${createMenuOpen ? " is-active" : ""}`}
+                  aria-label={searchOpen ? "Close search" : "Create bot"}
+                  aria-expanded={searchOpen ? undefined : createMenuOpen}
+                  aria-haspopup={searchOpen ? undefined : "menu"}
+                  data-tip={searchOpen ? "Close search" : "Create bot"}
+                  onClick={() => (searchOpen ? closeSearch() : setCreateMenuOpen((open) => !open))}
+                >
+                  <AnimatedActionIcon icon={PlusIcon} size={18} aria-hidden="true" />
+                </button>
+                {createMenuOpen && <>
+                  <div ref={createMenuRef} className="chat-options-menu bot-create-menu" role="menu" aria-label="Create bot" onKeyDown={moveMenuFocus}>
+                    <button type="button" role="menuitem" onClick={() => { setCreateMenuOpen(false); openBotEditor("new"); }}>
+                      <AnimatedActionIcon icon={PencilIcon} size={15} aria-hidden="true" />
+                      <span className="chat-menu-label">Create manually</span>
+                    </button>
+                    <button type="button" role="menuitem" onClick={() => { setCreateMenuOpen(false); dismissLearnMore(); setModal({ kind: "create-agent" }); }}>
+                      <AnimatedActionIcon icon={CodeIcon} size={15} aria-hidden="true" />
+                      <span className="chat-menu-label">Create with an agent</span>
+                    </button>
+                  </div>
+                  <button type="button" className="menu-scrim" onClick={() => setCreateMenuOpen(false)} aria-label="Close menu" tabIndex={-1} />
+                </>}
+              </span>
               </>
             )}
             </span>
@@ -1262,6 +1300,9 @@ export default function V2() {
             );
           }}
         />
+      )}
+      {modal?.kind === "create-agent" && (
+        <CreateBotWithAgentModal onClose={() => setModal(null)} />
       )}
       <ProfilePanelOverlay open={!!learnMore} className="learn-more-overlay">
         {learnMore && <LearnMorePanel kind={learnMore} onBack={backFromLearnMore} />}

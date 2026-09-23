@@ -369,6 +369,8 @@ pre {
   z-index: 1;
 }
 
+.bots-panel-header.menu-open { z-index: 60; }
+
 .bots-panel-header::before,
 .threads-scroll-header::before {
   content: "";
@@ -579,6 +581,13 @@ pre {
 .chat-share-menu {
   min-width: 260px;
 }
+
+.bot-create-action {
+  position: relative;
+  display: grid;
+}
+
+.bot-create-menu { min-width: 220px; }
 
 .chat-share-menu .chat-menu-label { white-space: nowrap; }
 
@@ -1787,6 +1796,10 @@ pre {
 .publish-option .btn-primary, .publish-repo-link { width: 100%; min-height: 38px; }
 .publish-repo-link { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); text-decoration: none; }
 .publish-note { margin: 0; color: var(--muted); font-size: var(--text-xs); line-height: 1.55; }
+.agent-create-content { display: grid; gap: var(--space-4); }
+.agent-create-content .share-intro, .agent-create-content .share-code-field, .agent-create-content .share-copy-actions { margin: 0; }
+.agent-create-steps { display: grid; gap: var(--space-2); margin: 0; padding-left: 22px; color: var(--muted); font-size: var(--text-sm); line-height: 1.5; }
+.modal .agent-create-prompt textarea { height: 240px; min-height: 240px; }
 .import-content { display: grid; gap: var(--space-6); }
 .import-content .share-code-field, .import-content > .share-bot-summary, .import-content > .share-copy-actions, .import-content > .chat-error { margin: 0; }
 .share-copy-button { display: grid; flex: none; }
