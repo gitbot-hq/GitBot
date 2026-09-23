@@ -1852,6 +1852,19 @@ pre {
   border-color: var(--text);
 }
 
+.seg-btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.field-warn {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
 @media (max-width: 760px) {
   .studio {
     grid-template-columns: 1fr;
@@ -3994,6 +4007,45 @@ button.file-chip:hover {
 .side.closing .bot-profile-btn { right: -2px; top: auto; bottom: -2px; transform: none; }
 .thread-row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .page-body .threads-list .thread-row { display: flex; align-items: center; gap: var(--space-2); }
+.page-body .threads-list div.thread-row { position: relative; padding: 0; overflow: visible; }
+.thread-open {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-2) 34px var(--space-2) var(--space-3);
+  background: none;
+  border: 0;
+  border-radius: inherit;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.thread-open:disabled { cursor: default; opacity: 0.7; }
+.thread-kill {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  opacity: 0;
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+.thread-row:hover .thread-kill,
+.thread-row:focus-within .thread-kill { opacity: 1; }
+.thread-kill:hover,
+.thread-kill:focus-visible { background: var(--surface-2); color: var(--danger); }
+@media (hover: none) { .thread-kill { opacity: 1; } }
 .thread-selected-mark { flex: none; margin-left: auto; }
 
 /* Keyboard actions keep a strong ring; editable fields use their own quiet border cue. */

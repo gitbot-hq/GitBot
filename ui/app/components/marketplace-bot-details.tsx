@@ -12,7 +12,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { BackButton } from "./panel-controls";
 import Link from "./page-link";
-import { createBot, getBots } from "../lib/api";
+import { createBot, getAgents, getBots } from "../lib/api";
 import { setAvatarPref } from "../lib/avatar-prefs";
 import { useScrollEdge } from "../lib/use-scroll-edge";
 import MarketplaceInstallButton from "./marketplace-install-button";
@@ -179,6 +179,8 @@ export default function MarketplaceBotDetails({ bot, open, onClose }: {
     setInstallErrors((previous) => ({ ...previous, [name]: "" }));
     const instructions = instructionsFor(selected, details);
     try {
+      const { agents } = await getAgents();
+      if (!agents.length) throw new Error("Install Claude Code, Codex, or OpenCode before adding a bot.");
       const { bots } = await getBots();
       setSavedBots(bots);
       const existing = bots.find((candidate) => candidate.name === name && candidate.instructions === instructions);
@@ -187,7 +189,7 @@ export default function MarketplaceBotDetails({ bot, open, onClose }: {
           name,
           description: selected.description,
           emoji: "🤖",
-          agent: "claude-code",
+          agent: agents[0],
           instructions,
           permissionMode: "ask-permissions",
         });

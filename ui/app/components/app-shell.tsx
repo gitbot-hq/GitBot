@@ -9,6 +9,7 @@ import { DownloadIcon } from "@animateicons/react/lucide/download-icon";
 import { UserIcon } from "@animateicons/react/lucide/user-icon";
 import { PlusIcon } from "@animateicons/react/lucide/plus-icon";
 import { SearchIcon } from "@animateicons/react/lucide/search-icon";
+import { TrashIcon } from "@animateicons/react/lucide/trash-icon";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "./page-link";
@@ -35,7 +36,9 @@ import TopBar from "./top-bar";
 import {
   botSetupAction,
   createBot,
+  deleteThread,
   getBots,
+  getSessionStatus,
   getThreads,
 } from "../lib/api";
 import { getAvatarPref, setAvatarPref, resolveAvatar, defaultMascotFor, type AvatarPref } from "../lib/avatar-prefs";
@@ -689,6 +692,31 @@ export default function V2() {
     setThreadPanel(false);
   }
 
+  async function removeThread(thread: ThreadFull) {
+    if (!bot) return;
+    if (thread.sdkSessionId) {
+      const running = await getSessionStatus(thread.sdkSessionId)
+        .then((status) => status.streaming)
+        .catch(() => false);
+      if (running) {
+        toast("Stop the running turn before deleting this thread");
+        return;
+      }
+    }
+    if (!confirm(`Delete "${thread.title}"? The agent's transcript stays on disk.`)) return;
+    deleteThread(thread.id).then(
+      () => {
+        setThreads((current) => current.filter((candidate) => candidate.id !== thread.id));
+        setThreadByBot((current) => {
+          if (current[bot.id] !== thread.id) return current;
+          const { [bot.id]: _deleted, ...rest } = current;
+          return rest;
+        });
+      },
+      (error) => toast(error instanceof Error ? error.message : String(error)),
+    );
+  }
+
   function threadSetupNeeded(message: string) {
     if (!bot) return;
     setThreadPanel(false);
@@ -908,9 +936,11 @@ export default function V2() {
                               {b.id === bot?.id && activeLabel
                                 ? activeLabel
                                 : setupPending
-                                  ? b.setupStatus === "failed"
+                                  ? pausedSetupIds[b.id]
+                                    ? "Setup pending"
+                                    : b.setupStatus === "failed"
                                     ? "Setup paused"
-                                    : "Needs setup"
+                                    : "Setup pending"
                                   : "Idle"}
                             </small>
                           </span>
@@ -967,9 +997,11 @@ export default function V2() {
                   <i aria-hidden="true" />
                   {activeLabel ??
                     (setupRequired
-                      ? bot?.setupStatus === "failed"
+                      ? bot && pausedSetupIds[bot.id]
+                        ? "Setup pending"
+                        : bot?.setupStatus === "failed"
                         ? "Setup paused"
-                        : "Needs setup"
+                        : "Setup pending"
                       : "Idle")}
                 </small>
               </div>
@@ -1037,20 +1069,33 @@ export default function V2() {
                     <>
                       {threadsError && <p className="threads-empty">{threadsError}</p>}
                       {visibleThreads.map((t) => (
-                        <button
+                        <div
                           key={t.id}
-                          type="button"
                           className={`${t.id === activeThread?.id ? "thread-row active" : "thread-row"}${threadSearchText ? "" : " msg-in"}`}
                           aria-current={t.id === activeThread?.id ? "true" : undefined}
-                          disabled={setupRequired}
-                          title={setupRequired ? "Available after setup" : undefined}
-                          onClick={() =>
-                            bot && setThreadByBot((prev) => ({ ...prev, [bot.id]: t.id }))
-                          }
                         >
-                          <span className="thread-row-title">{t.title}</span>
-                          {t.id === activeThread?.id && <AnimatedActionIcon icon={CheckIcon} className="thread-selected-mark" size={16} aria-hidden="true" />}
-                        </button>
+                          <button
+                            type="button"
+                            className="thread-open"
+                            disabled={setupRequired}
+                            title={setupRequired ? "Available after setup" : undefined}
+                            onClick={() =>
+                              bot && setThreadByBot((prev) => ({ ...prev, [bot.id]: t.id }))
+                            }
+                          >
+                            <span className="thread-row-title">{t.title}</span>
+                            {t.id === activeThread?.id && <AnimatedActionIcon icon={CheckIcon} className="thread-selected-mark" size={16} aria-hidden="true" />}
+                          </button>
+                          <button
+                            type="button"
+                            className="thread-kill"
+                            aria-label={`Delete thread ${t.title}`}
+                            title="Delete thread"
+                            onClick={() => removeThread(t)}
+                          >
+                            <AnimatedActionIcon icon={TrashIcon} size={14} aria-hidden="true" />
+                          </button>
+                        </div>
                       ))}
                       {!threadsError && workThreads.length === 0 && (
                         setupRequired ? (
@@ -1201,6 +1246,10 @@ export default function V2() {
               allowedTools: Array.isArray(parsed.allowedTools)
                 ? (parsed.allowedTools as string[])
                 : undefined,
+              disallowedTools: Array.isArray(parsed.disallowedTools)
+                ? (parsed.disallowedTools as string[])
+                : undefined,
+              agent: typeof parsed.agent === "string" ? parsed.agent : undefined,
             }).then(
               ({ bot: added }) => afterBotAdded(added, { mascot: "ghost", color: "var(--brand-sun)" }),
               (e) => toast(e instanceof Error ? e.message : String(e)),

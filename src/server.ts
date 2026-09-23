@@ -242,12 +242,9 @@ export async function handleRequest(
         const bot = getBot(thread.botId);
         if (!bot) { jsonError(res, 404, "Bot not found"); return; }
         repoPath = thread.repoPath;
-        // A thread that has had a turn stays on the agent that holds its
-        // conversation; until then it follows the bot, so switching a bot's
-        // agent applies to every thread that has not started yet.
-        agent = thread.sdkSessionId
-          ? thread.agent ?? DEFAULT_BOT_AGENT
-          : bot.agent ?? DEFAULT_BOT_AGENT;
+        // An explicit thread choice wins; older threads without one inherit
+        // the bot's configured agent.
+        agent = thread.agent ?? bot.agent ?? DEFAULT_BOT_AGENT;
         if (!availableAgents.includes(agent)) {
           jsonError(res, 400, `${bot.name} runs on ${agent}, which is not installed on this machine`, {
             agentUnavailable: agent,

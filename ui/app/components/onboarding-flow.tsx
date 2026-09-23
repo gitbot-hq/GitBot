@@ -185,6 +185,10 @@ export default function OnboardingFlow({ onDone, active = true }: { onDone: () =
               allowedTools: Array.isArray(parsed.allowedTools)
                 ? (parsed.allowedTools as string[])
                 : undefined,
+              disallowedTools: Array.isArray(parsed.disallowedTools)
+                ? (parsed.disallowedTools as string[])
+                : undefined,
+              agent: typeof parsed.agent === "string" ? parsed.agent : undefined,
             }).then(
               ({ bot: added }) => {
                 setAvatarPref(added.id, { mascot: "ghost", color: "var(--brand-sun)" });

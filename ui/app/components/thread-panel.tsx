@@ -21,6 +21,7 @@ import {
   ApiError,
   browse,
   createThread,
+  getAgents,
   type BrowseResult,
 } from "../lib/api";
 import type { Bot, ThreadFull } from "../lib/gitbot";
@@ -71,6 +72,8 @@ export default function ThreadPanel({
   const [current, setCurrent] = useState<BrowseResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [agent, setAgent] = useState(bot.agent || "claude-code");
+  const [installed, setInstalled] = useState<string[] | null>(null);
+  const agentTouched = useRef(false);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [folderBrowserOpen, setFolderBrowserOpen] = useState(false);
@@ -101,6 +104,23 @@ export default function ThreadPanel({
     load(bot.repoPath || null);
   }, [bot.repoPath, load]);
 
+  useEffect(() => {
+    let alive = true;
+    getAgents().then(
+      ({ agents }) => {
+        if (!alive) return;
+        setInstalled(agents);
+        if (!agentTouched.current && agents.length > 0) {
+          setAgent((currentAgent) => agents.includes(currentAgent) ? currentAgent : agents[0]);
+        }
+      },
+      () => { if (alive) setInstalled([]); },
+    );
+    return () => { alive = false; };
+  }, [bot.id]);
+
+  const agentMissing = installed !== null && !installed.includes(agent);
+
   // The overlay is scrollable; always start a new thread at step one.
   useEffect(() => {
     paneRef.current?.parentElement?.scrollTo({ top: 0 });
@@ -116,7 +136,7 @@ export default function ThreadPanel({
 
   function pick(repoPath: string | null) {
     // "Run here" with nowhere loaded is a no-op in the original.
-    if (creating || (repoPath && !current)) return;
+    if (creating || agentMissing || installed === null || (repoPath && !current)) return;
     setCreating(true);
     createThread(bot.id, repoPath ?? undefined, agent).then(
       ({ thread }) => onCreated(thread),
@@ -234,7 +254,9 @@ export default function ThreadPanel({
             </div>
           </div>
           <div className="thread-agent-options" role="radiogroup" aria-labelledby="thread-agent-title">
-            {AGENT_OPTIONS.map((option) => (
+            {AGENT_OPTIONS.map((option) => {
+              const missing = installed !== null && !installed.includes(option.id);
+              return (
               <label
                 key={option.id}
                 className={option.id === agent ? "thread-agent-option selected" : "thread-agent-option"}
@@ -244,14 +266,19 @@ export default function ThreadPanel({
                   name="thread-agent"
                   value={option.id}
                   checked={option.id === agent}
-                  disabled={creating}
-                  onChange={() => setAgent(option.id)}
+                  disabled={creating || missing}
+                  onChange={() => {
+                    agentTouched.current = true;
+                    setAgent(option.id);
+                  }}
                 />
                 <span className="thread-agent-radio" aria-hidden="true" />
-                <span>{option.label}</span>
+                <span>{option.label}{missing ? " · Not installed" : ""}</span>
               </label>
-            ))}
+              );
+            })}
           </div>
+          {installed?.length === 0 && <p className="field-warn">Install Claude Code, Codex, or OpenCode to create a thread.</p>}
         </section>
 
         <footer className="pick-acts">
@@ -259,7 +286,7 @@ export default function ThreadPanel({
             type="button"
             className="btn-ghost"
             title="Run where the CLI was started (or the bot's directory)"
-            disabled={creating}
+            disabled={creating || installed === null || agentMissing}
             onClick={() => pick(null)}
           >
             Use default
@@ -271,7 +298,7 @@ export default function ThreadPanel({
           <button
             type="button"
             className="btn-primary"
-            disabled={!current || loading || creating}
+            disabled={!current || loading || creating || installed === null || agentMissing}
             onClick={() => current && pick(current.path)}
           >
             {creating ? "Creating…" : "Create thread"}

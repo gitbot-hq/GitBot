@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { IconQuestionMark } from "@tabler/icons-react";
 import { PanelBack, CloseButton } from "./panel-controls";
-import { createBot, deleteBot, patchBot, type BotInput } from "../lib/api";
+import { createBot, deleteBot, getAgents, patchBot, type BotInput } from "../lib/api";
 import type { Bot } from "../lib/gitbot";
 import { getAvatarPref, resolveAvatar, defaultMascotFor, type AvatarMascot, type AvatarPref } from "../lib/avatar-prefs";
 import { bodies } from "./bot-maker/registry";
@@ -97,7 +97,9 @@ export default function BotForm({
   const [emoji, setEmoji] = useState(bot ? bot.emoji : "🤖");
   const [name, setName] = useState(bot ? bot.name : "");
   const [description, setDescription] = useState(bot ? bot.description : "");
-  const [agent, setAgent] = useState(bot ? bot.agent || "claude-code" : "codex");
+  const [agent, setAgent] = useState(bot ? bot.agent || "claude-code" : "claude-code");
+  const [installed, setInstalled] = useState<string[] | null>(null);
+  const agentTouched = useRef(false);
   const [instructions, setInstructions] = useState(bot ? bot.instructions : "");
   const [setupInstructions, setSetupInstructions] = useState(bot ? bot.setupInstructions || "" : "");
   const [repoPath, setRepoPath] = useState(bot ? bot.repoPath || "" : "");
@@ -126,6 +128,24 @@ export default function BotForm({
     emoji, name, description, agent, instructions, setupInstructions,
     repoPath, model, permissionMode, allowedTools, mascot, color,
   });
+
+  useEffect(() => {
+    let alive = true;
+    getAgents().then(
+      ({ agents }) => {
+        if (!alive) return;
+        setInstalled(agents);
+        if (!bot && !agentTouched.current && agents.length > 0) {
+          setAgent(agents[0]);
+          initial.current.agent = agents[0];
+        }
+      },
+      () => { if (alive) setInstalled([]); },
+    );
+    return () => { alive = false; };
+  }, [bot?.id]);
+
+  const agentMissing = installed !== null && !installed.includes(agent);
 
   function isDirty(): boolean {
     const s = initial.current;
@@ -217,6 +237,10 @@ export default function BotForm({
       setError("Name your bot before saving.");
       return;
     }
+    if (!editing && (installed === null || agentMissing)) {
+      setError("Choose an agent installed on this machine.");
+      return;
+    }
     setBusy(true);
     setError(null);
     const pref = { mascot, color };
@@ -301,7 +325,7 @@ export default function BotForm({
               <button
                 type="button"
                 className="btn-primary"
-                disabled={busy}
+                disabled={busy || (!editing && (installed === null || agentMissing))}
                 onClick={guardSave}
               >
                 Save changes
@@ -370,19 +394,27 @@ export default function BotForm({
           </Field>
           <Field label="Agent" tip="the coding harness that runs this bot">
             <div className="seg-row" role="radiogroup" aria-label="Agent">
-              {AGENT_OPTIONS.map((a) => (
-                <button
-                  key={a.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={a.id === agent}
-                  className={a.id === agent ? "seg-btn selected" : "seg-btn"}
-                  onClick={() => setAgent(a.id)}
-                >
-                  {a.label}
-                </button>
-              ))}
+              {AGENT_OPTIONS.map((a) => {
+                const missing = installed !== null && !installed.includes(a.id);
+                return (
+                  <button
+                    key={a.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={a.id === agent}
+                    className={a.id === agent ? "seg-btn selected" : "seg-btn"}
+                    disabled={missing && a.id !== agent}
+                    onClick={() => {
+                      agentTouched.current = true;
+                      setAgent(a.id);
+                    }}
+                  >
+                    {a.label}{missing ? " · Not installed" : ""}
+                  </button>
+                );
+              })}
             </div>
+            {agentMissing && <small className="field-warn">Not installed on this machine.</small>}
           </Field>
           <Field label="Instructions" tip="appended to the selected agent's system prompt">
             <textarea
@@ -445,7 +477,7 @@ export default function BotForm({
             <button
               type="button"
               className="btn-primary"
-              disabled={busy || !name.trim()}
+              disabled={busy || !name.trim() || (!editing && (installed === null || agentMissing))}
               onClick={save}
             >
               {editing ? "Save" : "Create bot"}

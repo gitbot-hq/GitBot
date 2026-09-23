@@ -11,7 +11,7 @@ const outDir = join(uiDir, "out");
 const destDir = join(root, "dist", "ui");
 
 // The pages users actually reach in the exported app.
-const REQUIRED = ["index.html", "onboarding.html", "marketplace.html", "404.html", "_next"];
+const REQUIRED = ["index.html", "onboarding.html", "marketplace.html", "v2.html", "404.html", "_next"];
 
 const run = (cmd) => execSync(cmd, { cwd: uiDir, stdio: "inherit" });
 

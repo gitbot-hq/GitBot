@@ -36,7 +36,7 @@ const themeInit = `(function(){try{var s=localStorage.getItem("gitbot-theme");va
 // first paint already uses them. React leaves widths unset (null) until
 // the user drags, so these vars own the width — no resize flash, and no
 // hydration mismatch (the server renders the same unset markup).
-// Keep the clamp ranges in sync with app/v2/page.tsx.
+// Keep the clamp ranges in sync with app/components/app-shell.tsx.
 const widthsInit = `(function(){try{function w(k,f,mn,mx){var v=Number(localStorage.getItem(k));if(!isFinite(v))return f;return Math.min(mx,Math.max(mn,v));}var s=document.documentElement.style;s.setProperty("--v2-side-w",w("gitbot-v2-side-width",260,240,420)+"px");s.setProperty("--v2-threads-w",w("gitbot-v2-threads-width",248,200,480)+"px");}catch(e){}})();`;
 
 export default function RootLayout({

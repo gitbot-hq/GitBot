@@ -90,7 +90,7 @@ When listing Claude Code sessions, gitbot uses a session's `custom-title` entry 
 
 The UI is a Next.js app in [`ui/`](../ui/). `npm run build` exports it to static HTML, CSS and JS and copies it into `dist/ui`, so the published package ships a ready-built UI. `src/static-ui.ts` serves those files from the same port as the API; UI files and API routes never share a path.
 
-Opening `/` sends first-time users (no bots on this machine) to `/onboarding`, and everyone else to the bot hub at `/v2`.
+Opening `/` loads the bot hub, which shows onboarding when no bots exist. The legacy `/v2` URL redirects to `/`.
 
 ## Project structure
 
