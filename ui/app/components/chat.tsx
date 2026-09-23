@@ -108,37 +108,37 @@ function errText(e: unknown) {
 
 // Assistant markdown (GFM). Raw HTML is off by default — no XSS surface.
 function MarketplaceListingCard({ listing, color }: { listing: MarketplaceListing; color?: string }) {
-  const facts = [listing.category, listing.agent, listing.permissionMode].filter(Boolean);
+  const facts = [
+    ["Category", listing.category],
+    ["Agent", listing.agent],
+    ["Permissions", listing.permissionMode],
+  ].filter((fact): fact is [string, string] => !!fact[1]);
   return (
     <section className="marketplace-listing-card" style={{ "--listing-color": color } as React.CSSProperties} aria-label={`${listing.name} marketplace listing`}>
       <header className="marketplace-listing-head">
         <span className="marketplace-listing-emoji" aria-hidden="true">{listing.emoji || "🤖"}</span>
         <div>
-          <span className="marketplace-listing-eyebrow">Marketplace draft</span>
           <h3>{listing.name}</h3>
           <p>{listing.description}</p>
         </div>
+        <span className="marketplace-listing-state">Draft</span>
       </header>
-      {(facts.length > 0 || listing.tags?.length) && (
-        <div className="marketplace-listing-tags">
-          {[...facts, ...(listing.tags ?? [])].map((tag, index) => <span key={`${tag}-${index}`}>{tag}</span>)}
-        </div>
+      {facts.length > 0 && (
+        <dl className="marketplace-listing-facts">
+          {facts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+        </dl>
       )}
-      {listing.about && <section><h4>About</h4><p>{listing.about}</p></section>}
+      {!!listing.tags?.length && <p className="marketplace-listing-tags"><b>Tags</b>{listing.tags.join(", ")}</p>}
+      {listing.about && <section className="marketplace-listing-section"><h4>About</h4><p>{listing.about}</p></section>}
       {!!listing.capabilities?.length && (
-        <section>
+        <section className="marketplace-listing-section">
           <h4>Capabilities</h4>
           <ul>{listing.capabilities.map((item) => <li key={item}>{item}</li>)}</ul>
         </section>
       )}
-      {listing.starterPrompt && <section><h4>Starter prompt</h4><blockquote>{listing.starterPrompt}</blockquote></section>}
-      {(listing.instructions || listing.setupInstructions) && (
-        <details>
-          <summary>View bot instructions</summary>
-          {listing.instructions && <section><h4>Instructions</h4><pre>{listing.instructions}</pre></section>}
-          {listing.setupInstructions && <section><h4>Setup instructions</h4><pre>{listing.setupInstructions}</pre></section>}
-        </details>
-      )}
+      {listing.starterPrompt && <section className="marketplace-listing-section"><h4>Starter prompt</h4><blockquote>{listing.starterPrompt}</blockquote></section>}
+      {listing.instructions && <section className="marketplace-listing-section"><h4>Instructions</h4><pre>{listing.instructions}</pre></section>}
+      {listing.setupInstructions && <section className="marketplace-listing-section"><h4>Setup instructions</h4><pre>{listing.setupInstructions}</pre></section>}
     </section>
   );
 }
