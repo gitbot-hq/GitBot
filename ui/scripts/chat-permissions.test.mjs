@@ -11,7 +11,7 @@ test("chat permission choices send the matching session mode", async () => {
   };
 
   try {
-    for (const mode of ["ask-permissions", "auto-approve", "plan"]) {
+    for (const mode of ["ask-permissions", "allow-all-edits", "yolo", "plan"]) {
       await postChat("thread", "hello", mode);
     }
   } finally {
@@ -20,6 +20,7 @@ test("chat permission choices send the matching session mode", async () => {
 
   assert.deepEqual(requests.map(({ permissionMode, mode }) => [permissionMode, mode]), [
     ["ask-permissions", "build"],
+    ["allow-all-edits", "build"],
     ["yolo", "build"],
     ["yolo", "plan"],
   ]);

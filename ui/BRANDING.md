@@ -33,7 +33,7 @@ Hover containers use `--surface-2`, active/selected containers use
 
 ## User avatar
 
-- `--user-avatar-bg: #FEEEA6` — light tint of `--brand-sun` for Sunny's
+- `--user-avatar-bg: #FEEEA6` — light tint of `--brand-sun` for the user's
   avatar, with dark `#16161a` initials. Fixed in both modes (the bar is
   always dark).
 
