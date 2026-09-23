@@ -165,7 +165,8 @@ body {
   }
 
   .desktop-notice-inner { max-width: 430px; }
-  .desktop-notice-icon { width: 112px; height: 90px; color: var(--text); margin: 0 auto 24px; }
+  .desktop-notice-icon { display: flex; width: 96px; height: 96px; color: var(--text); margin: 0 auto 24px; }
+  .desktop-notice-icon svg { stroke-width: 1; }
   .desktop-notice h1 { margin: 0; font-size: clamp(24px, 5vw, 30px); line-height: 1.15; letter-spacing: -0.035em; font-weight: 700; outline: none; }
   .desktop-notice p { margin: 16px 0 0; color: var(--muted); font-size: 15px; line-height: 1.55; }
 }

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
 import Logo from "./logo";
 import UserChip from "./user-chip";
 import { DEFAULT_USER_NAME } from "../lib/user-prefs";
@@ -23,9 +24,9 @@ export default function TopBar({
 }) {
   return (
     <header className={className ? `topbar ${className}` : "topbar"}>
-      <span className="logo">
+      <Link href="/" className="logo" aria-label="Go to workspace">
         <Logo height={24} />
-      </span>
+      </Link>
       {actions}
       <UserChip name={userName} photo={userPhoto} onClick={onProfile} />
     </header>
