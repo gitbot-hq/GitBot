@@ -1,7 +1,9 @@
 "use client";
 
+import AnimatedActionIcon from "./animated-action-icon";
+import { PlusIcon } from "@animateicons/react/lucide/plus-icon";
+
 import { useEffect, useRef, useState } from "react";
-import { IconPlus } from "@tabler/icons-react";
 
 // New-bot ghost button. The dashed frame is a measured SVG rect so the
 // 8px / 4px dashes follow the rounded corners exactly at any width
@@ -25,7 +27,7 @@ export default function NewBotButton({ onClick }: { onClick?: () => void }) {
   }, []);
 
   return (
-    <button ref={ref} type="button" className="new-bot" onClick={onClick} aria-label="Add new bot">
+    <button ref={ref} type="button" className="new-bot" onClick={onClick} aria-label="Create bot" data-tip="Create bot">
       <svg
         className="dash-frame"
         viewBox={`0 0 ${box.w} ${box.h}`}
@@ -45,7 +47,7 @@ export default function NewBotButton({ onClick }: { onClick?: () => void }) {
           strokeDasharray="6 4"
         />
       </svg>
-      <IconPlus size={20} stroke={2} aria-hidden="true" />
+      <AnimatedActionIcon icon={PlusIcon} size={20} aria-hidden="true" />
     </button>
   );
 }

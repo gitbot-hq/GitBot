@@ -124,3 +124,34 @@ export function makeMorphs(expressions) {
   for (const face of Object.values(faces)) for (const part of ['left','right','mouth','tongue']) face[part] = align(face[part], part === 'tongue' ? faces.happy.tongue : reference[part]);
   return faces;
 }
+
+// Derive gaze poses from the two authored short-eye faces, in the same fixed
+// coordinates as all other expressions. Eyes lead; the mouth follows gently.
+export const lookDirections = {
+  'top-left': [-1, -1], top: [0, -1], 'top-right': [1, -1],
+  left: [-1, 0], right: [1, 0],
+  'bottom-left': [-1, 1], bottom: [0, 1], 'bottom-right': [1, 1],
+};
+export function makeLookAroundMorphs(smile, curious) {
+  const result = { 'looking-around': smile, 'looking-around-curious': curious };
+  for (const [direction, [x, y]] of Object.entries(lookDirections)) {
+    for (const [suffix, face] of [['', smile], ['-curious', curious]]) {
+      const shifted = { ...face };
+      for (const part of ['left', 'right', 'mouth', 'tongue']) {
+        const eye = part === 'left' || part === 'right';
+        // Downward diagonals use the opposite eye-size emphasis.
+        const smallerSide = y > 0 ? (x < 0 ? 'left' : 'right') : (x > 0 ? 'left' : 'right');
+        const farEye = eye && part === smallerSide;
+        const cx = part === 'left' ? 11.8535 : 65.5605;
+        shifted[part] = face[part].map(([px, py]) => {
+          // A small perspective squeeze makes a sideways glance read as a turn.
+          const sx = eye && x && farEye ? cx + (px - cx) * .9 : px;
+          const sy = eye && x && farEye ? 35.3086 + (py - 35.3086) * .94 : py;
+          return [sx + x * (eye ? 11 : 6), sy + y * (eye ? 13 : 6)];
+        });
+      }
+      result[`look-${direction}${suffix}`] = shifted;
+    }
+  }
+  return result;
+}

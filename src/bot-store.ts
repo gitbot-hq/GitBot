@@ -239,7 +239,8 @@ export function createThread(
   botId: string,
   repoPath: string,
   title?: string,
-  kind: "chat" | "setup" = "chat"
+  kind: "chat" | "setup" = "chat",
+  agent?: BotAgent,
 ): Thread {
   const threads = readCollection<Thread>(THREADS_FILE);
   const ts = now();
@@ -247,6 +248,7 @@ export function createThread(
     id: randomUUID(),
     botId,
     kind,
+    ...(agent ? { agent } : {}),
     sdkSessionId: null,
     title: title ?? defaultTitle(repoPath),
     titleIsAuto: !title,

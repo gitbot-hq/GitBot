@@ -1,13 +1,16 @@
 import artwork from './artwork.json';
 export const bodies = artwork.bodies;
-export const expressions = [...artwork.expressions, { ...artwork.expressions.find(e => e.id === 'neutral')!, id: 'looking-around', label: 'Looking around' }];
-export type BotActivity = 'idle' | 'listening' | 'thinking' | 'working' | 'success' | 'error' | 'sleeping';
+export const expressions = artwork.expressions;
+// Positive expressions available for successful activities and explicit reactions.
+export const positiveExpressions = ['happy', 'calm', 'wink', 'excited-wink', 'playful', 'playful-2', 'sassy', 'starry', 'excited'] as const;
+export type BotActivity = 'idle' | 'reading' | 'listening' | 'thinking' | 'working' | 'success' | 'error' | 'sleeping';
 export const activityExpressions: Record<BotActivity, string[]> = {
-  idle: ['neutral', 'looking-around', 'happy', 'neutral', 'wink'],
+  idle: ['looking-around'],
   listening: ['neutral', 'surprised', 'neutral'],
-  thinking: ['confused', 'sus', 'confused'],
-  working: ['neutral', 'happy', 'neutral'],
-  success: ['excited', 'happy', 'wink'],
+  reading: ['reading'],
+  thinking: ['thinking'],
+  working: ['working'],
+  success: ['excited', ...positiveExpressions],
   error: ['sad', 'confused', 'sad'],
   sleeping: ['sleepy'],
 };

@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useId, useState, type CSSProperties } from 'react';
 import { activityExpressions, bodies, expressions, facePlacement, type BotActivity } from './registry';
 import './mascot.css';
-import MorphFace from './MorphFace';
+import LookAroundFace from './LookAroundFace';
 import BodyReaction from './BodyReaction';
+import ExpressionProps from './ExpressionProps';
 
 export type BotMascotProps = {
   body?: string;
@@ -19,7 +20,8 @@ export type BotMascotProps = {
 };
 
 export function Artwork({ art, className }: { art: typeof bodies[number]; className?: string }) {
-  return <svg className={className} viewBox={art.viewBox} fill="none" aria-hidden="true" dangerouslySetInnerHTML={{ __html: art.markup }} />;
+  const id = useId();
+  return <svg className={className} viewBox={art.viewBox} fill="none" aria-hidden="true" dangerouslySetInnerHTML={{ __html: art.markup.replaceAll('__mascot_id__', id) }} />;
 }
 
 export default function BotMascot({ body = 'ghost', color = '#FECE00', expression, activity = 'idle', motion = true, duration = 420, size = 280, label }: BotMascotProps) {
@@ -40,8 +42,8 @@ export default function BotMascot({ body = 'ghost', color = '#FECE00', expressio
     <BodyReaction expression={active} motion={motion}>
       <Artwork art={shape} className="bm-body" />
       <div className="bm-face-anchor"><div className="bm-gaze">
-        <MorphFace expression={active} duration={duration} motion={motion} />
-      </div></div>
+        <LookAroundFace expression={active} duration={duration} motion={motion} />
+      </div><ExpressionProps expression={active} /></div>
     </BodyReaction>
   </div>;
 }

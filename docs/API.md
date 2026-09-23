@@ -128,7 +128,7 @@ Events carry a `seq` field and an SSE `id:`, so a client that reconnects with `L
 | `status` | `status`, `tool_name?`, `summary?` | Activity: `thinking`, `tool`, `tool_summary` |
 | `permission_request` | `toolUseID`, `toolName`, `input` | The agent needs approval (Claude Code, OpenCode — Codex never asks; its permission mode selects a sandbox) |
 | `result` | `subtype`, `cost`, `duration_ms`, `num_turns` | Turn statistics (Claude Code) |
-| `agent_error` | `message` | The agent itself failed — provider refused, bad model (OpenCode). A terminal event follows |
+| `agent_error` | `message` | The agent itself reported a problem — provider refused, bad model (OpenCode); a connection retry or transport fallback (Codex). Not terminal on its own: it is followed by a terminal event only if the turn actually fails |
 | `done` | — | Turn finished |
 | `aborted` | `message` | Turn was stopped |
 | `error` | `message` | Turn failed |

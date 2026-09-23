@@ -1,3 +1,5 @@
+import AppProviders from "./components/app-providers";
+import DesktopNotice from "./components/desktop-notice";
 import type { Metadata } from "next";
 import "./globals.css";
 import "./components/mascot-depth.css";
@@ -10,6 +12,20 @@ export const metadata: Metadata = {
   },
   description: "GitBot helps teams turn Git workflows into momentum.",
   metadataBase: new URL("https://gitbot.example"),
+  icons: {
+    icon: [
+      {
+        url: "/favicon-light.svg",
+        type: "image/svg+xml",
+        media: "(prefers-color-scheme: light)",
+      },
+      {
+        url: "/favicon-dark.svg",
+        type: "image/svg+xml",
+        media: "(prefers-color-scheme: dark)",
+      },
+    ],
+  },
 };
 
 // Runs before paint: restores saved theme, else follows the OS.
@@ -20,7 +36,7 @@ const themeInit = `(function(){try{var s=localStorage.getItem("gitbot-theme");va
 // first paint already uses them. React leaves widths unset (null) until
 // the user drags, so these vars own the width — no resize flash, and no
 // hydration mismatch (the server renders the same unset markup).
-// Keep the clamp ranges in sync with app/v2/page.tsx.
+// Keep the clamp ranges in sync with app/components/app-shell.tsx.
 const widthsInit = `(function(){try{function w(k,f,mn,mx){var v=Number(localStorage.getItem(k));if(!isFinite(v))return f;return Math.min(mx,Math.max(mn,v));}var s=document.documentElement.style;s.setProperty("--v2-side-w",w("gitbot-v2-side-width",260,240,420)+"px");s.setProperty("--v2-threads-w",w("gitbot-v2-threads-width",248,200,480)+"px");}catch(e){}})();`;
 
 export default function RootLayout({
@@ -34,7 +50,7 @@ export default function RootLayout({
       </head>
       <body>
         <MascotDepthDefs />
-        {children}
+        <DesktopNotice><AppProviders>{children}</AppProviders></DesktopNotice>
       </body>
     </html>
   );

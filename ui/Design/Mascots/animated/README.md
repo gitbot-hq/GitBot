@@ -1,9 +1,5 @@
 # Animated alternate mascots
 
-> **Note:** the `app/components/mascots/` component this document describes was
-> removed from the app along with the design playgrounds that rendered it. The
-> artwork and generator here are kept as design source; the component is in git history.
-
 Self-contained animated SVGs (motion + art in one file, no dependencies).
 Drop into any page as inline SVG. CSS animations play as-is in browsers.
 
@@ -40,7 +36,7 @@ Each file namespaces its classes/keyframes (`m-<name>-<variant>-*`), so files
 can be inlined together on one page without their animations leaking into
 each other. Only `--mascot-body` / `--mascot-ink` are shared globals.
 
-Motion language matches the main mascot (`../../expressions/creature-expressions.svg`
+Motion language matches the main mascot (`../../public/creature-expressions.svg`
 and `../mascot-spec.md` §6). All motion stops under `prefers-reduced-motion`.
 
 ## Recolor

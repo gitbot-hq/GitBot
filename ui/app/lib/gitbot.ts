@@ -33,6 +33,8 @@ export type Thread = {
 };
 
 export type ThreadFull = Thread & {
+  // Omitted when the thread inherits the bot's configured coding agent.
+  agent?: string;
   kind: string;
   sdkSessionId: string | null;
   titleIsAuto: boolean;
@@ -46,12 +48,18 @@ export type ThreadFull = Thread & {
 export type HistoryBlock = {
   type: string;
   text?: string;
+  tool_name?: string;
+  tool_input?: unknown;
 };
 
 export type HistoryMsg = {
   role: string;
   content: HistoryBlock[];
 };
+
+/** Tools the "Allow all edits" shortcut on an approval card covers
+ *  (the server's allow-all-edits mode auto-approves exactly these). */
+export const EDIT_TOOLS = ["Edit", "Write", "NotebookEdit"];
 
 export type PermRequest = {
   toolUseID: string;
@@ -64,20 +72,3 @@ export type Message = {
   role: "user" | "assistant";
   text: string;
 };
-
-// A running session's permission mode (server: PermissionMode). Bots store
-// their own vocabulary ("ask-permissions" | "auto-approve" | "plan"); this
-// mirrors the server's botPermissionToSession translation.
-export type SessionPermissionMode = "ask-permissions" | "allow-all-edits" | "yolo";
-
-export const PERMISSION_MODES: { value: SessionPermissionMode; label: string }[] = [
-  { value: "ask-permissions", label: "Ask every time" },
-  { value: "allow-all-edits", label: "Auto-approve edits" },
-  { value: "yolo", label: "Auto-approve all" },
-];
-
-export const EDIT_TOOLS = ["Edit", "Write", "NotebookEdit"];
-
-export function botPermissionToSession(botMode: string | undefined): SessionPermissionMode {
-  return botMode === "auto-approve" || botMode === "plan" ? "yolo" : "ask-permissions";
-}

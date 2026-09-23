@@ -1,12 +1,14 @@
 "use client";
 
+import AnimatedActionIcon from "./animated-action-icon";
+import { MoonIcon } from "@animateicons/react/lucide/moon-icon";
+import { SunIcon } from "@animateicons/react/lucide/sun-icon";
+
 import { useEffect, useState } from "react";
-import { IconMoon, IconSun } from "@tabler/icons-react";
 
 type Theme = "light" | "dark";
 
-// v2 top-bar theme switch, next to the user chip: documentElement dataset +
-// localStorage, restored before paint by layout.tsx.
+// Top-bar theme switch. layout.tsx restores the saved theme before paint.
 export default function ThemeButton() {
   const [theme, setTheme] = useState<Theme>("dark");
 
@@ -33,11 +35,12 @@ export default function ThemeButton() {
       className="theme-btn"
       onClick={toggle}
       aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+      data-tip={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
     >
       {theme === "dark" ? (
-        <IconSun size={18} stroke={2} aria-hidden="true" />
+        <AnimatedActionIcon icon={SunIcon} size={18} aria-hidden="true" />
       ) : (
-        <IconMoon size={18} stroke={2} aria-hidden="true" />
+        <AnimatedActionIcon icon={MoonIcon} size={18} aria-hidden="true" />
       )}
     </button>
   );

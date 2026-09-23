@@ -4,6 +4,12 @@ import { useEffect, useRef, type ReactNode } from 'react';
 // Scale changes stay within 3.5%; every reaction resolves back to the original body.
 const reactions: Record<string, { pose: string; settle: string; period: number }> = {
   neutral: { pose: 'scale(1.012, .988)', settle: 'scale(.996, 1.004)', period: 5800 },
+  calm: { pose: 'scale(1.012, .988)', settle: 'scale(.996, 1.004)', period: 6500 },
+  'excited-wink': { pose: 'scale(1.03, .974) rotate(1.5deg)', settle: 'scale(.985, 1.015) rotate(-.6deg)', period: 3300 },
+  playful: { pose: 'scale(1.03, .974) rotate(-1.6deg)', settle: 'scale(.987, 1.013) rotate(1.2deg)', period: 3200 },
+  'playful-2': { pose: 'scale(1.024, .98) rotate(1.2deg)', settle: 'scale(.99, 1.01) rotate(-.8deg)', period: 3900 },
+  sassy: { pose: 'scale(1.014, .986) rotate(1.8deg)', settle: 'scale(1) rotate(-.4deg)', period: 4900 },
+  starry: { pose: 'scale(.976, 1.03)', settle: 'scale(1.022, .978) rotate(.6deg)', period: 3000 },
   happy: { pose: 'scale(1.028, .974) rotate(-.7deg)', settle: 'scale(.987, 1.013) rotate(.4deg)', period: 3600 },
   excited: { pose: 'scale(1.035, .967) rotate(-1deg)', settle: 'scale(.976, 1.024) rotate(1deg)', period: 2600 },
   surprised: { pose: 'scale(.973, 1.03)', settle: 'scale(1.014, .986)', period: 4300 },
@@ -15,7 +21,7 @@ const reactions: Record<string, { pose: string; settle: string; period: number }
   angry: { pose: 'scale(1.03, .97) rotate(-.8deg)', settle: 'scale(1.018, .982) rotate(.8deg)', period: 3200 },
   unimpressed: { pose: 'scale(1.017, .983) rotate(.7deg)', settle: 'scale(1)', period: 6200 },
   sleepy: { pose: 'scale(1.025, .975)', settle: 'scale(.993, 1.007)', period: 7000 },
-  'looking-around': { pose: 'scale(1.012, .988) rotate(-1.4deg)', settle: 'scale(1.012, .988) rotate(1.4deg)', period: 6400 },
+  'looking-around': { pose: 'scale(1.012, .988)', settle: 'scale(.996, 1.004)', period: 6400 },
 };
 
 export default function BodyReaction({ expression, motion, children }: { expression: string; motion: boolean; children: ReactNode }) {

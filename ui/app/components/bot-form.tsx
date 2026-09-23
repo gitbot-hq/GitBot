@@ -2,12 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import { IconQuestionMark } from "@tabler/icons-react";
+import { PanelBack, CloseButton } from "./panel-controls";
 import { createBot, deleteBot, getAgents, patchBot, type BotInput } from "../lib/api";
 import type { Bot } from "../lib/gitbot";
 import { getAvatarPref, resolveAvatar, defaultMascotFor, type AvatarMascot, type AvatarPref } from "../lib/avatar-prefs";
 import { bodies } from "./bot-maker/registry";
 import { botTile, BRAND_TILES } from "./bot-avatar";
 import BotFace from "./bot-face";
+import BotName from "./bot-name";
+import { useMascotPointerFollow } from "../lib/use-mascot-pointer-follow";
 
 function Field({
   label,
@@ -41,16 +44,10 @@ const BODY_LABELS: Record<string, string> = Object.fromEntries(
   bodies.map((b) => [b.id, b.label]),
 );
 
-const MODEL_PLACEHOLDER: Record<string, string> = {
-  "claude-code": "claude-sonnet-4-6",
-  opencode: "anthropic/claude-haiku-4-5",
-  codex: "blank uses Codex's default",
-};
-
 const AGENT_OPTIONS = [
-  { value: "claude-code", label: "Claude Code" },
-  { value: "opencode", label: "OpenCode" },
-  { value: "codex", label: "Codex" },
+  { id: "claude-code", label: "Claude Code" },
+  { id: "codex", label: "Codex" },
+  { id: "opencode", label: "OpenCode" },
 ];
 
 function fallbackPref(id: string): AvatarPref {
@@ -64,47 +61,51 @@ function fallbackPref(id: string): AvatarPref {
 // color pickers on the left, a progressive form on the right (essentials
 // first, power settings behind Advanced). Labels, hints, and
 // placeholders are the original's words verbatim.
+//
+// Bot switching: app-shell sets `switchTo` when the user picks another bot
+// mid-edit. If the form is clean the switch applies straight through;
+// if dirty a guard dialog offers Save / Discard / Cancel.
 export default function BotForm({
   bot,
   onClose,
   onSaved,
   onDeleted,
   onShare,
+  switchTo,
+  onSwitched,
+  onSwitchDiscard,
+  onSwitchCancel,
+  active = true,
 }: {
   bot: Bot | null;
+  active?: boolean;
   onClose: () => void;
   onSaved: (bot: Bot, pref: AvatarPref) => void;
   onDeleted: (id: string) => void;
   onShare: (bot: Bot) => void;
+  /** Pending bot-switch target from the sidebar; null when none.
+   *  Optional — only the main shell drives switches. */
+  switchTo?: Bot | null;
+  /** A guarded save completed — list is fresh, apply the switch. */
+  onSwitched?: (bot: Bot, pref: AvatarPref) => void;
+  /** Apply the pending switch without saving (clean form or Discard). */
+  onSwitchDiscard?: () => void;
+  /** User cancelled the switch — stay on this bot. */
+  onSwitchCancel?: () => void;
 }) {
   const editing = !!bot;
   const [emoji, setEmoji] = useState(bot ? bot.emoji : "🤖");
   const [name, setName] = useState(bot ? bot.name : "");
   const [description, setDescription] = useState(bot ? bot.description : "");
   const [agent, setAgent] = useState(bot ? bot.agent || "claude-code" : "claude-code");
-  // Agents installed on this machine; null until the server answers. A new
-  // bot starts on the first one, unless the user already picked.
   const [installed, setInstalled] = useState<string[] | null>(null);
   const agentTouched = useRef(false);
-  useEffect(() => {
-    let alive = true;
-    getAgents()
-      .then(({ agents }) => {
-        if (!alive) return;
-        setInstalled(agents);
-        if (!bot && !agentTouched.current && agents.length > 0) setAgent(agents[0]);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const agentMissing = installed !== null && installed.indexOf(agent) === -1;
   const [instructions, setInstructions] = useState(bot ? bot.instructions : "");
   const [setupInstructions, setSetupInstructions] = useState(bot ? bot.setupInstructions || "" : "");
   const [repoPath, setRepoPath] = useState(bot ? bot.repoPath || "" : "");
   const [model, setModel] = useState(bot ? bot.model || "" : "");
+  // New bots ask first: auto-approve is opt-in, never the default a
+  // freshly imported or created bot runs tools with.
   const [permissionMode, setPermissionMode] = useState(
     bot ? bot.permissionMode : "ask-permissions",
   );
@@ -119,48 +120,70 @@ export default function BotForm({
   );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [guard, setGuard] = useState(false);
   const studioRef = useRef<HTMLDivElement | null>(null);
+  useMascotPointerFollow({ root: studioRef });
 
-  // Studio mascots watch the cursor: each followed face steers toward
-  // the pointer (capped travel, eased). Reduced-motion users never opt in.
+  // Snapshot of the opened bot (or blank defaults for "new") — the guard
+  // compares live field state against this.
+  const initial = useRef({
+    emoji, name, description, agent, instructions, setupInstructions,
+    repoPath, model, permissionMode, allowedTools, mascot, color,
+  });
+
   useEffect(() => {
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    let raf = 0;
-    let cx = window.innerWidth / 2;
-    let cy = window.innerHeight / 2;
-    const apply = () => {
-      raf = 0;
-      studioRef.current
-        ?.querySelectorAll(".bot-avatar.follow .bot-mascot")
-        .forEach((el) => {
-          const r = el.getBoundingClientRect();
-          const dx = (cx - (r.left + r.width / 2)) / r.width;
-          const dy = (cy - (r.top + r.height / 2)) / r.height;
-          const len = Math.hypot(dx, dy) || 1;
-          const mag = Math.min(1, len * 1.5) * 3;
-          (el as HTMLElement).style.setProperty("--px", `${((dx / len) * mag).toFixed(2)}px`);
-          (el as HTMLElement).style.setProperty("--py", `${((dy / len) * mag).toFixed(2)}px`);
-        });
-    };
-    const onMove = (e: MouseEvent) => {
-      cx = e.clientX;
-      cy = e.clientY;
-      if (!raf) raf = requestAnimationFrame(apply);
-    };
-    window.addEventListener("mousemove", onMove);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      if (raf) cancelAnimationFrame(raf);
-    };
-  }, []);
+    let alive = true;
+    getAgents().then(
+      ({ agents }) => {
+        if (!alive) return;
+        setInstalled(agents);
+        if (!bot && !agentTouched.current && agents.length > 0) {
+          setAgent(agents[0]);
+          initial.current.agent = agents[0];
+        }
+      },
+      () => { if (alive) setInstalled([]); },
+    );
+    return () => { alive = false; };
+  }, [bot?.id]);
+
+  const agentMissing = installed !== null && !installed.includes(agent);
+
+  function isDirty(): boolean {
+    const s = initial.current;
+    return (
+      emoji !== s.emoji ||
+      name !== s.name ||
+      description !== s.description ||
+      agent !== s.agent ||
+      instructions !== s.instructions ||
+      setupInstructions !== s.setupInstructions ||
+      repoPath !== s.repoPath ||
+      model !== s.model ||
+      permissionMode !== s.permissionMode ||
+      allowedTools !== s.allowedTools ||
+      mascot !== s.mascot ||
+      color !== s.color
+    );
+  }
+
+  // A sidebar switch request lands here: clean forms pass through, dirty
+  // ones raise the guard dialog. No-ops when the host doesn't drive
+  // switches (legacy/demo surfaces).
+  useEffect(() => {
+    if (!switchTo) return;
+    if (isDirty()) setGuard(true);
+    else onSwitchDiscard?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [switchTo]);
 
   useEffect(() => {
     function esc(ev: KeyboardEvent) {
-      if (ev.key === "Escape") onClose();
+      if (ev.key === "Escape" && !guard && active) onClose();
     }
     document.addEventListener("keydown", esc);
     return () => document.removeEventListener("keydown", esc);
-  }, [onClose]);
+  }, [guard, active, onClose]);
 
   function body(): BotInput {
     const tools = allowedTools
@@ -209,10 +232,112 @@ export default function BotForm({
     );
   }
 
+  /** Guard "Save": persist this bot, then hand the fresh record to the
+   *  pending sidebar switch. */
+  function guardSave() {
+    if (!name.trim()) {
+      setError("Name your bot before saving.");
+      return;
+    }
+    if (!editing && (installed === null || agentMissing)) {
+      setError("Choose an agent installed on this machine.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const pref = { mascot, color };
+    const req = editing && bot ? patchBot(bot.id, body()) : createBot(body());
+    req.then(
+      (d) => {
+        setBusy(false);
+        setGuard(false);
+        onSwitched?.(d.bot, pref);
+      },
+      (e) => {
+        setBusy(false);
+        setError(e instanceof Error ? e.message : "Save failed");
+      },
+    );
+  }
+
+  function cancelGuard() {
+    setGuard(false);
+    onSwitchCancel?.();
+  }
+
+  function discardGuard() {
+    setGuard(false);
+    onSwitchDiscard?.();
+  }
+
+  // Guard Escape closes the dialog (stays in the editor); the form-level
+  // Escape above already stands down while the guard is open.
+  useEffect(() => {
+    if (!guard || !active) return;
+    function esc(ev: KeyboardEvent) {
+      if (ev.key === "Escape") cancelGuard();
+    }
+    document.addEventListener("keydown", esc);
+    return () => document.removeEventListener("keydown", esc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [guard, active]);
+
   return (
-    <div className="modal inline" aria-label={editing ? "Edit bot" : "New bot"}>
+    <>
+    <PanelBack onClick={onClose} disabled={busy} />
+    <div className="modal inline" aria-label={editing ? "Edit bot" : "Create bot"}>
+      {guard && switchTo && (
+        <div className="backdrop" onClick={(event) => { if (event.target === event.currentTarget && !busy) cancelGuard(); }}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Unsaved changes"
+          >
+            <div className="modal-head">
+              <h2>Unsaved changes</h2>
+              <CloseButton disabled={busy} onClick={cancelGuard} />
+            </div>
+            <p className="guard-text">
+              {editing && bot ? <BotName color={color}>{bot.name}</BotName> : "Your new bot"} has unsaved
+              changes. Save them before switching to{" "}
+              <BotName color={resolveAvatar(getAvatarPref(switchTo.id), fallbackPref(switchTo.id)).color}>
+                {switchTo.name}
+              </BotName>?
+            </p>
+            {error && <p className="chat-error">{error}</p>}
+            <div className="acts">
+              <button
+                type="button"
+                className="btn-danger"
+                disabled={busy}
+                onClick={discardGuard}
+              >
+                Discard
+              </button>
+              <div className="spacer" />
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={busy}
+                onClick={cancelGuard}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={busy || (!editing && (installed === null || agentMissing))}
+                onClick={guardSave}
+              >
+                Save changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="modal-head">
-        <h2>{editing ? "Edit bot" : "New bot"}</h2>
+        <h2>{editing ? "Edit bot" : "Create bot"}</h2>
       </div>
       <div className="studio" ref={studioRef}>
         <div className="studio-side">
@@ -270,36 +395,28 @@ export default function BotForm({
             />
           </Field>
           <Field label="Agent" tip="the coding harness that runs this bot">
-            <select
-              value={agent}
-              onChange={(e) => {
-                agentTouched.current = true;
-                setAgent(e.target.value);
-              }}
-            >
+            <div className="seg-row" role="radiogroup" aria-label="Agent">
               {AGENT_OPTIONS.map((a) => {
-                const missing = installed !== null && installed.indexOf(a.value) === -1;
+                const missing = installed !== null && !installed.includes(a.id);
                 return (
-                  // A missing agent stays selectable only while it is the current
-                  // value, so an imported bot shows what it was built for.
-                  <option key={a.value} value={a.value} disabled={missing && a.value !== agent}>
-                    {missing ? `${a.label} (not installed)` : a.label}
-                  </option>
+                  <button
+                    key={a.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={a.id === agent}
+                    className={a.id === agent ? "seg-btn selected" : "seg-btn"}
+                    disabled={missing && a.id !== agent}
+                    onClick={() => {
+                      agentTouched.current = true;
+                      setAgent(a.id);
+                    }}
+                  >
+                    {a.label}{missing ? " · Not installed" : ""}
+                  </button>
                 );
               })}
-            </select>
-            {agent === "opencode" && model.trim().indexOf("/") === -1 && (
-              <small className="field-warn">
-                OpenCode needs a model as provider/model (under Advanced), e.g.
-                anthropic/claude-haiku-4-5. Without one it uses its free model, which
-                refuses requests from gitbot.
-              </small>
-            )}
-            {agentMissing && (
-              <small className="field-warn">
-                Not installed on this machine — this bot cannot run until it is.
-              </small>
-            )}
+            </div>
+            {agentMissing && <small className="field-warn">Not installed on this machine.</small>}
           </Field>
           <Field label="Instructions" tip="appended to the selected agent's system prompt">
             <textarea
@@ -315,51 +432,39 @@ export default function BotForm({
               <option value="plan">Plan only (no edits)</option>
             </select>
           </Field>
-          <details className="advanced">
-            <summary>Advanced</summary>
-            <Field label="Setup instructions" tip="run once per machine — blank means no setup">
-              <textarea
-                value={setupInstructions}
-                onChange={(e) => setSetupInstructions(e.target.value)}
-                placeholder="This bot needs ffmpeg on PATH. Check for it and install it with the machine's package manager if it is missing."
-              />
-            </Field>
-            <Field label="Working directory" tip="default for new threads">
-              <input
-                value={repoPath}
-                onChange={(e) => setRepoPath(e.target.value)}
-                placeholder="blank uses the server's directory"
-              />
-            </Field>
-            <Field label="Model" tip="optional">
-              <input
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder={MODEL_PLACEHOLDER[agent] ?? ""}
-              />
-            </Field>
-            <Field
-              label="Allowed tools"
-              tip="comma-separated; the only tools this bot can use — blank means all. Setup runs are not limited."
-            >
-              <input
-                value={allowedTools}
-                onChange={(e) => setAllowedTools(e.target.value)}
-                placeholder="Read, Grep, Edit, Bash"
-              />
-              {agent === "codex" && allowedTools.trim() && (
-                <small className="field-warn">
-                  Codex cannot limit its tools, so this list is ignored for this bot. Use
-                  Claude Code or OpenCode if the limit matters.
-                </small>
-              )}
-            </Field>
-          </details>
+          <Field label="Setup instructions" tip="run once per machine — blank means no setup">
+            <textarea
+              value={setupInstructions}
+              onChange={(e) => setSetupInstructions(e.target.value)}
+              placeholder="This bot needs ffmpeg on PATH. Check for it and install it with the machine's package manager if it is missing."
+            />
+          </Field>
+          <Field label="Working directory" tip="default for new threads">
+            <input
+              value={repoPath}
+              onChange={(e) => setRepoPath(e.target.value)}
+              placeholder="blank uses the server's directory"
+            />
+          </Field>
+          <Field label="Model" tip="optional">
+            <input
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder="claude-sonnet-4-6"
+            />
+          </Field>
+          <Field label="Allowed tools" tip="comma-separated; blank means all">
+            <input
+              value={allowedTools}
+              onChange={(e) => setAllowedTools(e.target.value)}
+              placeholder="Read, Grep, Edit, Bash"
+            />
+          </Field>
           {error && <p className="chat-error">{error}</p>}
           <div className="acts">
             {editing && bot && (
               <button type="button" className="btn-ghost" disabled={busy} onClick={() => onShare(bot)}>
-                Share
+                Share bot
               </button>
             )}
             {editing && (
@@ -374,7 +479,7 @@ export default function BotForm({
             <button
               type="button"
               className="btn-primary"
-              disabled={busy || !name.trim()}
+              disabled={busy || !name.trim() || (!editing && (installed === null || agentMissing))}
               onClick={save}
             >
               {editing ? "Save" : "Create bot"}
@@ -383,5 +488,6 @@ export default function BotForm({
         </div>
       </div>
     </div>
+    </>
   );
 }

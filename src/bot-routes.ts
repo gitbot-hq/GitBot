@@ -138,6 +138,10 @@ export async function handleBotRoutes(
         jsonError(res, 400, `Not a directory: ${repoPath}`);
         return true;
       }
+      if (body.agent !== undefined && !isBotAgent(body.agent)) {
+        jsonError(res, 400, `agent must be one of: ${BOT_AGENTS.join(", ")}`);
+        return true;
+      }
       // Setup comes first: a bot that has not prepared this machine cannot be
       // given work yet. Its own setup thread is made by the server, never here.
       if (botNeedsSetup(bot)) {
@@ -148,7 +152,7 @@ export async function handleBotRoutes(
         });
         return true;
       }
-      jsonOk(res, { thread: createThread(bot.id, repoPath, body.title) });
+      jsonOk(res, { thread: createThread(bot.id, repoPath, body.title, "chat", body.agent) });
       return true;
     }
   }

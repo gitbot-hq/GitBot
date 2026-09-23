@@ -8,6 +8,13 @@ const nextConfig: NextConfig = {
   // lockfile. Pin the root here so Next doesn't guess the parent folder.
   outputFileTracingRoot: __dirname,
   turbopack: { root: __dirname },
+  ...(process.env.NODE_ENV === "development"
+    ? {
+        async rewrites() {
+          return [{ source: "/:path*", destination: "http://127.0.0.1:3100/:path*" }];
+        },
+      }
+    : {}),
 };
 
 export default nextConfig;

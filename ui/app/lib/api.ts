@@ -1,11 +1,8 @@
-// HTTP adapter for the live GitBot server. Components never import this;
-// the pages call it and pass plain data down as props.
-
-import type { SessionPermissionMode } from "./gitbot";
-
-// Same origin: the gitbot server serves this UI and the API from one port,
-// so every path below is relative to wherever the page was loaded from.
+// HTTP adapter for the live GitBot server. The CLI serves this exported UI
+// and the API from one origin, so requests stay relative to the current host.
 const BASE = "";
+
+export type SessionPermissionMode = "ask-permissions" | "allow-all-edits" | "yolo";
 
 export class ApiError extends Error {
   status: number;
@@ -36,8 +33,6 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-// The agents actually installed on the machine gitbot runs on, in the
-// server's order of preference.
 export function getAgents() {
   return req<{ agents: string[] }>("/agents");
 }
@@ -58,12 +53,14 @@ export function getMessages(threadId: string) {
   );
 }
 
-export function createThread(botId: string, repoPath?: string) {
+export function createThread(botId: string, repoPath?: string, agent?: string) {
   return req<{ thread: import("./gitbot").ThreadFull }>("/threads", {
     method: "POST",
-    body: JSON.stringify(
-      repoPath ? { botId, repoPath } : { botId },
-    ),
+    body: JSON.stringify({
+      botId,
+      ...(repoPath ? { repoPath } : {}),
+      ...(agent ? { agent } : {}),
+    }),
   });
 }
 
@@ -83,22 +80,23 @@ export function browse(path?: string | null) {
   );
 }
 
+/** What the chat's permission menu offers: the server's three session
+ *  modes as-is, plus "plan" — yolo with the agent held to planning. */
+export type ChatPermissionMode = SessionPermissionMode | "plan";
+
 /** Starts a turn. Returns the session id to stream + abort + approve on. */
-// permissionMode is only sent when the user overrode the bot's default for
-// this thread; otherwise the server applies the bot's own setting.
-export function postChat(
-  threadId: string,
-  prompt: string,
-  permissionMode?: SessionPermissionMode,
-) {
+export function postChat(threadId: string, prompt: string, permissionMode: ChatPermissionMode) {
   return req<{ sessionId: string }>("/chat", {
     method: "POST",
-    body: JSON.stringify({ threadId, prompt, ...(permissionMode ? { permissionMode } : {}) }),
+    body: JSON.stringify({
+      threadId,
+      prompt,
+      permissionMode: permissionMode === "plan" ? "yolo" : permissionMode,
+      mode: permissionMode === "plan" ? "plan" : "build",
+    }),
   });
 }
 
-// Switch a session's permission mode. Works mid-turn: the server also
-// resolves any approvals already waiting that the new mode covers.
 export function patchPermissionMode(sessionId: string, permissionMode: SessionPermissionMode) {
   return req<{ sessionId: string; permissionMode: SessionPermissionMode }>(
     `/sessions/${encodeURIComponent(sessionId)}`,
@@ -107,7 +105,7 @@ export function patchPermissionMode(sessionId: string, permissionMode: SessionPe
 }
 
 export function getSessionConfig(sessionId: string) {
-  return req<{ permissionMode: SessionPermissionMode }>(
+  return req<{ permissionMode: SessionPermissionMode; mode?: string | null }>(
     `/sessions/${encodeURIComponent(sessionId)}/config`,
   );
 }
@@ -141,7 +139,6 @@ export type BotInput = {
   model?: string;
   permissionMode?: string;
   allowedTools?: string[];
-  // No form field: only arrives through an imported share code.
   disallowedTools?: string[];
 };
 
@@ -159,15 +156,14 @@ export function patchBot(id: string, body: BotInput) {
   );
 }
 
-// The agent's own transcript stays on disk; only the hub's record goes.
-export function deleteThread(id: string) {
-  return req<{ deleted: boolean }>(`/threads/${encodeURIComponent(id)}`, {
+export function deleteBot(id: string) {
+  return req<{ deleted: boolean }>(`/bots/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
 }
 
-export function deleteBot(id: string) {
-  return req<{ deleted: boolean }>(`/bots/${encodeURIComponent(id)}`, {
+export function deleteThread(id: string) {
+  return req<{ deleted: boolean }>(`/threads/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
 }

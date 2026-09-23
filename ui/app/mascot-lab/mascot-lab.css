@@ -1,0 +1,343 @@
+/* Mascot lab page — dark builder canvas (white-bodied mascots need a
+   non-white backdrop). Class-only selectors (no element selectors), so
+   nothing here can touch inline SVGs. Motion lives in kawaii.css. */
+
+.lab-page {
+  color-scheme: dark;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: #101010;
+  color: #f5f5f5;
+  padding: 48px 32px 64px;
+}
+
+.lab-head {
+  max-width: 880px;
+  margin: 0 auto 28px;
+}
+
+.lab-eyebrow {
+  margin: 0 0 8px;
+  color: #949494;
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.lab-head h1 {
+  margin: 0 0 8px;
+  font-size: var(--text-2xl);
+  letter-spacing: -0.02em;
+}
+
+.lab-sub {
+  margin: 0;
+  color: #949494;
+  font-size: var(--text-sm);
+  max-width: 62ch;
+}
+
+.lab-h2 {
+  max-width: 1080px;
+  margin: 40px auto 16px;
+  font-size: var(--text-lg);
+  letter-spacing: -0.01em;
+}
+
+.lab-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 20px;
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+.lab-stage {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 12px;
+  min-height: 380px;
+  padding: 32px 20px;
+  background: #1c1c1c;
+  border: 1px solid rgb(255 255 255 / 0.09);
+  border-radius: 16px;
+}
+
+.lab-stage > .kawaii {
+  max-width: 100%;
+  height: auto;
+}
+
+.lab-caption {
+  color: #949494;
+  font-size: var(--text-sm);
+  font-weight: 550;
+  text-transform: capitalize;
+}
+
+.lab-controls {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+  align-content: start;
+  padding: 24px;
+  background: #1c1c1c;
+  border: 1px solid rgb(255 255 255 / 0.09);
+  border-radius: 16px;
+}
+
+.lab-group {
+  display: grid;
+  gap: 8px;
+}
+
+.lab-label {
+  margin: 0;
+  color: #949494;
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.lab-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.lab-bodies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.lab-body {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 8px 10px 6px;
+  background: #101010;
+  border: 1px solid rgb(255 255 255 / 0.09);
+  border-radius: 12px;
+  color: #949494;
+  font-size: var(--text-xs);
+  font-weight: 550;
+  text-transform: capitalize;
+  cursor: pointer;
+}
+
+.lab-body:hover {
+  color: #f5f5f5;
+}
+
+.lab-body.selected {
+  border-color: #f5f5f5;
+  color: #f5f5f5;
+}
+
+.lab-seg {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: #101010;
+  border: 1px solid rgb(255 255 255 / 0.09);
+  border-radius: 999px;
+}
+
+.lab-seg-btn {
+  padding: 5px 12px;
+  background: none;
+  border: 0;
+  border-radius: 999px;
+  color: #949494;
+  font-size: var(--text-xs);
+  font-weight: 550;
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.lab-seg-btn:hover {
+  color: #f5f5f5;
+}
+
+.lab-seg-btn.selected {
+  background: #2a2a2a;
+  color: #f5f5f5;
+}
+
+.lab-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.lab-swatch {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  cursor: pointer;
+}
+
+.lab-swatch.selected {
+  border-color: #f5f5f5;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.4);
+}
+
+.lab-custom {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px dashed rgb(255 255 255 / 0.35);
+  color: #949494;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.lab-custom input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.lab-toggle {
+  padding: 7px 14px;
+  background: #101010;
+  border: 1px solid rgb(255 255 255 / 0.09);
+  border-radius: 999px;
+  color: #949494;
+  font-size: var(--text-xs);
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.lab-toggle:hover {
+  color: #f5f5f5;
+}
+
+.lab-toggle.selected {
+  background: #2a2a2a;
+  border-color: #f5f5f5;
+  color: #f5f5f5;
+}
+
+.lab-snippet {
+  margin: 0;
+  padding: 12px 14px;
+  background: #101010;
+  border: 1px solid rgb(255 255 255 / 0.09);
+  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: #c9c9c9;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.lab-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+.lab-card {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 24px 16px 16px;
+  background: #1c1c1c;
+  border: 1px solid rgb(255 255 255 / 0.09);
+  border-radius: 16px;
+  color: #f5f5f5;
+  font-size: var(--text-sm);
+  font-weight: 550;
+  text-transform: capitalize;
+  cursor: pointer;
+}
+
+.lab-card:hover {
+  border-color: rgb(255 255 255 / 0.25);
+}
+
+.lab-card.selected {
+  border-color: #f5f5f5;
+}
+
+.lab-faces {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+.lab-face {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 6px;
+  min-height: 132px;
+  padding: 14px 10px 10px;
+  background: #1c1c1c;
+  border: 1px solid rgb(255 255 255 / 0.09);
+  border-radius: 14px;
+  color: #f5f5f5;
+  font-size: var(--text-xs);
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.lab-face:hover {
+  border-color: rgb(255 255 255 / 0.25);
+}
+
+.lab-face.selected {
+  border-color: #f5f5f5;
+  background: #242424;
+}
+
+/* Light checker tile so dark face ink reads (and white ink still does). */
+.lab-face-art {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  padding: 10px 6px;
+  background: repeating-conic-gradient(
+    #ececec 0% 25%,
+    #d2d2d2 0% 50%
+  ) 0 0 / 16px 16px;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.lab-face-art svg {
+  width: 100%;
+  height: auto;
+  max-width: 112px;
+}
+
+@media (max-width: 860px) {
+  .lab-hero {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 380px) {
+  .lab-page {
+    padding-inline: 16px;
+  }
+}
