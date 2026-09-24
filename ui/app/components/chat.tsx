@@ -419,8 +419,9 @@ export default function Chat({
   // here and flush when the turn ends. One slot — a newer send replaces it.
   const [queue, setQueue] = useState<string | null>(null);
   const queueRef = useRef<string | null>(null);
+  // Steering disabled — kept for reference.
   // Steer: abort the running turn and send this text the moment it ends.
-  const pendingSteer = useRef<string | null>(null);
+  // const pendingSteer = useRef<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [copyErrorId, setCopyErrorId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -691,7 +692,8 @@ export default function Chat({
     pendingRun.current = null;
     queueRef.current = null;
     setQueue(null);
-    pendingSteer.current = null;
+    // Steering disabled — kept for reference.
+    // pendingSteer.current = null;
     lastPrompt.current = "";
     const nextDraft = thread?.id ? (drafts.current[thread.id] ?? "") : "";
     draftRef.current = nextDraft;
@@ -866,13 +868,15 @@ export default function Chat({
     }
   }
 
-  /** A turn just ended: start whatever is waiting (steer wins over the
-   *  queue) as the next turn on the same thread. */
+  /** A turn just ended: start whatever is waiting in the queue as the next
+   *  turn on the same thread. */
   function maybeFlush(tid: string | null) {
     if (!tid || threadRef.current !== tid) return;
     turnActiveRef.current = false;
-    const next = pendingSteer.current ?? queueRef.current;
-    pendingSteer.current = null;
+    // Steering disabled — the queue is the only source of the next turn.
+    // const next = pendingSteer.current ?? queueRef.current;
+    // pendingSteer.current = null;
+    const next = queueRef.current;
     if (queueRef.current) {
       queueRef.current = null;
       setQueue(null);
@@ -1129,7 +1133,8 @@ export default function Chat({
     if (q) {
       queueRef.current = null;
       setQueue(null);
-      pendingSteer.current = null;
+      // Steering disabled — kept for reference.
+      // pendingSteer.current = null;
       setDraft(q);
       draftRef.current = q;
       if (threadRef.current) drafts.current[threadRef.current] = q;
@@ -1139,17 +1144,18 @@ export default function Chat({
     abortCurrent();
   }
 
-  /** Steer: abort this turn and send the queued message the moment it ends.
-   *  Falls back to staying queued if the turn hasn't reached the server. */
-  function steerNow() {
-    const q = queueRef.current;
-    if (!q || !thread) return;
-    if (!sessionRef.current && !esRef.current) return;
-    queueRef.current = null;
-    setQueue(null);
-    pendingSteer.current = q;
-    abortCurrent();
-  }
+  // Steering disabled — kept for reference.
+  // /** Steer: abort this turn and send the queued message the moment it ends.
+  //  *  Falls back to staying queued if the turn hasn't reached the server. */
+  // function steerNow() {
+  //   const q = queueRef.current;
+  //   if (!q || !thread) return;
+  //   if (!sessionRef.current && !esRef.current) return;
+  //   queueRef.current = null;
+  //   setQueue(null);
+  //   pendingSteer.current = q;
+  //   abortCurrent();
+  // }
 
   /** Drop the queued message back into the composer for editing. */
   function editQueue() {
@@ -1604,7 +1610,8 @@ export default function Chat({
           {jumpLatest}
           <QueueTray
             text={queue}
-            onSteer={steerNow}
+            /* Steering disabled — kept for reference. */
+            /* onSteer={steerNow} */
             onEdit={editQueue}
             onDiscard={discardQueue}
           />

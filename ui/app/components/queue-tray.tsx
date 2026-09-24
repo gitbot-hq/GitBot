@@ -1,7 +1,8 @@
 "use client";
 
 import AnimatedActionIcon from "./animated-action-icon";
-import { ArrowRightIcon } from "@animateicons/react/lucide/arrow-right-icon";
+// Steering disabled — kept for reference.
+// import { ArrowRightIcon } from "@animateicons/react/lucide/arrow-right-icon";
 import { CheckIcon } from "@animateicons/react/lucide/check-icon";
 import { CopyIcon } from "@animateicons/react/lucide/copy-icon";
 import { CornerUpLeftIcon } from "@animateicons/react/lucide/corner-up-left-icon";
@@ -18,14 +19,16 @@ import { useEffect, useRef, useState } from "react";
 // the queue state Chat owns — no behavior changes here.
 export default function QueueTray({
   text,
-  onSteer,
+  // Steering disabled — kept for reference.
+  // onSteer,
   onEdit,
   onDiscard,
 }: {
   /** Queued text, or null when the slot is empty. */
   text: string | null;
-  /** Abort the running turn and send the queued text now. */
-  onSteer: () => void;
+  // Steering disabled — kept for reference.
+  // /** Abort the running turn and send the queued text now. */
+  // onSteer: () => void;
   /** Load the text back into the composer for editing. */
   onEdit: () => void;
   /** Drop the queued text entirely. */
@@ -98,6 +101,7 @@ export default function QueueTray({
         {shown}
       </span>
       <span className="queue-tray-acts">
+        {/* Steering disabled — kept for reference.
         <button
           type="button"
           className="queue-steer"
@@ -107,6 +111,7 @@ export default function QueueTray({
           <AnimatedActionIcon icon={ArrowRightIcon} size={13} aria-hidden="true" />
           Steer
         </button>
+        */}
         <button
           type="button"
           className="queue-icon-btn"
