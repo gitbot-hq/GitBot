@@ -44,12 +44,7 @@ import { useScrollEdge } from "../lib/use-scroll-edge";
 import { useStatusFavicon } from "../lib/status-favicon";
 import { groupTools, type ToolChip } from "../lib/tool-ui";
 import { parseMarketplaceListing, type MarketplaceListing } from "../lib/marketplace-publish";
-import {
-  presentSetupText,
-  readSetupNeedsInput,
-  readSetupOutcome,
-  type SetupOutcome,
-} from "../lib/setup";
+import { presentSetupText, readSetupNeedsInput } from "../lib/setup";
 import RunSummary, { ActionRow } from "./run-summary";
 import QueueTray from "./queue-tray";
 
