@@ -316,20 +316,27 @@ function extractText(content: unknown): string {
   return "";
 }
 
+// Mirrors how the Claude Code SDK locates a cwd's transcripts: CLAUDE_CONFIG_DIR
+// (NFC-normalized) or ~/.claude, then "projects", then the cwd with every
+// non-alphanumeric character replaced by a dash. Diverging from either half
+// (e.g. leaving spaces or dots intact) makes transcripts unreadable.
+function projectDir(cwd: string): string {
+  const configDir = (process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude")).normalize("NFC");
+  return join(configDir, "projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+}
+
 export async function loadTranscript(
   sessionId: string,
   cwd: string
 ): Promise<{ role: string; content: any[] }[]> {
-  const encodedCwd = cwd.replace(/[/\\_]/g, "-");
-  const transcriptPath = join(
-    homedir(),
-    ".claude",
-    "projects",
-    encodedCwd,
-    `${sessionId}.jsonl`
-  );
+  const transcriptPath = join(projectDir(cwd), `${sessionId}.jsonl`);
 
-  if (!existsSync(transcriptPath)) return [];
+  // Callers only ask for sessions that have already run, so a missing file means
+  // we resolved the path wrongly rather than that there is nothing to show.
+  if (!existsSync(transcriptPath)) {
+    console.warn(`  no claude-code transcript at ${transcriptPath} (session ${sessionId}, cwd ${cwd})`);
+    return [];
+  }
 
   const messages: { role: string; content: any[] }[] = [];
 
@@ -449,18 +456,17 @@ async function getSessionPreview(filePath: string): Promise<string> {
 export async function listSessions(
   cwd: string
 ): Promise<{ id: string; preview: string; updatedAt: string }[]> {
-  const encodedCwd = cwd.replace(/[/\\_]/g, "-");
-  const projectDir = join(homedir(), ".claude", "projects", encodedCwd);
+  const dir = projectDir(cwd);
 
-  if (!existsSync(projectDir)) return [];
+  if (!existsSync(dir)) return [];
 
   try {
-    const files = await readdir(projectDir);
+    const files = await readdir(dir);
     const jsonlFiles = files.filter((f) => f.endsWith(".jsonl"));
 
     const sessionList = await Promise.all(
       jsonlFiles.map(async (f) => {
-        const filePath = join(projectDir, f);
+        const filePath = join(dir, f);
         const id = f.replace(/\.jsonl$/, "");
         const [preview, fileStat] = await Promise.all([
           getSessionPreview(filePath),
