@@ -15,6 +15,7 @@ import {
 } from "./server-common";
 import { bindSession } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcome } from "./bot-prompt";
+import { resolveModel } from "./model-resolution";
 
 export async function initAgent(): Promise<boolean> {
   try {
@@ -67,10 +68,15 @@ export async function runAgent(store: SessionStore): Promise<void> {
     const preset = store.botPreset;
     const append = presetSystemPrompt(preset);
 
+    // The bot's model, or the user's environment, or nothing at all — never a
+    // default invented here, so a bot stays portable across providers, gateways
+    // and accounts. See src/model-resolution.ts.
+    const resolvedModel = resolveModel(store.model);
+
     const q = query({
       prompt: promptParam,
       options: {
-        model: store.model ?? "claude-sonnet-4-6",
+        ...(resolvedModel ? { model: resolvedModel } : {}),
         permissionMode: store.mode === "plan" ? "plan" : "default",
         abortController,
         includePartialMessages: true,
