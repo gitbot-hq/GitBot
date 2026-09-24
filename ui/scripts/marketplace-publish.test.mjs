@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import marketplace from "../app/lib/marketplace-publish.ts";
-
-const { marketplacePublishPrompt, parseMarketplaceListing } = marketplace;
+import { marketplacePublishPrompt, parseMarketplaceListing } from "../app/lib/marketplace-publish.ts";
 
 test("marketplace prompt includes public settings and excludes machine state", () => {
   const prompt = marketplacePublishPrompt({
