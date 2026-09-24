@@ -155,6 +155,7 @@ A thread stays on the agent that ran its first turn. Changing a bot's agent appl
 | Setting | Default | Notes |
 |---|---|---|
 | `GITBOT_DATA_DIR` | `~/.gitbot` | Where bots and threads are stored, as two JSON files |
+| `GITBOT_MARKETPLACE_API` | `https://uat.revise.network/gitbot/api` | The marketplace API the Discover page reads from. gitbot proxies it under `/marketplace/` |
 
 There is no config file. Everything else is set per bot, in the hub.
 

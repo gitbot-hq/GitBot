@@ -3,103 +3,56 @@
 import AnimatedActionIcon from "./animated-action-icon";
 import { CheckIcon } from "@animateicons/react/lucide/check-icon";
 import { CopyIcon } from "@animateicons/react/lucide/copy-icon";
+import { RefreshCwIcon } from "@animateicons/react/lucide/refresh-cw-icon";
 import { ShieldCheckIcon } from "@animateicons/react/lucide/shield-check-icon";
 import { PlayIcon } from "@animateicons/react/lucide/play-icon";
 import { SlidersHorizontalIcon } from "@animateicons/react/lucide/sliders-horizontal-icon";
 import { LaptopIcon } from "@animateicons/react/lucide/laptop-icon";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { BackButton } from "./panel-controls";
 import Link from "./page-link";
 import { createBot, getAgents, getBots } from "../lib/api";
 import { setAvatarPref } from "../lib/avatar-prefs";
 import { useScrollEdge } from "../lib/use-scroll-edge";
+import { getMarketplaceBot, recordMarketplaceInstall, type MarketplaceAgent, type MarketplaceBotCard, type MarketplaceBotDetail } from "../lib/marketplace";
 import MarketplaceInstallButton from "./marketplace-install-button";
 import MarketplaceAuthor from "./marketplace-author";
 import MarketplaceMascot from "./marketplace-mascot";
 import type { BotActivity } from "./bot-maker/registry";
 import type { Bot } from "../lib/gitbot";
 
-export type MarketplaceBot = {
-  name: string;
-  description: string;
-  author: string;
-  authorPhoto?: string;
-  body: string;
-  color: string;
-  activity: BotActivity;
-  verified?: boolean;
+const AGENT_LABELS: Record<MarketplaceAgent, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  opencode: "OpenCode",
 };
 
-const DETAILS: Record<string, { category: string; about: string; features: string[]; prompt: string }> = {
-  "PR Guardian": {
-    category: "Code review",
-    about: "A thoughtful second pair of eyes for your next pull request. Get a focused review that helps you understand what changed and where to look closer.",
-    features: ["Spot potential bugs and edge cases", "Understand risky changes in context", "Get clear, actionable review suggestions"],
-    prompt: "Review my current changes. Focus on bugs, edge cases, and anything I should address before merging.",
-  },
-  "Commit Composer": {
-    category: "Developer workflow",
-    about: "Give every change a clear story. Turn a working diff into a concise commit message that makes your project’s history easier to follow.",
-    features: ["Summarize the intent behind a diff", "Draft a concise subject and useful body", "Keep commit messages consistent"],
-    prompt: "Write a commit message for my staged changes. Keep the subject concise and explain why the change matters.",
-  },
-  "Release Notes": {
-    category: "Releases",
-    about: "Turn a collection of merged changes into a release people can understand. Bring the useful details forward, with less time spent writing.",
-    features: ["Group changes into readable sections", "Highlight features and fixes", "Translate technical changes into plain language"],
-    prompt: "Draft release notes for the changes since the last tag. Group them into features, improvements, and fixes.",
-  },
-  "Dependency Scout": {
-    category: "Maintenance",
-    about: "Make sense of your project’s dependencies. Find the packages that need attention and get a practical starting point for your next update.",
-    features: ["Review the project’s dependency versions", "Flag updates that deserve a closer look", "Outline a manageable upgrade plan"],
-    prompt: "Review this repo’s dependencies and suggest an upgrade plan. Highlight possible breaking changes.",
-  },
-  "Branch Cleaner": {
-    category: "Repository care",
-    about: "A little order for a busy repository. Find branches that may have served their purpose and review what is safe to tidy up.",
-    features: ["Identify merged and inactive branches", "Explain which branches need review", "Plan a cleanup before making changes"],
-    prompt: "Find stale and merged branches in this repo. Suggest a cleanup plan without deleting anything.",
-  },
-  "Codebase Guide": {
-    category: "Code exploration",
-    about: "Find your footing in an unfamiliar project. Follow the connections between files, understand the architecture, and know where to begin.",
-    features: ["Map the main parts of a codebase", "Trace how a feature works", "Find the right files for your next change"],
-    prompt: "Give me a tour of this repo. Explain its architecture, main entry points, and how to run it locally.",
-  },
-  "GitBot Review": {
-    category: "Code review",
-    about: "A focused review companion from the GitBot team. Work through your changes with clear explanations and useful next steps before you merge.",
-    features: ["Review changes against their intent", "Surface potential regressions", "Prioritize actionable feedback"],
-    prompt: "Review this branch against the main branch. Prioritize correctness and regressions, with file references for each finding.",
-  },
-  "GitBot Release": {
-    category: "Releases",
-    about: "Bring your release together with a writing companion from the GitBot team. Turn merged work into a clear account of what’s new.",
-    features: ["Summarize work since your last release", "Organize highlights and bug fixes", "Prepare a readable release draft"],
-    prompt: "Prepare a release summary from the merged work since the last release. Lead with the changes users will notice.",
-  },
+const PERMISSION_COPY: Record<MarketplaceBotDetail["permissionMode"], { label: string; detail: string }> = {
+  "ask-permissions": { label: "Asks before each tool", detail: "You approve every command and file change." },
+  "auto-approve": { label: "Published as auto-approve", detail: "Installs as ask-before-each-tool. You can loosen it later in the bot's settings." },
+  plan: { label: "Plan only", detail: "Reads and thinks, but never edits files." },
 };
 
-function instructionsFor(bot: MarketplaceBot, details: (typeof DETAILS)[string]) {
-  return [
-    `You are ${bot.name}. ${bot.description}`,
-    "Help the user with these tasks:",
-    ...details.features.map((feature) => `- ${feature}`),
-    "Inspect the relevant repository context before making recommendations. Explain findings clearly and reference files where useful. Ask before destructive changes or publishing anything.",
-    `Example request: ${details.prompt}`,
-  ].join("\n");
+/** What an installed copy carries. Published auto-approve is downgraded: a stranger's bot never starts with a free hand. */
+function installPermissionMode(mode: MarketplaceBotDetail["permissionMode"]): Bot["permissionMode"] {
+  return mode === "auto-approve" ? "ask-permissions" : mode;
 }
 
+type DetailState =
+  | { status: "loading"; detail: null }
+  | { status: "ready"; detail: MarketplaceBotDetail }
+  | { status: "error"; detail: null; message: string };
+
 export default function MarketplaceBotDetails({ bot, open, onClose }: {
-  bot: MarketplaceBot | null;
+  bot: MarketplaceBotCard | null;
   open: boolean;
   onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [state, setState] = useState<DetailState>({ status: "loading", detail: null });
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const [installs, setInstalls] = useState<Record<string, "installing" | "completing" | "installed">>({});
@@ -108,6 +61,7 @@ export default function MarketplaceBotDetails({ bot, open, onClose }: {
   const [savedBots, setSavedBots] = useState<Bot[]>([]);
   const pendingInstalls = useRef(new Set<string>());
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const slug = bot?.slug ?? null;
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -121,12 +75,22 @@ export default function MarketplaceBotDetails({ bot, open, onClose }: {
     return () => window.clearTimeout(timer);
   }, [open]);
 
+  const loadDetail = useCallback(() => {
+    if (!slug) return;
+    const current = slug;
+    setState({ status: "loading", detail: null });
+    getMarketplaceBot(current)
+      .then(({ bot: detail }) => { if (slug === current) setState({ status: "ready", detail }); })
+      .catch((error) => setState({ status: "error", detail: null, message: error instanceof Error ? error.message : "Could not load this bot" }));
+  }, [slug]);
+
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
     setCopied(false);
     setCopyError(false);
     if (copyTimer.current) clearTimeout(copyTimer.current);
-  }, [bot?.name]);
+    if (open) loadDetail();
+  }, [slug, open, loadDetail]);
 
   useEffect(() => {
     if (!open) return;
@@ -153,70 +117,78 @@ export default function MarketplaceBotDetails({ bot, open, onClose }: {
     if (copyTimer.current) clearTimeout(copyTimer.current);
   }, []);
 
-  const scrollEdge = useScrollEdge(scrollRef, `${open}:${bot?.name ?? ""}`);
+  const scrollEdge = useScrollEdge(scrollRef, `${open}:${slug ?? ""}`);
 
-  const details = bot ? DETAILS[bot.name] : null;
-  const installedBot = bot && details
-    ? savedBots.find((candidate) => candidate.name === bot.name && candidate.instructions === instructionsFor(bot, details))
+  const detail = state.status === "ready" ? state.detail : null;
+  // The installed copy is the one whose instructions match the library verbatim.
+  const installedBot = bot && detail
+    ? savedBots.find((candidate) => candidate.name === bot.name && candidate.instructions === detail.instructions)
     : null;
-  const pendingState = bot ? installs[bot.name] : undefined;
+  const pendingState = slug ? installs[slug] : undefined;
   const installState = pendingState === "installing" || pendingState === "completing"
     ? pendingState
     : installedBot ? "installed" : "idle";
 
   async function installBot() {
-    if (!bot || !details || pendingInstalls.current.has(bot.name) || installedBot) return;
-    const selected = bot;
-    const name = selected.name;
+    if (!bot || !detail || pendingInstalls.current.has(bot.slug) || installedBot) return;
+    const selected = detail;
+    const key = bot.slug;
     const color = dialogRef.current
-      ? getComputedStyle(dialogRef.current).getPropertyValue(selected.color.replace(/^var\((.*)\)$/, "$1")).trim() || selected.color
-      : selected.color;
+      ? getComputedStyle(dialogRef.current).getPropertyValue(`--${selected.mascot.color}`).trim() || selected.mascot.cssColor
+      : selected.mascot.cssColor;
     const startedAt = performance.now();
     const duration = 2000 + Math.random() * 500;
-    pendingInstalls.current.add(name);
-    setInstallTiming((previous) => ({ ...previous, [name]: { startedAt, duration } }));
-    setInstalls((previous) => ({ ...previous, [name]: "installing" }));
-    setInstallErrors((previous) => ({ ...previous, [name]: "" }));
-    const instructions = instructionsFor(selected, details);
+    pendingInstalls.current.add(key);
+    setInstallTiming((previous) => ({ ...previous, [key]: { startedAt, duration } }));
+    setInstalls((previous) => ({ ...previous, [key]: "installing" }));
+    setInstallErrors((previous) => ({ ...previous, [key]: "" }));
     try {
       const { agents } = await getAgents();
-      if (!agents.length) throw new Error("Install Claude Code, Codex, or OpenCode before adding a bot.");
+      if (!agents.includes(selected.agent)) {
+        throw new Error(`Install ${AGENT_LABELS[selected.agent]} to add this bot. It was written for that agent.`);
+      }
       const { bots } = await getBots();
       setSavedBots(bots);
-      const existing = bots.find((candidate) => candidate.name === name && candidate.instructions === instructions);
+      const existing = bots.find((candidate) => candidate.name === selected.name && candidate.instructions === selected.instructions);
       if (!existing) {
         const { bot: created } = await createBot({
-          name,
+          name: selected.name,
           description: selected.description,
-          emoji: "🤖",
-          agent: agents[0],
-          instructions,
-          permissionMode: "ask-permissions",
+          emoji: selected.emoji,
+          agent: selected.agent,
+          instructions: selected.instructions,
+          permissionMode: installPermissionMode(selected.permissionMode),
+          ...(selected.model ? { model: selected.model } : {}),
+          ...(selected.setupInstructions ? { setupInstructions: selected.setupInstructions } : {}),
+          ...(selected.allowedTools?.length ? { allowedTools: selected.allowedTools } : {}),
+          ...(selected.disallowedTools?.length ? { disallowedTools: selected.disallowedTools } : {}),
         });
-        setAvatarPref(created.id, { mascot: selected.body, color });
+        setAvatarPref(created.id, { mascot: selected.mascot.body as Parameters<typeof setAvatarPref>[1]["mascot"], color });
         setSavedBots((previous) => [...previous, created]);
+        // A count, nothing more. Never let it block or fail the install.
+        recordMarketplaceInstall(selected.slug, selected.agent).catch(() => {});
       }
       // Keep the presentation at least 2–2.5s, but never finish before the API.
       await new Promise((resolve) => setTimeout(resolve, Math.max(0, duration - 180 - (performance.now() - startedAt))));
-      setInstalls((previous) => ({ ...previous, [name]: "completing" }));
+      setInstalls((previous) => ({ ...previous, [key]: "completing" }));
       await new Promise((resolve) => setTimeout(resolve, 180));
-      setInstalls((previous) => ({ ...previous, [name]: "installed" }));
+      setInstalls((previous) => ({ ...previous, [key]: "installed" }));
     } catch (error) {
       setInstalls((previous) => {
         const next = { ...previous };
-        delete next[name];
+        delete next[key];
         return next;
       });
-      setInstallErrors((previous) => ({ ...previous, [name]: error instanceof Error ? error.message : "Could not install this bot. Please try again." }));
+      setInstallErrors((previous) => ({ ...previous, [key]: error instanceof Error ? error.message : "Could not install this bot. Please try again." }));
     } finally {
-      pendingInstalls.current.delete(name);
+      pendingInstalls.current.delete(key);
     }
   }
 
   async function copyPrompt() {
-    if (!details) return;
+    if (!detail) return;
     try {
-      await navigator.clipboard.writeText(details.prompt);
+      await navigator.clipboard.writeText(detail.examplePrompt);
       setCopied(true);
       setCopyError(false);
       if (copyTimer.current) clearTimeout(copyTimer.current);
@@ -226,58 +198,117 @@ export default function MarketplaceBotDetails({ bot, open, onClose }: {
     }
   }
 
+  const permission = detail ? PERMISSION_COPY[detail.permissionMode] : null;
+
   return (
     <dialog ref={dialogRef} id="marketplace-bot-details" className={`bot-details${open ? " is-open" : ""}`}
       aria-labelledby="bot-details-title" aria-modal="false">
-      {bot && details && <div className="bot-details-inner">
+      {bot && <div className="bot-details-inner">
         <header className="bot-details-toolbar">
           <BackButton onClick={onClose} autoFocus />
         </header>
         <div className="bot-details-viewport">
         <div className={`chat-scroll-edge chat-scroll-edge-top${scrollEdge === "top" ? " is-visible" : ""}`} aria-hidden="true" />
-        <div className="bot-details-scroll" ref={scrollRef} key={bot.name}>
+        <div className="bot-details-scroll" ref={scrollRef} key={bot.slug} aria-busy={state.status === "loading"}>
           <div className="bot-details-hero">
-            <div className="bot-details-art"><MarketplaceMascot body={bot.body} color={bot.color} activity={bot.activity} size={112} label={`${bot.name} mascot`} /></div>
-            <span className="bot-details-category">{details.category}</span>
+            <div className="bot-details-art"><MarketplaceMascot body={bot.mascot.body} color={bot.mascot.cssColor} activity={bot.mascot.activity as BotActivity} size={112} label={`${bot.name} mascot`} /></div>
+            <span className="bot-details-category">{bot.category}</span>
             <h2 id="bot-details-title">{bot.name}</h2>
             <p>{bot.description}</p>
-            <div className="bot-details-author"><MarketplaceAuthor name={bot.author} photo={bot.authorPhoto} verified={bot.verified} caption="Created by" /></div>
+            <div className="bot-details-author"><MarketplaceAuthor name={bot.author.name} photo={bot.author.avatarUrl} verified={bot.verified} caption="Created by" /></div>
             <div className="bot-details-install-area">
               <MarketplaceInstallButton
-                state={installState}
-                timing={installTiming[bot.name]}
+                state={detail ? installState : "idle"}
+                timing={installTiming[bot.slug]}
                 onInstall={installBot}
               />
-              {installState !== "idle" && <div className="bot-details-install-status" role="status">
+              {detail && installState !== "idle" && <div className="bot-details-install-status" role="status">
                 {installState === "installed" && installedBot ? (
-                  <Link href="/" onClick={() => {
-                    try { sessionStorage.setItem("gitbot-marketplace-installed-bot", installedBot.id); } catch {}
-                  }}>Open workspace →</Link>
+                  <>
+                    {/* Installing never starts anything. The workspace runs setup the
+                        first time this bot is opened there, so the link does not
+                        pre-select it. */}
+                    <span>{detail.setupInstructions
+                      ? "Installed. Setup runs on your machine the first time you open this bot. "
+                      : "Installed. "}</span>
+                    <Link href="/">Open workspace →</Link>
+                  </>
                 ) : "Installing…"}
               </div>}
-              {installErrors[bot.name] && <p className="bot-details-install-error" role="alert">{installErrors[bot.name]}</p>}
+              {installErrors[bot.slug] && <p className="bot-details-install-error" role="alert">{installErrors[bot.slug]}</p>}
             </div>
           </div>
-          <section className="bot-details-section"><h3>About this bot</h3><p>{details.about}</p></section>
-          <section className="bot-details-section"><h3>What it can help with</h3><ul>{details.features.map((feature) => <li key={feature}><AnimatedActionIcon icon={CheckIcon} size={16} aria-hidden="true" /><span>{feature}</span></li>)}</ul></section>
-          <section className="bot-details-section bot-details-safety" aria-labelledby="bot-safety-heading">
-            <h3 id="bot-safety-heading">Install with confidence</h3>
-            <ul>
-              <li><AnimatedActionIcon icon={LaptopIcon} size={17} aria-hidden="true" /><div><strong>At home on your computer</strong><p>Your bot’s setup is saved locally.</p></div></li>
-              <li><AnimatedActionIcon icon={PlayIcon} size={17} aria-hidden="true" /><div><strong>Starts when you’re ready</strong><p>Installing won’t run tasks or upload project files.</p></div></li>
-              <li><AnimatedActionIcon icon={ShieldCheckIcon} size={17} aria-hidden="true" /><div><strong>Permission checks built in</strong><p>New installs start with approvals enabled.</p></div></li>
-              <li><AnimatedActionIcon icon={SlidersHorizontalIcon} size={17} aria-hidden="true" /><div><strong>Always yours to manage</strong><p>Change its settings or remove it anytime.</p></div></li>
-            </ul>
-            <p className="bot-details-provider-note">When you chat, your chosen AI provider processes your prompts and relevant task context.</p>
-          </section>
-          <section className="bot-details-section bot-details-example">
-            <h3>Start with a simple ask</h3>
-            <p>“{details.prompt}”</p>
-            <div className="bot-details-example-footer">
-              <span className="bot-details-copy-status" role="status">{copyError ? "Select the prompt to copy it." : copied ? "Copied to clipboard" : "Example prompt"}</span>
-              <button type="button" onClick={copyPrompt} aria-label={copied ? "Prompt copied" : "Copy prompt"}>{copied ? <AnimatedActionIcon icon={CheckIcon} size={14} aria-hidden="true" /> : <AnimatedActionIcon icon={CopyIcon} size={14} aria-hidden="true" />}<span>{copied ? "Copied" : "Copy prompt"}</span></button>
-            </div>
-          </section>
+
+          {state.status === "error" && (
+            <section className="bot-details-section bot-details-load-error" role="alert">
+              <h3>Couldn’t load this bot</h3>
+              <p>{state.message}</p>
+              <button type="button" className="btn-secondary btn-compact" onClick={loadDetail}>
+                <AnimatedActionIcon icon={RefreshCwIcon} size={15} aria-hidden="true" />
+                Try again
+              </button>
+            </section>
+          )}
+
+          {state.status === "loading" && (
+            <section className="bot-details-section" aria-hidden="true">
+              <span className="marketplace-skeleton marketplace-skeleton-title" />
+              <span className="marketplace-skeleton marketplace-skeleton-line" />
+              <span className="marketplace-skeleton marketplace-skeleton-line" />
+              <span className="marketplace-skeleton marketplace-skeleton-line is-short" />
+            </section>
+          )}
+
+          {detail && permission && <>
+            <section className="bot-details-section"><h3>About this bot</h3><p>{detail.about}</p></section>
+            <section className="bot-details-section"><h3>What it can help with</h3><ul>{detail.features.map((feature) => <li key={feature}><AnimatedActionIcon icon={CheckIcon} size={16} aria-hidden="true" /><span>{feature}</span></li>)}</ul></section>
+
+            <section className="bot-details-section bot-details-facts" aria-labelledby="bot-facts-heading">
+              <h3 id="bot-facts-heading">How it runs</h3>
+              <dl>
+                <div><dt>Agent</dt><dd>{AGENT_LABELS[detail.agent]}{detail.model ? <small>{detail.model}</small> : null}</dd></div>
+                <div><dt>Permissions</dt><dd>{permission.label}<small>{permission.detail}</small></dd></div>
+                {detail.allowedTools?.length ? <div><dt>Allowed tools</dt><dd>{detail.allowedTools.join(", ")}<small>The only tools it may use.</small></dd></div> : null}
+                {detail.disallowedTools?.length ? <div><dt>Blocked tools</dt><dd>{detail.disallowedTools.join(", ")}</dd></div> : null}
+                <div><dt>Setup</dt><dd>{detail.setupInstructions ? "Needs a one-time setup" : "None"}{detail.setupInstructions ? <small>Runs once on your machine, the first time you open this bot, and can ask you for what it needs.</small> : null}</dd></div>
+              </dl>
+            </section>
+
+            <section className="bot-details-section bot-details-text" aria-labelledby="bot-instructions-heading">
+              <details className="bot-details-disclosure" data-testid="bot-instructions">
+                <summary><h3 id="bot-instructions-heading">Instructions</h3><span>Read the standing job this bot runs under, word for word.</span></summary>
+                <div className="bot-details-prose">{detail.instructions}</div>
+              </details>
+            </section>
+
+            {detail.setupInstructions && (
+              <section className="bot-details-section bot-details-text" aria-labelledby="bot-setup-heading">
+                <details className="bot-details-disclosure" data-testid="bot-setup">
+                  <summary><h3 id="bot-setup-heading">Setup steps</h3><span>What it prepares on your machine before its first job.</span></summary>
+                  <div className="bot-details-prose">{detail.setupInstructions}</div>
+                </details>
+              </section>
+            )}
+
+            <section className="bot-details-section bot-details-safety" aria-labelledby="bot-safety-heading">
+              <h3 id="bot-safety-heading">Install with confidence</h3>
+              <ul>
+                <li><AnimatedActionIcon icon={LaptopIcon} size={17} aria-hidden="true" /><div><strong>At home on your computer</strong><p>Your bot’s setup is saved locally.</p></div></li>
+                <li><AnimatedActionIcon icon={PlayIcon} size={17} aria-hidden="true" /><div><strong>Starts when you’re ready</strong><p>Installing won’t run tasks or upload project files.</p></div></li>
+                <li><AnimatedActionIcon icon={ShieldCheckIcon} size={17} aria-hidden="true" /><div><strong>Permission checks built in</strong><p>New installs start with approvals enabled.</p></div></li>
+                <li><AnimatedActionIcon icon={SlidersHorizontalIcon} size={17} aria-hidden="true" /><div><strong>Always yours to manage</strong><p>Change its settings or remove it anytime.</p></div></li>
+              </ul>
+              <p className="bot-details-provider-note">When you chat, your chosen AI provider processes your prompts and relevant task context.</p>
+            </section>
+            <section className="bot-details-section bot-details-example">
+              <h3>Start with a simple ask</h3>
+              <p>“{detail.examplePrompt}”</p>
+              <div className="bot-details-example-footer">
+                <span className="bot-details-copy-status" role="status">{copyError ? "Select the prompt to copy it." : copied ? "Copied to clipboard" : "Example prompt"}</span>
+                <button type="button" onClick={copyPrompt} aria-label={copied ? "Prompt copied" : "Copy prompt"}>{copied ? <AnimatedActionIcon icon={CheckIcon} size={14} aria-hidden="true" /> : <AnimatedActionIcon icon={CopyIcon} size={14} aria-hidden="true" />}<span>{copied ? "Copied" : "Copy prompt"}</span></button>
+              </div>
+            </section>
+          </>}
         </div>
         <div className={`chat-scroll-edge chat-scroll-edge-bottom${scrollEdge === "bottom" ? " is-visible" : ""}`} aria-hidden="true" />
         </div>

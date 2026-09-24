@@ -29,6 +29,7 @@ import { initAgent as initClaudeCode, runAgent as runClaudeCode, listSessions as
 import { initAgent as initOpencode, runAgent as runOpencode, listSessions as listOpencodeSessions, getSessionHistory, abortSession as opencodeAbort, respondPermission as opencodePermission } from "./start-opencode";
 import { initAgent as initCodex, runAgent as runCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
 import { handleBotRoutes } from "./bot-routes";
+import { handleMarketplaceRoutes } from "./marketplace-proxy";
 import { getBot, getThread, touchThread, updateThread, botNeedsSetup, DEFAULT_BOT_AGENT } from "./bot-store";
 import { botPermissionToSession } from "./server-common";
 import { uiFileFor } from "./static-ui";
@@ -59,6 +60,9 @@ export async function handleRequest(
   if (method === "GET" && (path === "/" || path === "")) return;
 
   try {
+    // Marketplace: proxied to the gitbot-api service
+    if (await handleMarketplaceRoutes(req, res)) return;
+
     // Workspace + file system routes
     if (await handleWorkspaceRoutes(req, res, workspaceCwd, availableAgents)) return;
 
