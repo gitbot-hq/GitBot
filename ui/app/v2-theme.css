@@ -55,7 +55,6 @@
 /* Marketplace is a labeled destination, not an ambiguous icon. */
 .v2 .topbar-marketplace-btn {
   align-self: center;
-  margin-left: auto;
   margin-right: var(--space-2);
   color: var(--text);
 }
@@ -139,7 +138,7 @@
 }
 
 .v2 .side-head,
-.v2 .side > .new-bot {
+.v2 .side > .collapsed-create-action {
   flex-shrink: 0;
 }
 

@@ -28,7 +28,7 @@ export function moveMenuFocus(event: React.KeyboardEvent<HTMLDivElement>) {
 export default function ShareDropdown({ open, onOpenChange, onShare, label = false }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onShare: (view: "code") => void;
+  onShare: (view: "code" | "publish") => void;
   label?: boolean;
 }) {
   const id = useId();
@@ -57,10 +57,9 @@ export default function ShareDropdown({ open, onOpenChange, onShare, label = fal
             <AnimatedActionIcon icon={CodeIcon} size={15} />
             <span className="chat-menu-label">Share with code</span>
           </button>
-          <button type="button" role="menuitem" disabled>
+          <button type="button" role="menuitem" onClick={() => { onOpenChange(false); buttonRef.current?.focus(); onShare("publish"); }}>
             <AnimatedActionIcon icon={StoreIcon} size={15} />
             <span className="chat-menu-label">Publish to Marketplace</span>
-            <span className="chat-menu-status">Soon</span>
           </button>
         </div>
         <button type="button" className="menu-scrim" onClick={() => onOpenChange(false)} aria-label="Close menu" tabIndex={-1} />

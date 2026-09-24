@@ -106,7 +106,7 @@ export default function BotProfile({
   pref: AvatarPref;
   onBack: () => void;
   onEdit: () => void;
-  onShare: (view: "code") => void;
+  onShare: (view: "code" | "publish") => void;
   active?: boolean;
 }) {
   const [shareOpen, setShareOpen] = useState(false);

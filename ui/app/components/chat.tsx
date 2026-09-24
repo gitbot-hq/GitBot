@@ -17,7 +17,7 @@ import { ZapIcon } from "@animateicons/react/lucide/zap-icon";
 import { FileTextIcon } from "@animateicons/react/lucide/file-text-icon";
 import { ChevronDownIcon } from "@animateicons/react/lucide/chevron-down-icon";
 
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Children, Fragment, isValidElement, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -43,6 +43,7 @@ import { useMascotPointerFollow } from "../lib/use-mascot-pointer-follow";
 import { useScrollEdge } from "../lib/use-scroll-edge";
 import { useStatusFavicon } from "../lib/status-favicon";
 import { groupTools, type ToolChip } from "../lib/tool-ui";
+import { parseMarketplaceListing, type MarketplaceListing } from "../lib/marketplace-publish";
 import { presentSetupText, readSetupNeedsInput } from "../lib/setup";
 import RunSummary, { ActionRow } from "./run-summary";
 import QueueTray from "./queue-tray";
@@ -104,12 +105,66 @@ function errText(e: unknown) {
 }
 
 // Assistant markdown (GFM). Raw HTML is off by default — no XSS surface.
-function RichText({ text }: { text: string }) {
+function MarketplaceListingCard({ listing, color }: { listing: MarketplaceListing; color?: string }) {
+  const mascot = typeof listing.mascot === "string" ? listing.mascot : listing.mascot?.body;
+  const listingColor = listing.color || (typeof listing.mascot === "object" ? `var(--${listing.mascot.color})` : color);
+  const features = listing.features ?? listing.capabilities;
+  const examplePrompt = listing.examplePrompt ?? listing.starterPrompt;
+  const facts = [
+    ["Agent", listing.agent],
+    ["Model", listing.model],
+    ["Permissions", listing.permissionMode],
+    ["Mascot", mascot],
+    ["Color", typeof listing.mascot === "object" ? listing.mascot.color : listing.color],
+    ["Author", listing.author ? `${listing.author.name} (@${listing.author.github})` : undefined],
+  ].filter((fact): fact is [string, string] => !!fact[1]);
+  return (
+    <section className="marketplace-listing-card" style={{ "--listing-color": listingColor } as React.CSSProperties} aria-label={`${listing.name} marketplace listing`}>
+      <header className="marketplace-listing-head">
+        <span className="marketplace-listing-emoji" aria-hidden="true">{listing.emoji || "🤖"}</span>
+        <div>
+          {listing.category && <span className="marketplace-listing-category">{listing.category}</span>}
+          <h3>{listing.name}</h3>
+          <p>{listing.description}</p>
+        </div>
+        <span className="marketplace-listing-state">Draft</span>
+      </header>
+      {facts.length > 0 && (
+        <dl className="marketplace-listing-facts">
+          {facts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+        </dl>
+      )}
+      {!!listing.tags?.length && <p className="marketplace-listing-tags"><b>Tags</b>{listing.tags.join(", ")}</p>}
+      {!!listing.allowedTools?.length && <p className="marketplace-listing-tags"><b>Allowed tools</b>{listing.allowedTools.join(", ")}</p>}
+      {!!listing.disallowedTools?.length && <p className="marketplace-listing-tags"><b>Blocked tools</b>{listing.disallowedTools.join(", ")}</p>}
+      {listing.about && <section className="marketplace-listing-section"><h4>About</h4><p>{listing.about}</p></section>}
+      {!!features?.length && (
+        <section className="marketplace-listing-section">
+          <h4>Features</h4>
+          <ul>{features.map((item) => <li key={item}><AnimatedActionIcon icon={CheckIcon} size={15} aria-hidden="true" /><span>{item}</span></li>)}</ul>
+        </section>
+      )}
+      {examplePrompt && <section className="marketplace-listing-section"><h4>Example prompt</h4><blockquote>{examplePrompt}</blockquote></section>}
+      {listing.instructions && <section className="marketplace-listing-section"><h4>Instructions</h4><pre>{listing.instructions}</pre></section>}
+      {listing.setupInstructions && <section className="marketplace-listing-section"><h4>Setup instructions</h4><pre>{listing.setupInstructions}</pre></section>}
+    </section>
+  );
+}
+
+function RichText({ text, botColor }: { text: string; botColor?: string }) {
   return (
     <div className="md">
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{
+          pre: ({ children }) => {
+            const child = Children.toArray(children)[0];
+            if (isValidElement<{ className?: string; children?: ReactNode }>(child) && child.props.className === "language-marketplace-listing") {
+              const listing = parseMarketplaceListing(String(child.props.children).trim());
+              if (listing) return <MarketplaceListingCard listing={listing} color={botColor} />;
+            }
+            return <pre>{children}</pre>;
+          },
           a: ({ node, href, children, ...props }) =>
             href && /^https?:\/\//i.test(href)
               ? <a href={href} target="_blank" rel="noreferrer" {...props}>{children}</a>
@@ -338,7 +393,7 @@ export default function Chat({
   /** Live activity sentence ("Thinking…", "Running Bash…", null when idle).
    *  Lets the shell show what the bot is doing outside the chat. */
   onActivityChange?: (activity: string | null) => void;
-  onShare?: (view?: "options" | "code") => void;
+  onShare?: (view?: "options" | "code" | "publish") => void;
   onLearnMorePermissions?: () => void;
   onOpenBot?: () => void;
   onNewThread?: () => void;
@@ -1354,7 +1409,7 @@ export default function Chat({
             >
               {m.segs.map((s, si) =>
                 s.kind === "text" ? (
-                  <RichText key={si} text={setup && m.role === "assistant" ? presentSetupText(s.text) : s.text} />
+                  <RichText key={si} botColor={botAvatar?.color} text={setup && m.role === "assistant" ? presentSetupText(s.text) : s.text} />
                 ) : null,
               )}
               {m.role === "assistant" &&
@@ -1400,7 +1455,7 @@ export default function Chat({
           <article key={live.key} className="bubble assistant msg-in">
             {revealSegs(live.segs, live.shown).map((s, si) =>
               s.kind === "text" ? (
-                <RichText key={`t${si}`} text={setup ? presentSetupText(s.text) : s.text} />
+                <RichText key={`t${si}`} botColor={botAvatar?.color} text={setup ? presentSetupText(s.text) : s.text} />
               ) : (
                 <Fragment key={`g${si}`}>
                   {groupTools(s.tools).map((g, gi) => {
