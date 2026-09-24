@@ -329,30 +329,29 @@ export async function handleRequest(
 
       const s = store;
       if (threadId) touchThread(threadId, prompt ?? '');
+
+      // Anything thrown past runAgent's own handling would otherwise leave the
+      // session pinned to "running": every later message on the thread answers
+      // 409 for as long as the server lives, and the event stream — which only
+      // closes on done/error/aborted — hangs the client that is watching it.
+      // Each runAgent already reports its own failures and lands on "error"
+      // before returning, so the status check makes this a no-op on every path
+      // that handled itself.
+      const onRunRejected = (err: any) => {
+        console.error("[runAgent] unhandled:", err);
+        if (s.status === "running") {
+          emitEvent(s, "error", { message: err?.message ?? `${agent} failed to start` });
+          s.status = "error";
+          notifyPermissionsChanged();
+        }
+      };
+
       if (agent === "claude-code") {
-        runClaudeCode(s).catch((err) => {
-          console.error("[runAgent] unhandled:", err);
-        });
+        runClaudeCode(s).catch(onRunRejected);
       } else if (agent === "codex") {
-        runCodex(s).catch((err) => {
-          console.error("[runAgent] unhandled:", err);
-          // Anything thrown past runAgent's own handling would otherwise leave
-          // the session pinned to "running", and every later message on the
-          // thread answers 409 for as long as the server lives.
-          if (s.status === "running") {
-            emitEvent(s, "error", { message: err?.message ?? "Codex failed to start" });
-            s.status = "error";
-            notifyPermissionsChanged();
-          }
-        });
-      } else if (agent === "opencode") {
-        runOpencode(s).catch((err) => {
-          console.error("[runAgent] unhandled:", err);
-        });
+        runCodex(s).catch(onRunRejected);
       } else {
-        runOpencode(s).catch((err) => {
-          console.error("[runAgent] unhandled:", err);
-        });
+        runOpencode(s).catch(onRunRejected);
       }
 
       jsonOk(res, { sessionId: s.gitbotId });
