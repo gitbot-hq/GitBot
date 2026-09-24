@@ -1791,18 +1791,33 @@ pre {
 .share-privacy-icon svg path:last-child { stroke: #000; }
 .share-copy-privacy p { margin: 0; }
 .share-copy-status { color: var(--muted); font-size: var(--text-xs); }
-.modal:has(.publish-content) { max-width: 560px; }
 .publish-content { display: grid; gap: var(--space-4); }
-.publish-options { display: grid; gap: var(--space-3); }
-.publish-option { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); }
-.publish-option-head { display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: center; gap: var(--space-3); }
-.publish-option h3 { margin: 0; color: var(--text); font-size: var(--text-sm); font-weight: 600; line-height: 1.4; }
-.publish-option-head .share-method-status { display: inline-block; margin-bottom: 3px; }
-.publish-option > p { flex: 1; margin: 0; color: var(--muted); font-size: var(--text-xs); line-height: 1.55; }
-.publish-option code { font-family: var(--font-mono); font-size: .95em; }
-.publish-option .btn-primary, .publish-repo-link { width: 100%; min-height: 38px; }
-.publish-repo-link { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); text-decoration: none; }
-.publish-note { margin: 0; color: var(--muted); font-size: var(--text-xs); line-height: 1.55; }
+.publish-intro { margin: -4px 0 0; color: var(--muted); font-size: var(--text-md); line-height: 1.5; }
+.modal .publish-bot-field, .modal .publish-prompt, .publish-content .share-copy-actions { margin: 0; }
+.publish-bot-label { font-size: var(--text-sm); font-weight: 600; }
+.publish-bot-picker { position: relative; min-width: 0; }
+.publish-bot-picker summary, .publish-bot-options button { display: flex; align-items: center; gap: var(--space-3); width: 100%; min-width: 0; padding: var(--space-2) var(--space-3); color: var(--text); text-align: left; cursor: pointer; }
+.publish-bot-picker summary { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md); list-style: none; }
+.publish-bot-picker summary::-webkit-details-marker { display: none; }
+.publish-bot-picker summary:hover, .publish-bot-picker[open] summary { border-color: var(--faint); }
+.publish-bot-picker summary:focus-visible, .publish-bot-options button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.publish-bot-copy { display: grid; flex: 1; min-width: 0; gap: 2px; }
+.publish-bot-copy strong, .publish-bot-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.publish-bot-copy strong { font-size: var(--text-sm); font-weight: 600; }
+.publish-bot-copy small { color: var(--muted); font-size: var(--text-xs); }
+.publish-bot-chevron { color: var(--muted); transition: transform var(--duration-fast) var(--ease-out); }
+.publish-bot-picker[open] .publish-bot-chevron { transform: rotate(180deg); }
+.publish-bot-options { position: absolute; z-index: 5; top: calc(100% + 4px); width: 100%; max-height: 260px; overflow-y: auto; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: 0 12px 32px rgb(0 0 0 / .18); }
+.publish-bot-options button { background: transparent; border: 0; border-radius: var(--radius-sm); }
+.publish-bot-options button:hover, .publish-bot-options button:focus-visible { background: var(--surface-2); }
+.publish-bot-options button > .action-icon { color: var(--muted); }
+.modal .publish-prompt > label { background: var(--surface-2); border-radius: var(--radius-md) var(--radius-md) 0 0; }
+.modal .publish-prompt textarea { height: 240px; min-height: 240px; font-size: var(--text-sm); line-height: 1.55; }
+.publish-manual { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding-top: var(--space-4); border-top: 1px solid var(--border); }
+.publish-manual > div { min-width: 0; }
+.publish-manual strong { font-size: var(--text-sm); font-weight: 600; }
+.publish-manual p { margin: 3px 0 0; color: var(--muted); font-size: var(--text-xs); line-height: 1.45; }
+.publish-manual .btn-secondary { flex: none; }
 .agent-create-content { display: grid; gap: var(--space-4); }
 .agent-create-content .share-code-field, .agent-create-content .share-copy-actions { margin: 0; }
 .agent-create-intro { margin: -4px 0 0; color: var(--muted); font-size: 15px; line-height: 1.55; }

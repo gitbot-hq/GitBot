@@ -7,6 +7,7 @@ import { botTile } from "./bot-avatar";
 import { defaultMascotFor, getAvatarPref, resolveAvatar } from "../lib/avatar-prefs";
 import { ArrowRightIcon } from "@animateicons/react/lucide/arrow-right-icon";
 import { CheckIcon } from "@animateicons/react/lucide/check-icon";
+import { ChevronDownIcon } from "@animateicons/react/lucide/chevron-down-icon";
 import { CopyIcon } from "@animateicons/react/lucide/copy-icon";
 import { CodeIcon } from "@animateicons/react/lucide/code-icon";
 import { StoreIcon } from "@animateicons/react/lucide/store-icon";
@@ -166,6 +167,16 @@ export function ShareModal({
   useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current); }, []);
   const codeRef = useRef<HTMLTextAreaElement>(null);
   const scrollEdge = useScrollEdge(codeRef, `${view}:${activeBot.id}`);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  const botPickerRef = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    function closePicker(event: PointerEvent) {
+      if (botPickerRef.current && !botPickerRef.current.contains(event.target as Node)) botPickerRef.current.open = false;
+    }
+    document.addEventListener("pointerdown", closePicker);
+    return () => document.removeEventListener("pointerdown", closePicker);
+  }, []);
+  const promptScrollEdge = useScrollEdge(promptRef, `${view}:${activeBot.id}`);
   const code = shareCode(activeBot as unknown as Record<string, unknown>);
   async function copyCode() {
     try {
@@ -193,6 +204,8 @@ export function ShareModal({
     } catch {
       setPromptCopied(false);
       setPromptCopyError(true);
+      promptRef.current?.focus();
+      promptRef.current?.select();
     }
   }
   return (
@@ -280,40 +293,66 @@ export function ShareModal({
         </>
       ) : (
         <div className="publish-content">
+          <p className="publish-intro">Review this prompt, then paste it into a conversation with <BotName color={avatar.color}>{activeBot.name}</BotName>. The bot drafts the listing and asks before creating a pull request.</p>
           {bots && bots.length > 1 && (
             <div className="field publish-bot-field">
-              <label htmlFor="marketplace-publish-bot">Bot to publish</label>
-              <select id="marketplace-publish-bot" value={activeBot.id} onChange={(event) => setBotId(event.target.value)}>
-                {bots.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-              </select>
+              <span className="publish-bot-label">Bot to publish</span>
+              <details ref={botPickerRef} className="publish-bot-picker" onKeyDown={(event) => {
+                if (event.key !== "Escape" || !event.currentTarget.open) return;
+                event.preventDefault();
+                event.stopPropagation();
+                event.currentTarget.open = false;
+                event.currentTarget.querySelector("summary")?.focus();
+              }}>
+                <summary tabIndex={0} aria-label={`Bot to publish: ${activeBot.name}`}>
+                  <BotFace mascot={avatar.mascot} color={avatar.color} size={40} ambient={false} still />
+                  <span className="publish-bot-copy"><strong>{activeBot.name}</strong><small>{activeBot.description}</small></span>
+                  <AnimatedActionIcon icon={ChevronDownIcon} size={17} className="publish-bot-chevron" aria-hidden="true" />
+                </summary>
+                <div className="publish-bot-options" role="group" aria-label="Choose a bot to publish">
+                  {bots.map((item) => {
+                    const itemAvatar = resolveAvatar(getAvatarPref(item.id), { mascot: defaultMascotFor(item.id), color: botTile(item.id) });
+                    return <button key={item.id} type="button" aria-current={item.id === activeBot.id ? "true" : undefined} onClick={() => {
+                      setBotId(item.id);
+                      setPromptCopied(false);
+                      setPromptCopyError(false);
+                      if (botPickerRef.current) botPickerRef.current.open = false;
+                      botPickerRef.current?.querySelector("summary")?.focus();
+                    }}>
+                      <BotFace mascot={itemAvatar.mascot} color={itemAvatar.color} size={40} ambient={false} still />
+                      <span className="publish-bot-copy"><strong>{item.name}</strong><small>{item.description}</small></span>
+                      {item.id === activeBot.id && <AnimatedActionIcon icon={CheckIcon} size={16} aria-hidden="true" />}
+                    </button>;
+                  })}
+                </div>
+              </details>
             </div>
           )}
-          <div className="publish-options">
-            <section className="publish-option">
-              <div className="publish-option-head">
-                <span className="share-method-icon" aria-hidden="true"><AnimatedActionIcon icon={StoreIcon} size={19} /></span>
-                <div>
-                  <span className="share-method-status">Recommended</span>
-                  <h3>Ask this bot to publish</h3>
-                </div>
-              </div>
-              <p>Copy a guided prompt. The bot drafts missing listing details, checks the final diff, and waits for approval before creating a PR.</p>
-              <button type="button" className="btn-primary share-copy-button" data-initial-focus data-copied={promptCopied} onClick={copyPublishPrompt} aria-label={promptCopied ? "Publishing prompt copied" : "Copy publishing prompt"}>
-                <span aria-hidden="true"><AnimatedActionIcon icon={CopyIcon} size={16} />Copy prompt</span>
-                <span aria-hidden="true"><AnimatedActionIcon icon={CheckIcon} size={16} />Prompt copied</span>
-              </button>
-            </section>
-
-            <section className="publish-option">
-              <div className="publish-option-head">
-                <span className="share-method-icon" aria-hidden="true"><AnimatedActionIcon icon={CodeIcon} size={19} /></span>
-                <div><h3>Create manually</h3></div>
-              </div>
-              <p>Open the GitBot repository, add the listing under <code>library/</code>, and submit a pull request for review.</p>
-              <a className="btn-secondary publish-repo-link" href={MARKETPLACE_REPO_URL} target="_blank" rel="noreferrer">Open GitHub repository<AnimatedActionIcon icon={ArrowRightIcon} size={16} aria-hidden="true" /></a>
-            </section>
+          <div className="field share-code-field publish-prompt">
+            <label htmlFor="marketplace-publish-prompt">Publishing prompt<span className="share-code-format">Markdown</span></label>
+            <div className="share-code-viewport">
+              <div className={`chat-scroll-edge chat-scroll-edge-top${promptScrollEdge === "top" ? " is-visible" : ""}`} aria-hidden="true" />
+              <textarea key={activeBot.id} ref={promptRef} id="marketplace-publish-prompt" className="code" readOnly spellCheck={false} value={publishPrompt} aria-describedby="publish-review-note" />
+              <div className={`chat-scroll-edge chat-scroll-edge-bottom${promptScrollEdge === "bottom" ? " is-visible" : ""}`} aria-hidden="true" />
+            </div>
           </div>
-          <p className="publish-note" role="status">{promptCopyError ? "Could not copy the prompt. Check clipboard access and try again." : "Automated checks can miss sensitive information. Review the final diff before approving the PR."}</p>
+          <div className="share-copy-actions">
+            <div className="share-copy-privacy">
+              <span className="share-privacy-icon" style={{ color: avatar.color }} aria-hidden="true"><AnimatedActionIcon icon={ShieldCheckIcon} size={22} /></span>
+              <div>
+                <p id="publish-review-note">Check bot instructions for private details before sharing. Review the final listing and diff before approving.</p>
+                <span className="share-copy-status" role="status">{promptCopyError ? "Select the prompt and copy it manually." : ""}</span>
+              </div>
+            </div>
+            <button type="button" className="btn-primary share-copy-button" data-initial-focus data-copied={promptCopied} onClick={copyPublishPrompt} aria-label={promptCopied ? "Publishing prompt copied" : "Copy publishing prompt"}>
+              <span aria-hidden="true"><AnimatedActionIcon icon={CopyIcon} size={16} />Copy prompt</span>
+              <span aria-hidden="true"><AnimatedActionIcon icon={CheckIcon} size={16} />Prompt copied</span>
+            </button>
+          </div>
+          <div className="publish-manual">
+            <div><strong>Publish manually</strong><p>Add the listing yourself and open a pull request on GitHub.</p></div>
+            <a className="btn-secondary" href={MARKETPLACE_REPO_URL} target="_blank" rel="noreferrer">Open GitHub<AnimatedActionIcon icon={ArrowRightIcon} size={16} aria-hidden="true" /></a>
+          </div>
         </div>
       )}
     </Shell>
