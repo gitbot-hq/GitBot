@@ -640,7 +640,8 @@ export default function V2() {
     const setupChanged =
       editing !== "new" &&
       editing != null &&
-      editing.setupInstructions !== saved.setupInstructions &&
+      (editing.setupInstructions !== saved.setupInstructions ||
+        (editing.agent || "claude-code") !== (saved.agent || "claude-code")) &&
       needsSetup(saved);
     setAvatarPref(saved.id, pref);
     setSwitchTo(null);
