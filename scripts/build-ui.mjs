@@ -15,7 +15,7 @@ const REQUIRED = ["index.html", "onboarding.html", "marketplace.html", "v2.html"
 // Design tools that live in ui/app for `next dev` only (mascot lab, CTA
 // states, bot maker). They are dropped from the export so the package
 // never serves them.
-const INTERNAL_PAGES = ["bot-maker", "cta", "mascot-lab"];
+const INTERNAL_PAGES = ["bot-maker", "cta", "mascot-lab", "readme-preview"];
 
 const run = (cmd) => execSync(cmd, { cwd: uiDir, stdio: "inherit" });
 

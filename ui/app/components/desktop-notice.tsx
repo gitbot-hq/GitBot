@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { usePathname } from "next/navigation";
 import { LaptopIcon, type LaptopIconHandle } from "@animateicons/react/lucide/laptop-icon";
 
 const DISMISS_KEY = "gitbot-desktop-notice-dismissed";
@@ -9,6 +10,7 @@ const DISMISS_KEY = "gitbot-desktop-notice-dismissed";
  *  It never locks the app: a tablet or phone on the same network is a
  *  supported way in (the README's "any device"), just not a polished one. */
 export default function DesktopNotice({ children }: { children: ReactNode }) {
+  const isReadmePreview = usePathname() === "/readme-preview";
   const contentRef = useRef<HTMLDivElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const iconRef = useRef<LaptopIconHandle>(null);
@@ -26,6 +28,7 @@ export default function DesktopNotice({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (isReadmePreview) return;
     if (dismissed !== false) {
       if (contentRef.current) contentRef.current.inert = false;
       return;
@@ -70,7 +73,7 @@ export default function DesktopNotice({ children }: { children: ReactNode }) {
       window.clearInterval(animationTimer);
       if (contentRef.current) contentRef.current.inert = false;
     };
-  }, [dismissed]);
+  }, [dismissed, isReadmePreview]);
 
   function dismiss() {
     try {
@@ -87,7 +90,7 @@ export default function DesktopNotice({ children }: { children: ReactNode }) {
   return (
     <>
       <div ref={contentRef}>{children}</div>
-      {dismissed === false && (
+      {!isReadmePreview && dismissed === false && (
         <div className="desktop-notice" role="dialog" aria-modal="true" aria-labelledby="desktop-notice-title" aria-describedby="desktop-notice-copy">
           <div className="desktop-notice-inner">
             <LaptopIcon ref={iconRef} className="desktop-notice-icon" size={96} isAnimated={false} aria-hidden="true" />

@@ -68,7 +68,7 @@ All three agents get the same bot framing — the job prompt, the setup prompt a
 | Instructions | appended to the system prompt | per-message `system` | `developer_instructions` config |
 | Resume + thread history | yes | yes | yes |
 | Setup runs | yes | yes | yes |
-| Per-call approvals | yes | yes | no — sandbox by permission mode |
+| Approval requests | when a tool requires it | when a tool requires it | for writes or sandbox escalation |
 | `allowedTools` | yes, MCP tools included | yes | not supported |
 | `disallowedTools` | yes | yes | not supported |
 
@@ -78,7 +78,7 @@ All three agents get the same bot framing — the job prompt, the setup prompt a
 
 **OpenCode** (`opencode`) uses `@opencode-ai/sdk`. gitbot starts an OpenCode server (or connects to one already on port 4096), keeps one client per folder, and listens to OpenCode's event stream, reconnecting after two seconds if it drops. Bots need a `model` in `provider/model` form; OpenCode's free default model refuses requests made through the SDK.
 
-**Codex** (`codex`) uses `@openai/codex-sdk`, which runs the Codex binary bundled with it rather than the `codex` on your PATH; your own install supplies the login (`codex login`). If the bundled binary cannot be found, gitbot falls back to the `codex` on PATH and logs a warning, since the two versions may differ. Codex has no per-call approvals in gitbot: the session's permission mode maps to a Codex sandbox — `ask-permissions` → `read-only`, `allow-all-edits` → `workspace-write`, `yolo` → `danger-full-access` — and plan mode forces `read-only`. A mode change applies from the next turn.
+**Codex** (`codex`) runs the installed `codex` CLI as an App Server over stdio and uses the user's `codex login`. Approval requests for commands, file changes, network access, and permission grants route through GitBot's existing permission endpoint; unhandled server requests fail closed. Its modes map to approval policy plus sandbox: `ask-permissions` → `on-request` + `read-only`, `allow-all-edits` → `never` + `workspace-write`, `yolo` → `never` + `danger-full-access`. Plan mode forces `read-only`. A mode change applies from the next turn.
 
 ## Workspace and file API
 
@@ -121,6 +121,6 @@ GitBot/
 | Language | TypeScript (CommonJS, ES2020), Node.js 18+ |
 | CLI | Commander |
 | Transport | HTTP + Server-Sent Events |
-| Agents | `@anthropic-ai/claude-agent-sdk`, `@opencode-ai/sdk`, `@openai/codex-sdk` |
+| Agents | `@anthropic-ai/claude-agent-sdk`, `@opencode-ai/sdk`, installed Codex CLI App Server |
 | UI | Next.js 16 static export, React 19, Tailwind v4, `react-markdown` |
 | Terminal QR code | `qrcode-terminal` |

@@ -15,10 +15,19 @@ const AGENT_LABELS: Record<string, string> = {
 };
 
 const PERMISSION_LABELS: Record<string, string> = {
-  "ask-permissions": "Ask before each tool",
-  "auto-approve": "Auto-approve tools",
+  "ask-permissions": "Ask when needed",
+  "auto-approve": "Run without asking",
   plan: "Plan only",
 };
+
+function permissionLabel(bot: Bot): string {
+  if (bot.agent === "codex") {
+    if (bot.permissionMode === "ask-permissions") return "Ask to make changes";
+    if (bot.permissionMode === "auto-approve") return "Full access";
+    if (bot.permissionMode === "plan") return "Read only";
+  }
+  return PERMISSION_LABELS[bot.permissionMode] ?? bot.permissionMode ?? "—";
+}
 
 function timeAgo(iso: string): string {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
@@ -236,7 +245,7 @@ export default function BotProfile({
         </div>
         <div>
           <dt>Permissions</dt>
-          <dd>{PERMISSION_LABELS[bot.permissionMode] ?? bot.permissionMode ?? "—"}</dd>
+          <dd>{permissionLabel(bot)}</dd>
         </div>
         <div>
           <dt>Tools</dt>
