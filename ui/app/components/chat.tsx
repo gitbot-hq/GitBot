@@ -253,11 +253,17 @@ function ConversationEmptySkeleton({ withButton = false }: { withButton?: boolea
 // "plan" is yolo + mode:"plan" (see postChat) and only takes effect on the
 // next message, because a running session cannot change mode.
 const permissionOptions = [
-  { mode: "ask-permissions", label: "Ask before tools", detail: "Approve each tool action.", icon: ShieldCheckIcon },
-  { mode: "allow-all-edits", label: "Auto-approve edits", detail: "File edits run without asking; other tools still ask.", icon: PencilIcon },
-  { mode: "yolo", label: "Auto-approve all", detail: "Every tool runs without asking.", icon: ZapIcon },
+  { mode: "ask-permissions", label: "Ask when needed", detail: "Safe actions may run; review requests for more access.", icon: ShieldCheckIcon },
+  { mode: "allow-all-edits", label: "Allow edits", detail: "Edits run without asking; other actions may still ask.", icon: PencilIcon },
+  { mode: "yolo", label: "Run without asking", detail: "Tools run without GitBot approval prompts.", icon: ZapIcon },
   { mode: "plan", label: "Plan only", detail: "Explore without making edits.", icon: FileTextIcon },
 ] as const;
+const codexPermissionCopy = {
+  "ask-permissions": { label: "Ask to make changes", detail: "Reads run freely; writes and restricted actions ask." },
+  "allow-all-edits": { label: "Allow workspace edits", detail: "Commands and edits in this folder run without asking; blocked access stays blocked." },
+  yolo: { label: "Full access", detail: "Commands, edits, and network access run without asking." },
+  plan: { label: "Read only", detail: "Can inspect and answer, but cannot write files." },
+} as const;
 const threadPermissionKey = "gitbot-thread-permissions";
 
 /** The bot's own vocabulary ("auto-approve") → the chat's. */
@@ -351,6 +357,7 @@ export default function Chat({
   thread,
   botId,
   botName,
+  botAgent,
   botPermissionMode,
   botAvatar,
   autoSend,
@@ -368,6 +375,7 @@ export default function Chat({
   thread: ThreadFull | null;
   botId?: string;
   botName: string;
+  botAgent?: string;
   botPermissionMode?: string;
   botAvatar?: AvatarPref;
   autoSend: string | null;
@@ -395,6 +403,8 @@ export default function Chat({
   const [streaming, setStreaming] = useState(false);
   const [activity, setActivity] = useState<string | null>(null);
   const [perms, setPerms] = useState<(PermRequest & { verdict?: boolean })[]>([]);
+  const [resolvingPermId, setResolvingPermId] = useState<string | null>(null);
+  const [openPermissionId, setOpenPermissionId] = useState<string | null>(null);
   const [turnError, setTurnError] = useState<string | null>(null);
   // Single "up next" slot: the server runs one turn per thread (a second
   // POST /chat mid-turn is a 409), so follow-ups sent while streaming wait
@@ -449,9 +459,8 @@ export default function Chat({
   const reloadTimer = useRef<number | null>(null);
   const escapeStopTimer = useRef<number | null>(null);
   const escapeStopArmedRef = useRef(false);
-  // Rejoin mode: a turn is already running server-side. Text/tool events
-  // are replays of painted history, so only approvals (filtered to the
-  // still-pending set), status, and terminal events are honored.
+  // Rejoin mode: suppress replayed text/tools already painted by history,
+  // then accept live events after the server's replay_complete marker.
   const catchupRef = useRef(false);
   const pendingFilter = useRef<string[] | null>(null);
   // Drafts are per thread: switching stashes, returning restores.
@@ -576,6 +585,11 @@ export default function Chat({
     const el = scrollRef.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(scrollDown);
+    return () => cancelAnimationFrame(frame);
+  }, [msgs, live, activity, perms]);
 
   function loadHistory(tid: string, scroll = false) {
     setLoading(true);
@@ -705,7 +719,7 @@ export default function Chat({
               sessionRef.current = sid;
               turnActiveRef.current = true;
               setStreaming(true);
-              setActivity("Thinking…");
+              setActivity("Working…");
               openStream(sid);
               // The running turn may be in a mode picked earlier (or from
               // another tab); mirror it so the menu and cards tell the truth.
@@ -871,6 +885,9 @@ export default function Chat({
     const tid = threadRef.current;
     setStreaming(false);
     setActivity(null);
+    setPerms([]);
+    setResolvingPermId(null);
+    setOpenPermissionId(null);
     liveIdRef.current = null;
     sessionRef.current = null;
     if (turnStart.current) {
@@ -945,6 +962,10 @@ export default function Chat({
         return {};
       }
     };
+    es.addEventListener("replay_complete", () => {
+      catchupRef.current = false;
+      pendingFilter.current = null;
+    });
     es.addEventListener("assistant", (ev) => {
       if (catchupRef.current) return;
       ensureLive();
@@ -955,8 +976,17 @@ export default function Chat({
       if (catchupRef.current) return;
       ensureLive();
       const d = data(ev);
-      setActivity(`Running ${d.tool_name || "tool"}…`);
-      appendLiveTool({ name: String(d.tool_name ?? "tool"), input: d.tool_input });
+      const name = String(d.tool_name ?? "tool");
+      setActivity(name.startsWith("mcp__cua_repl__") ? "Using computer…"
+        : name === "Bash" ? "Running command…"
+        : name === "Write" ? "Writing file…"
+        : name === "Edit" ? "Editing file…"
+        : name === "WebSearch" ? "Searching web…"
+        : `Using ${name}…`);
+      appendLiveTool({ name, input: d.tool_input });
+    });
+    es.addEventListener("tool_result", () => {
+      if (!catchupRef.current) setActivity("Working…");
     });
     es.addEventListener("status", (ev) => {
       const d = data(ev);
@@ -975,6 +1005,10 @@ export default function Chat({
           : [...prev, { toolUseID: d.toolUseID, toolName: String(d.toolName ?? "tool"), input: d.input }],
       );
       setActivity("Waiting for your approval…");
+    });
+    es.addEventListener("permission_resolved", (ev) => {
+      const id = String(data(ev).toolUseID ?? "");
+      setPerms((prev) => prev.filter((permission) => permission.toolUseID !== id));
     });
     // The agent reported a problem (provider refused, bad model, a connection
     // retry). Not terminal on its own, so the reason is kept only until the
@@ -1064,7 +1098,7 @@ export default function Chat({
       { id: nid(), role: "user", segs: [{ kind: "text", text: prompt }] },
     ]);
     setStreaming(true);
-    setActivity("Thinking…");
+    setActivity("Working…");
     stick.current = true;
     requestAnimationFrame(scrollDown);
     try {
@@ -1105,6 +1139,10 @@ export default function Chat({
     escapeStopArmedRef.current = false;
     setEscapeStopArmed(false);
     if (escapeStopTimer.current) window.clearTimeout(escapeStopTimer.current);
+    setPerms([]);
+    setResolvingPermId(null);
+    setOpenPermissionId(null);
+    setActivity("Stopping…");
     // Halting means halting: a queued follow-up rides back into the draft
     // instead of firing the moment the turn dies.
     const q = queueRef.current;
@@ -1170,13 +1208,15 @@ export default function Chat({
   function answerPerm(p: PermRequest, approved: boolean) {
     const sid = sessionRef.current;
     if (!sid) return;
+    setResolvingPermId(p.toolUseID);
     postPermission(sid, p.toolUseID, approved)
       .then(() =>
         setPerms((prev) =>
           prev.map((x) => (x.toolUseID === p.toolUseID ? { ...x, verdict: approved } : x)),
         ),
       )
-      .catch((e) => setTurnError(errText(e)));
+      .catch((e) => setTurnError(errText(e)))
+      .finally(() => setResolvingPermId(null));
   }
 
   /** Remember the thread's chosen mode; the bot's own default = no entry. */
@@ -1233,7 +1273,21 @@ export default function Chat({
   const permissionMode = thread
     ? permissionModes[thread.id] ?? safePermissionMode(botPermissionMode)
     : safePermissionMode(botPermissionMode);
+  const agent = thread?.agent ?? botAgent;
   const permissionOption = permissionOptions.find((option) => option.mode === permissionMode)!;
+  const permissionCopy = agent === "codex" ? codexPermissionCopy[permissionMode] : permissionOption;
+  const pendingPerms = perms.filter((permission) => permission.verdict === undefined);
+  const pendingPerm = pendingPerms[0];
+  const permissionDetailsOpen = pendingPerm?.toolUseID === openPermissionId;
+  const permissionTitle = pendingPerm?.toolName === "Write" ? "Allow this file change?"
+    : pendingPerm?.toolName === "Edit" ? "Allow these edits?"
+    : pendingPerm?.toolName === "Bash" ? "Allow this command?"
+    : pendingPerm?.toolName === "Network" ? "Allow network access?"
+    : pendingPerm?.toolName === "Permissions" ? "Grant additional access?"
+    : pendingPerm ? `Allow ${pendingPerm.toolName}?` : "Permission required";
+  const permissionDescription = pendingPerms.length > 1
+    ? `Reviewing request 1 of ${pendingPerms.length}.`
+    : `${botName} needs your approval to continue.`;
   useMascotPointerFollow({
     group: botId,
     enabled: !!botId && !setup && (!thread || showThreadEmpty),
@@ -1479,35 +1533,7 @@ export default function Chat({
           </div>
         )}
         {perms.map((p) =>
-          p.verdict === undefined ? (
-            <div key={p.toolUseID} className="perm-card">
-              <b>Allow {p.toolName}?</b>
-              <pre>{JSON.stringify(p.input, null, 2)}</pre>
-              <div className="perm-acts">
-                <button type="button" className="btn-primary" onClick={() => answerPerm(p, true)}>Allow</button>
-                <button type="button" className="btn-secondary" onClick={() => answerPerm(p, false)}>Deny</button>
-                {EDIT_TOOLS.indexOf(p.toolName) !== -1 && permissionMode === "ask-permissions" ? (
-                  <button
-                    type="button"
-                    className="btn-secondary perm-all"
-                    title="Stop asking about file edits in this thread"
-                    onClick={() => changeMode("allow-all-edits")}
-                  >
-                    Allow all edits
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn-secondary perm-all"
-                    title="Stop asking in this thread — auto-approve every tool"
-                    onClick={() => changeMode("yolo")}
-                  >
-                    Allow all
-                  </button>
-                )}
-              </div>
-            </div>
-          ) : (
+          p.verdict === undefined ? null : (
             <p key={p.toolUseID} className="perm-note">
               {(p.verdict ? "Allowed " : "Denied ") + p.toolName}
             </p>
@@ -1530,7 +1556,51 @@ export default function Chat({
         )}
       </section>
       <div className={`chat-scroll-edge chat-scroll-edge-bottom${scrollEdge === "bottom" ? " is-visible" : ""}`} aria-hidden="true" />
-      {setup && streaming ? (
+      {pendingPerm ? (
+        <div className="composer permission-composer">
+          {jumpLatest}
+          <div className="composer-permission-card" role="group" aria-label="Permission required">
+            <div className="composer-permission-card-copy">
+              <span className="composer-permission-icon" aria-hidden="true">
+                <AnimatedActionIcon icon={ShieldCheckIcon} size={18} />
+              </span>
+              <span>
+                <b>{permissionTitle}</b>
+                <small>{permissionDescription}</small>
+              </span>
+            </div>
+            <div className="composer-permission-actions">
+              <button type="button" className="btn-secondary btn-compact" disabled={resolvingPermId === pendingPerm.toolUseID} onClick={() => answerPerm(pendingPerm, false)}>Deny</button>
+              <button type="button" className="btn-primary btn-compact" disabled={resolvingPermId === pendingPerm.toolUseID} onClick={() => answerPerm(pendingPerm, true)}>{resolvingPermId === pendingPerm.toolUseID ? "Allowing…" : "Allow"}</button>
+              {agent !== "codex" && EDIT_TOOLS.indexOf(pendingPerm.toolName) !== -1 && permissionMode === "ask-permissions" ? (
+                <button type="button" className="btn-secondary btn-compact" onClick={() => changeMode("allow-all-edits")}>Allow all edits</button>
+              ) : agent !== "codex" ? (
+                <button type="button" className="btn-secondary btn-compact" onClick={() => changeMode("yolo")}>Allow all</button>
+              ) : null}
+              <button type="button" className="btn-ghost btn-compact composer-permission-stop" onClick={stop}>
+                <AnimatedActionIcon icon={CircleStopIcon} size={14} aria-hidden="true" />
+                Stop task
+              </button>
+            </div>
+            <div className="composer-permission-details">
+              <button
+                type="button"
+                className="composer-permission-details-trigger"
+                aria-expanded={permissionDetailsOpen}
+                onClick={() => setOpenPermissionId(permissionDetailsOpen ? null : pendingPerm.toolUseID)}
+              >
+                <AnimatedActionIcon icon={ChevronDownIcon} size={14} className={permissionDetailsOpen ? "act-chev open" : "act-chev"} aria-hidden="true" />
+                Request details
+              </button>
+              <div className={permissionDetailsOpen ? "composer-permission-details-body open" : "composer-permission-details-body"}>
+                <div className="composer-permission-details-clip">
+                  <pre>{JSON.stringify(pendingPerm.input, null, 2)}</pre>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : setup && streaming ? (
         <div className="composer setup-resume-composer">
           {jumpLatest}
           <div className="setup-resume-card" role="status">
@@ -1630,13 +1700,13 @@ export default function Chat({
                 type="button"
                 className={`composer-permission-trigger${activeMenu === "permissions" ? " is-active" : ""}`}
                 onClick={() => setActiveMenu((menu) => menu === "permissions" ? null : "permissions")}
-                aria-label={`Permissions: ${permissionOption.label}`}
+                aria-label={`Permissions: ${permissionCopy.label}`}
                 aria-expanded={activeMenu === "permissions"}
                 aria-haspopup="menu"
                 aria-controls="chat-permission-menu"
               >
                 <AnimatedActionIcon icon={permissionOption.icon} size={16} />
-                <span>{permissionOption.label}</span>
+                <span>{permissionCopy.label}</span>
                 <AnimatedActionIcon icon={ChevronDownIcon} size={13} />
               </button>
               {activeMenu === "permissions" && <>
@@ -1662,7 +1732,7 @@ export default function Chat({
                       }}
                     >
                       <AnimatedActionIcon icon={option.icon} size={17} />
-                      <span className="composer-permission-option-copy"><strong>{option.label}</strong><small>{option.detail}</small></span>
+                      <span className="composer-permission-option-copy"><strong>{agent === "codex" ? codexPermissionCopy[option.mode].label : option.label}</strong><small>{agent === "codex" ? codexPermissionCopy[option.mode].detail : option.detail}</small></span>
                       {permissionMode === option.mode && <AnimatedActionIcon icon={CheckIcon} size={15} />}
                     </button>
                   ))}

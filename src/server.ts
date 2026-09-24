@@ -220,6 +220,12 @@ export async function handleRequest(
             console.error("Permission response failed:", err.message);
           });
         }
+      } else if (store.agent === "codex") {
+        const pending = store.pendingPermissions.get(toolUseID);
+        if (!pending) { jsonError(res, 409, "Approval is no longer pending"); return; }
+        pending.resolve({ approved: approved === true });
+        store.pendingPermissions.delete(toolUseID);
+        notifyPermissionsChanged();
       }
       jsonOk(res, { ok: true });
       return;
@@ -365,6 +371,10 @@ export async function handleRequest(
         }
       }
 
+      // A rejoining chat paints saved history separately. Tell it exactly
+      // where replay ends so subsequent events are shown live.
+      writeSseEvent(res, { seq: store.seq, type: "replay_complete" });
+
       if (store.status !== "running") {
         res.end();
         return;
@@ -428,7 +438,7 @@ export async function handleRequest(
           }
           notifyPermissionsChanged();
         } else if (store.agent === "codex") {
-          // codex applies approvalPolicy at thread start — mode change takes effect next turn
+          // The active Codex turn keeps its policy; turn/start applies the new mode next time.
         } else if (store.agent === "opencode" && store.sdkSessionId) {
           for (const [id, perm] of store.pendingPermissions) {
             if (shouldAutoApprove(store.agent, perm.toolName, store.permissionMode)) {

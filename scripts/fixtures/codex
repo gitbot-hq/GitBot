@@ -1,0 +1,45 @@
+#!/usr/bin/env node
+// A tiny app-server fixture: waits for GitBot's reply to a proposed file edit.
+const readline = require("node:readline");
+const lines = readline.createInterface({ input: process.stdin });
+const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+let requestKind = "file";
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") send({ id: message.id, result: { userAgent: "test" } });
+  if (message.method === "thread/start" || message.method === "thread/resume") {
+    const sandbox = message.params.sandbox === "read-only" ? "readOnly" : message.params.sandbox === "workspace-write" ? "workspaceWrite" : "dangerFullAccess";
+    send({ id: message.id, result: { thread: { id: "codex-test-thread" }, approvalPolicy: process.env.GITBOT_TEST_CODEX_POLICY_MISMATCH ? "never" : message.params.approvalPolicy, approvalsReviewer: message.params.approvalsReviewer, sandbox: { type: sandbox } } });
+  }
+  if (message.method === "turn/start") {
+    const prompt = message.params.input.find((item) => item.type === "text")?.text ?? "";
+    requestKind = prompt.startsWith("[mcp]") ? "mcp" : prompt.startsWith("[network]") ? "network" : prompt.startsWith("[permissions]") ? "permissions" : prompt.startsWith("[command]") ? "command" : "file";
+    send({ id: message.id, result: { turn: { id: "test-turn", status: "inProgress" } } });
+    send({ method: "turn/started", params: { threadId: "codex-test-thread", turn: { id: "test-turn" } } });
+    if (requestKind === "mcp") {
+      send({ method: "item/started", params: { threadId: "codex-test-thread", turnId: "test-turn", item: { id: "mcp-1", type: "mcpToolCall", server: "cua_repl", tool: "js", arguments: { code: "await cua.getState()" }, status: "inProgress" } } });
+      send({ method: "item/completed", params: { threadId: "codex-test-thread", turnId: "test-turn", item: { id: "mcp-1", type: "mcpToolCall", server: "cua_repl", tool: "js", status: "completed" } } });
+      send({ method: "turn/completed", params: { threadId: "codex-test-thread", turn: { id: "test-turn", status: "completed" } } });
+    } else if (requestKind === "file") {
+      send({ method: "item/started", params: { threadId: "codex-test-thread", turnId: "test-turn", item: { id: "edit-1", type: "fileChange", status: "inProgress", changes: [{ path: "gitbot-demo.md", kind: { type: "add" }, diff: "+# GitBot demo" }] } } });
+      send({ id: 71, method: "item/fileChange/requestApproval", params: { threadId: "codex-test-thread", turnId: "test-turn", itemId: "edit-1", reason: "Create the demo file" } });
+    } else if (requestKind === "permissions") {
+      send({ id: 71, method: "item/permissions/requestApproval", params: { threadId: "codex-test-thread", turnId: "test-turn", itemId: "permissions-1", cwd: process.cwd(), permissions: { network: { enabled: true }, fileSystem: null }, reason: "Fetch package" } });
+    } else {
+      send({ method: "item/started", params: { threadId: "codex-test-thread", turnId: "test-turn", item: { id: "command-1", type: "commandExecution", command: "npm test", cwd: process.cwd(), status: "inProgress" } } });
+      send({ id: 71, method: "item/commandExecution/requestApproval", params: { threadId: "codex-test-thread", turnId: "test-turn", itemId: "command-1", command: "npm test", cwd: process.cwd(), ...(requestKind === "network" ? { networkApprovalContext: { host: "example.com", protocol: "https" } } : {}) } });
+    }
+  }
+  if (message.id === 71 && message.result) {
+    const approved = message.result.decision === "accept" || Boolean(message.result.permissions?.network);
+    send({ method: "serverRequest/resolved", params: { threadId: "codex-test-thread", requestId: 71 } });
+    if (requestKind === "file") send({ method: "item/completed", params: { threadId: "codex-test-thread", turnId: "test-turn", item: { id: "edit-1", type: "fileChange", status: approved ? "completed" : "declined", changes: [{ path: "gitbot-demo.md", kind: { type: "add" }, diff: "+# GitBot demo" }] } } });
+    send({ method: "item/completed", params: { threadId: "codex-test-thread", turnId: "test-turn", item: { id: "answer-1", type: "agentMessage", text: JSON.stringify(message.result) } } });
+    send({ method: "turn/completed", params: { threadId: "codex-test-thread", turn: { id: "test-turn", status: "completed" } } });
+  }
+  if (message.method === "turn/interrupt") {
+    send({ id: message.id, result: {} });
+    send({ method: "serverRequest/resolved", params: { threadId: "codex-test-thread", requestId: 71 } });
+    send({ method: "turn/completed", params: { threadId: "codex-test-thread", turn: { id: "test-turn", status: "interrupted" } } });
+  }
+});

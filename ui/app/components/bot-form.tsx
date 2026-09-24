@@ -425,11 +425,17 @@ export default function BotForm({
               placeholder="You keep documentation in sync with the code. On each run, read the latest commit and update the docs it affects."
             />
           </Field>
-          <Field label="Permissions">
+          <Field label="Permissions" tip={agent === "codex"
+            ? permissionMode === "auto-approve" ? "Full filesystem, command, and network access without asking."
+              : permissionMode === "plan" ? "Read-only access. Codex can inspect and answer, but not edit."
+              : "Reads run freely; writing or restricted actions request your approval."
+            : permissionMode === "auto-approve" ? "Tools run without GitBot approval prompts."
+              : permissionMode === "plan" ? "The agent can plan without editing files."
+              : "Safe actions can run; tool actions needing more access ask first."}>
             <select value={permissionMode} onChange={(e) => setPermissionMode(e.target.value)}>
-              <option value="ask-permissions">Ask before each tool</option>
-              <option value="auto-approve">Auto-approve tools</option>
-              <option value="plan">Plan only (no edits)</option>
+              <option value="ask-permissions">{agent === "codex" ? "Ask to make changes" : "Ask when needed"}</option>
+              <option value="auto-approve">{agent === "codex" ? "Full access" : "Run without asking"}</option>
+              <option value="plan">{agent === "codex" ? "Read only (no edits)" : "Plan only (no edits)"}</option>
             </select>
           </Field>
           <Field label="Setup instructions" tip="run once per machine — blank means no setup">

@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { execSync, spawn } from "child_process";
 import { createReadStream, existsSync, mkdirSync, renameSync, writeFileSync, readFileSync, rmSync, readdirSync, realpathSync } from "fs";
 import { readdir, stat, readFile } from "fs/promises";
 import { createInterface } from "readline";
@@ -6,15 +6,7 @@ import { join, extname } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
 import { isIP } from "net";
-import type {
-  Codex as CodexClass,
-  Thread,
-  ThreadEvent,
-  ThreadItem,
-  ThreadOptions,
-  UserInput,
-  Input,
-} from "@openai/codex-sdk";
+import { CodexAppServer } from "./codex-app-server";
 import {
   emitEvent,
   scheduleCleanup,
@@ -25,29 +17,12 @@ import {
 import { bindSession, dataDir } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcomeFromEvents } from "./bot-prompt";
 
-let CodexCtor: typeof CodexClass | null = null;
-
-async function loadCodexSdk(): Promise<typeof CodexClass | null> {
-  if (CodexCtor) return CodexCtor;
-  try {
-    const mod = await import("@openai/codex-sdk");
-    CodexCtor = mod.Codex;
-    return CodexCtor;
-  } catch {
-    return null;
-  }
-}
-
 export async function initAgent(): Promise<boolean> {
   try {
     execSync("codex --version", { stdio: "ignore" });
+    execSync("codex app-server --help", { stdio: "ignore" });
   } catch {
-    console.warn("  codex CLI not found — codex agent unavailable");
-    return false;
-  }
-  const ctor = await loadCodexSdk();
-  if (!ctor) {
-    console.warn("  @openai/codex-sdk not installed — codex agent unavailable");
+    console.warn("  codex CLI with App Server not found — codex agent unavailable");
     return false;
   }
   return true;
@@ -64,23 +39,6 @@ function codexOnPath(): string | null {
   }
 }
 
-/**
- * The SDK runs the Codex binary bundled with it, never the one on PATH. When
- * that bundled binary cannot be found (optional dependency skipped, or removed
- * by the OS), fall back to the user's own install rather than failing the turn.
- * The two may be different versions, hence the warning.
- */
-function createCodex(ctor: typeof CodexClass, options: ConstructorParameters<typeof CodexClass>[0]): CodexClass {
-  try {
-    return new ctor(options);
-  } catch (err: any) {
-    const fallback = codexOnPath();
-    if (!fallback) throw err;
-    console.warn(`[codex] bundled binary unavailable (${err?.message ?? err}); using ${fallback} — its version may differ from the SDK's`);
-    return new ctor({ ...options, codexPathOverride: fallback });
-  }
-}
-
 interface PendingAttachment {
   path: string;
   basename: string;
@@ -88,8 +46,8 @@ interface PendingAttachment {
 }
 
 function permissionToCodex(mode: PermissionMode): {
-  approvalPolicy: ThreadOptions["approvalPolicy"];
-  sandboxMode: ThreadOptions["sandboxMode"];
+  approvalPolicy: "never" | "on-request";
+  sandboxMode: "read-only" | "workspace-write" | "danger-full-access";
 } {
   switch (mode) {
     case "yolo":
@@ -107,9 +65,9 @@ export async function runAgent(store: SessionStore): Promise<void> {
   const promptText = (lastUserEvent?.prompt as string) ?? "";
   const attachments = (lastUserEvent?.attachments as Array<{ url: string }> | undefined) ?? [];
 
-  const ctor = await loadCodexSdk();
-  if (!ctor) {
-    emitEvent(store, "error", { message: "Codex SDK not available" });
+  const codexPath = codexOnPath();
+  if (!codexPath) {
+    emitEvent(store, "error", { message: "Codex CLI not available" });
     store.status = "error";
     notifyPermissionsChanged();
     scheduleCleanup(store);
@@ -144,9 +102,9 @@ export async function runAgent(store: SessionStore): Promise<void> {
     return;
   }
 
-  const userInput: UserInput[] = [];
+  const userInput: Array<{ type: "text"; text: string } | { type: "localImage"; path: string }> = [];
   if (promptText) userInput.push({ type: "text", text: promptText });
-  for (const a of downloaded) userInput.push({ type: "local_image", path: a.path });
+  for (const a of downloaded) userInput.push({ type: "localImage", path: a.path });
   if (userInput.length === 0) {
     emitEvent(store, "error", { message: "prompt or attachments is required" });
     store.status = "error";
@@ -154,69 +112,127 @@ export async function runAgent(store: SessionStore): Promise<void> {
     scheduleCleanup(store);
     return;
   }
-  const input: Input = userInput;
-
-  const threadOpts: ThreadOptions = {
-    workingDirectory: store.repoPath,
-    skipGitRepoCheck: true,
-    approvalPolicy,
-    sandboxMode,
-    ...(store.model ? { model: store.model } : {}),
-  };
-
-  let thread: Thread;
-  try {
-    // A bot is a preset: its instructions ride on top of Codex's own system
-    // prompt as developer instructions. Sent on every turn, resumed or not, so
-    // the thread's instructions never differ from one turn to the next.
-    const system = presetSystemPrompt(store.botPreset);
-    const codex = createCodex(ctor, system ? { config: { developer_instructions: system } } : {});
-    thread = store.sdkSessionId ? codex.resumeThread(store.sdkSessionId, threadOpts) : codex.startThread(threadOpts);
-  } catch (err: any) {
-    emitEvent(store, "error", { message: `Failed to start codex thread: ${err?.message ?? "unknown"}` });
-    store.status = "error";
-    store.abortController = null;
-    store.pendingPermissions.clear();
-    notifyPermissionsChanged();
-    scheduleCleanup(store);
-    return;
-  }
-
   const abortController = new AbortController();
   store.abortController = abortController;
-  let receivedCompletion = false;
-
-  try {
-    console.log(`[codex] starting turn (resume=${!!store.sdkSessionId})`);
-    const { events } = await thread.runStreamed(input, { signal: abortController.signal });
-
-    try {
-      for await (const ev of events) {
-        handleEvent(ev, store);
-        if (ev.type === "turn.completed") receivedCompletion = true;
-        if (ev.type === "turn.failed") {
-          // codex keeps retrying after reporting a failed turn, and abort is
-          // refused once the session is no longer running. Stop reading so the
-          // SDK kills the child rather than leaving it running unreachably.
-          receivedCompletion = true;
-          break;
-        }
-      }
-    } catch (err: any) {
-      if (err?.name === "AbortError" || abortController.signal.aborted) {
-        console.log("[codex] aborted");
+  const proc = spawn(codexPath, ["app-server"], {
+    cwd: store.repoPath,
+    stdio: ["pipe", "pipe", "pipe"],
+    shell: process.platform === "win32", // codex on Windows may be a .cmd shim
+  });
+  let activeTurnId: string | null = null;
+  let completed = false;
+  let resolveTurn!: () => void;
+  let rejectTurn!: (error: Error) => void;
+  const turnDone = new Promise<void>((resolve, reject) => { resolveTurn = resolve; rejectTurn = reject; });
+  // The turn can fail while thread/start is still pending. Keep this promise
+  // observed until we await it below.
+  void turnDone.catch(() => {});
+  const items = new Map<string, any>();
+  let threadId = store.sdkSessionId;
+  const client = new CodexAppServer(proc.stdin, proc.stdout, (message) => {
+    if (message.id !== undefined && message.method?.endsWith("/requestApproval")) {
+      handleApprovalRequest(message, client, store, threadId, activeTurnId, items);
+      return;
+    }
+    if (message.id !== undefined) {
+      client.reject(message.id, `Unsupported Codex request: ${message.method ?? "unknown"}`);
+      return;
+    }
+    const p = message.params ?? {};
+    if (message.method === "turn/started" && p.threadId === threadId) {
+      activeTurnId = p.turn?.id ?? activeTurnId;
+    } else if (message.method === "turn/completed" && p.threadId === threadId) {
+      completed = true;
+      if (p.turn?.status === "completed") {
+        emitEvent(store, "result", { subtype: "success" });
+      } else if (p.turn?.status === "interrupted") {
         emitEvent(store, "aborted", { message: "Request aborted by user" });
-        store.status = "done";
-        receivedCompletion = true;
       } else {
-        throw err;
+        emitEvent(store, "error", { message: p.turn?.error?.message ?? "Codex turn failed" });
+        store.status = "error";
+      }
+      resolveTurn();
+    } else if (message.method === "serverRequest/resolved") {
+      const key = `codex-${p.requestId}`;
+      if (store.pendingPermissions.delete(key)) {
+        notifyPermissionsChanged();
+        emitEvent(store, "permission_resolved", { toolUseID: key });
+      }
+    } else if (message.method === "error") {
+      emitEvent(store, "agent_error", { message: p.error?.message ?? "Codex reported an error" });
+    } else if (message.method?.startsWith("item/") && p.threadId === threadId) {
+      if (p.item?.id) items.set(p.item.id, p.item);
+      if (message.method === "item/started" || message.method === "item/completed") {
+        handleItem(message.method, p.item, store);
       }
     }
+  });
+  proc.stderr.on("data", (chunk: Buffer) => console.error(`[codex] ${String(chunk).trim()}`));
+  proc.on("error", (error) => { client.fail(error); rejectTurn(error); });
+  proc.on("exit", (code) => {
+    if (!completed) {
+      const error = new Error(`Codex app-server exited before the turn completed (${code ?? "unknown"})`);
+      client.fail(error);
+      rejectTurn(error);
+    }
+  });
+
+  try {
+    await client.request("initialize", { clientInfo: { name: "gitbot", title: "GitBot", version: "0.0.5" } });
+    client.notify("initialized");
+    // A bot's standing instructions must also be sent when resuming a thread.
+    const system = presetSystemPrompt(store.botPreset);
+    const common = {
+      cwd: store.repoPath,
+      approvalPolicy,
+      approvalsReviewer: "user",
+      sandbox: sandboxMode,
+      ...(store.model ? { model: store.model } : {}),
+      ...(system ? { developerInstructions: system } : {}),
+    };
+    const response = await client.request(threadId ? "thread/resume" : "thread/start", {
+      ...common,
+      ...(threadId ? { threadId } : { serviceName: "gitbot" }),
+    });
+    const expectedSandbox = sandboxMode === "read-only" ? "readOnly"
+      : sandboxMode === "workspace-write" ? "workspaceWrite" : "dangerFullAccess";
+    if (response?.approvalPolicy !== approvalPolicy || response?.sandbox?.type !== expectedSandbox
+      || (approvalPolicy === "on-request" && response?.approvalsReviewer !== "user")) {
+      throw new Error("Codex could not apply the selected permissions. Check your Codex policy settings before running this bot.");
+    }
+    threadId = response?.thread?.id;
+    if (!threadId) throw new Error("Codex did not return a thread id");
+    if (store.threadId && !store.sdkSessionId) bindSession(store.threadId, threadId);
+    store.sdkSessionId = threadId;
+    emitEvent(store, "system", { subtype: "init", session_id: threadId });
+    const started = await client.request("turn/start", {
+      threadId,
+      input: userInput,
+      cwd: store.repoPath,
+      approvalPolicy,
+      approvalsReviewer: "user",
+      sandboxPolicy: sandboxMode === "read-only" ? { type: "readOnly" }
+        : sandboxMode === "workspace-write" ? { type: "workspaceWrite", writableRoots: [store.repoPath], networkAccess: false }
+        : { type: "dangerFullAccess" },
+      ...(store.model ? { model: store.model } : {}),
+    });
+    activeTurnId = started?.turn?.id ?? activeTurnId;
+    if (abortController.signal.aborted && activeTurnId) {
+      void client.request("turn/interrupt", { threadId, turnId: activeTurnId }).catch(() => {});
+    }
+    abortController.signal.addEventListener("abort", () => {
+      if (threadId && activeTurnId && !completed) {
+        void client.request("turn/interrupt", { threadId, turnId: activeTurnId }).catch(() => {});
+      }
+    }, { once: true });
+    await turnDone;
   } catch (err: any) {
-    console.log("[codex] outer error:", err?.message, err?.stack);
+    console.error("[codex] turn failed:", err?.message);
     emitEvent(store, "error", { message: err?.message ?? "Unknown error" });
     store.status = "error";
   } finally {
+    client.close();
+    proc.kill();
     if (isStaging && store.sdkSessionId) {
       const finalDir = join(baseDir, store.sdkSessionId);
       try {
@@ -252,7 +268,7 @@ export async function runAgent(store: SessionStore): Promise<void> {
     return;
   }
 
-  if (!receivedCompletion) {
+  if (!completed) {
     console.log("[codex] stream ended without completion event — treating as error");
     emitEvent(store, "error", { message: "Codex process exited unexpectedly" });
     store.status = "error";
@@ -268,77 +284,104 @@ export async function runAgent(store: SessionStore): Promise<void> {
   scheduleCleanup(store);
 }
 
-function handleEvent(ev: ThreadEvent, store: SessionStore): void {
-  switch (ev.type) {
-    case "thread.started": {
-      // Bind the hub thread to its conversation the first time we learn the id,
-      // so the thread's next turn resumes it instead of starting over.
-      if (store.threadId && !store.sdkSessionId) bindSession(store.threadId, ev.thread_id);
-      store.sdkSessionId = ev.thread_id;
-      emitEvent(store, "system", { subtype: "init", session_id: ev.thread_id });
-      return;
-    }
-    case "turn.started":
-      return;
-    case "turn.completed":
-      emitEvent(store, "result", { subtype: "success", usage: ev.usage });
-      return;
-    case "turn.failed":
-      emitEvent(store, "error", { message: ev.error?.message ?? "Codex turn failed" });
-      store.status = "error";
-      return;
-    case "error":
-      // The SDK types these as unrecoverable, but codex also reports retries
-      // and transport fallbacks here and then carries on. Surface the message
-      // without ending the turn; a real failure still arrives as turn.failed,
-      // a non-zero exit, or a stream that stops before turn.completed.
-      console.log(`[codex] ${ev.message}`);
-      emitEvent(store, "agent_error", { message: ev.message });
-      return;
-    case "item.started":
-    case "item.updated":
-    case "item.completed":
-      handleItem(ev.type, ev.item, store);
-      return;
+function handleApprovalRequest(
+  message: { id?: number | string; method?: string; params?: any },
+  client: CodexAppServer,
+  store: SessionStore,
+  threadId: string | null,
+  activeTurnId: string | null,
+  items: Map<string, any>,
+): void {
+  const p = message.params ?? {};
+  const id = message.id;
+  if (id === undefined) return;
+  if (p.threadId !== threadId || !activeTurnId || p.turnId !== activeTurnId || !p.itemId) {
+    client.reject(id, "Approval does not belong to the active GitBot turn");
+    return;
   }
+  let toolName: string;
+  let input: Record<string, unknown>;
+  let response: (approved: boolean) => Record<string, unknown>;
+  if (message.method === "item/commandExecution/requestApproval") {
+    if (p.networkApprovalContext) {
+      toolName = "Network";
+      input = { ...p.networkApprovalContext, command: p.command ?? undefined, cwd: p.cwd ?? undefined, reason: p.reason ?? undefined };
+    } else {
+      toolName = "Bash";
+      input = { command: p.command ?? items.get(p.itemId)?.command ?? "", cwd: p.cwd ?? store.repoPath, reason: p.reason ?? undefined };
+    }
+    response = (approved) => ({ decision: approved ? "accept" : "decline" });
+  } else if (message.method === "item/fileChange/requestApproval") {
+    const changes = items.get(p.itemId)?.changes ?? [];
+    toolName = changes.length && changes.every(isAddedFile) ? "Write" : "Edit";
+    input = { changes, reason: p.reason ?? undefined, grantRoot: p.grantRoot ?? undefined };
+    response = (approved) => ({ decision: approved ? "accept" : "decline" });
+  } else if (message.method === "item/permissions/requestApproval") {
+    toolName = "Permissions";
+    input = { cwd: p.cwd, reason: p.reason ?? undefined, requested: p.permissions };
+    response = (approved) => ({
+      permissions: approved ? {
+        ...(p.permissions?.network ? { network: p.permissions.network } : {}),
+        ...(p.permissions?.fileSystem ? { fileSystem: p.permissions.fileSystem } : {}),
+      } : {},
+      scope: "turn",
+    });
+  } else {
+    client.reject(id, `Unsupported Codex approval: ${message.method}`);
+    return;
+  }
+  const toolUseID = `codex-${id}`;
+  store.pendingPermissions.set(toolUseID, {
+    toolUseID,
+    toolName,
+    input,
+    resolve: (decision: { approved: boolean }) => client.respond(id, response(decision.approved)),
+  });
+  notifyPermissionsChanged();
+  emitEvent(store, "permission_request", { toolUseID, toolName, input });
 }
 
-function handleItem(eventType: string, item: ThreadItem, store: SessionStore): void {
+function isAddedFile(change: any): boolean {
+  return change?.kind === "add" || change?.kind?.type === "add";
+}
+
+function handleItem(eventType: string, item: any, store: SessionStore): void {
+  if (!item) return;
   switch (item.type) {
-    case "agent_message": {
-      if (eventType === "item.completed") {
+    case "agentMessage": {
+      if (eventType === "item/completed") {
         emitEvent(store, "assistant", { content: item.text });
       }
       return;
     }
     case "reasoning": {
-      if (eventType === "item.started") {
+      if (eventType === "item/started") {
         emitEvent(store, "status", { status: "thinking" });
       }
       return;
     }
-    case "command_execution": {
-      if (eventType === "item.started") {
+    case "commandExecution": {
+      if (eventType === "item/started") {
         emitEvent(store, "tool_use", {
           tool_name: "Bash",
           tool_input: item.command,
           tool_use_id: item.id,
         });
-      } else if (eventType === "item.completed") {
+      } else if (eventType === "item/completed") {
         emitEvent(store, "tool_result", {
           tool_use_id: item.id,
           tool_name: "Bash",
-          output: item.aggregated_output ?? "",
-          exit_code: item.exit_code ?? null,
+          output: item.aggregatedOutput ?? "",
+          exit_code: item.exitCode ?? null,
           status: item.status ?? "completed",
         });
       }
       return;
     }
-    case "file_change": {
-      if (eventType === "item.completed") {
+    case "fileChange": {
+      if (eventType === "item/completed" && item.status === "completed") {
         for (const change of item.changes ?? []) {
-          const tool = change.kind === "add" ? "Write" : "Edit";
+          const tool = isAddedFile(change) ? "Write" : "Edit";
           emitEvent(store, "tool_use", {
             tool_name: tool,
             tool_input: change.path,
@@ -348,8 +391,8 @@ function handleItem(eventType: string, item: ThreadItem, store: SessionStore): v
       }
       return;
     }
-    case "web_search": {
-      if (eventType === "item.completed") {
+    case "webSearch": {
+      if (eventType === "item/completed") {
         emitEvent(store, "tool_use", {
           tool_name: "WebSearch",
           tool_input: item.query,
@@ -358,32 +401,19 @@ function handleItem(eventType: string, item: ThreadItem, store: SessionStore): v
       }
       return;
     }
-    case "todo_list": {
-      if (eventType === "item.completed") {
-        const items = item.items ?? [];
-        const summary = items.map((t) => `[${t.completed ? "done" : "open"}] ${t.text}`).join(", ");
-        emitEvent(store, "tool_use", {
-          tool_name: "TodoWrite",
-          tool_input: summary,
-          tool_use_id: item.id,
-        });
-      }
-      return;
-    }
-    case "mcp_tool_call": {
-      if (eventType === "item.completed") {
+    case "mcpToolCall": {
+      if (eventType === "item/started") {
         emitEvent(store, "tool_use", {
           tool_name: `mcp__${item.server}__${item.tool}`,
           tool_input: JSON.stringify(item.arguments ?? {}),
           tool_use_id: item.id,
         });
-      }
-      return;
-    }
-    case "error": {
-      // The SDK types this item as non-fatal, so it must not close the stream.
-      if (eventType === "item.completed") {
-        emitEvent(store, "agent_error", { message: item.message });
+      } else if (eventType === "item/completed") {
+        emitEvent(store, "tool_result", {
+          tool_use_id: item.id,
+          tool_name: `mcp__${item.server}__${item.tool}`,
+          status: item.status ?? "completed",
+        });
       }
       return;
     }
