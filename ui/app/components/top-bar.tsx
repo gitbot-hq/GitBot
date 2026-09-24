@@ -27,8 +27,10 @@ export default function TopBar({
       <Link href="/" className="logo" aria-label="Go to workspace">
         <Logo height={24} />
       </Link>
-      {actions}
-      <UserChip name={userName} photo={userPhoto} onClick={onProfile} />
+      <div className="topbar-actions">
+        {actions}
+        <UserChip name={userName} photo={userPhoto} onClick={onProfile} />
+      </div>
     </header>
   );
 }
