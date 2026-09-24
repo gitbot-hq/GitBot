@@ -142,18 +142,22 @@ export function CreateBotWithAgentModal({ onClose }: { onClose: () => void }) {
 // Sharing is explicit: opening the dialog never changes the clipboard.
 export function ShareModal({
   bot,
+  bots,
   onClose,
   onLearnMore,
   inactive = false,
   initialView = "options",
 }: {
   bot: Bot;
+  bots?: Bot[];
   onClose: () => void;
   onLearnMore?: () => void;
   inactive?: boolean;
   initialView?: "options" | "code" | "publish";
 }) {
   const [view, setView] = useState<"options" | "code" | "publish">(initialView);
+  const [botId, setBotId] = useState(bot.id);
+  const activeBot = bots?.find((item) => item.id === botId) ?? bot;
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const [promptCopied, setPromptCopied] = useState(false);
@@ -161,8 +165,8 @@ export function ShareModal({
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (copyTimer.current) clearTimeout(copyTimer.current); }, []);
   const codeRef = useRef<HTMLTextAreaElement>(null);
-  const scrollEdge = useScrollEdge(codeRef, `${view}:${bot.id}`);
-  const code = shareCode(bot as unknown as Record<string, unknown>);
+  const scrollEdge = useScrollEdge(codeRef, `${view}:${activeBot.id}`);
+  const code = shareCode(activeBot as unknown as Record<string, unknown>);
   async function copyCode() {
     try {
       await navigator.clipboard.writeText(code);
@@ -177,8 +181,8 @@ export function ShareModal({
       codeRef.current?.select();
     }
   }
-  const avatar = resolveAvatar(getAvatarPref(bot.id), { mascot: defaultMascotFor(bot.id), color: botTile(bot.id) });
-  const publishPrompt = marketplacePublishPrompt(bot, avatar);
+  const avatar = resolveAvatar(getAvatarPref(activeBot.id), { mascot: defaultMascotFor(activeBot.id), color: botTile(activeBot.id) });
+  const publishPrompt = marketplacePublishPrompt(activeBot, avatar);
   async function copyPublishPrompt() {
     try {
       await navigator.clipboard.writeText(publishPrompt);
@@ -193,10 +197,10 @@ export function ShareModal({
   }
   return (
     <Shell
-      title={view === "code" ? "Share with code" : view === "publish" ? "Publish to Marketplace" : `Share ${bot.name}`}
+      title={view === "code" ? "Share with code" : view === "publish" ? "Publish to Marketplace" : `Share ${activeBot.name}`}
       headerContent={view === "code" ? (
           <div className="share-code-intro">
-            <p>Copy this code to share <BotName color={avatar.color}>{bot.name}</BotName> with anyone. {onLearnMore && <button type="button" className="text-action share-learn-more" onClick={onLearnMore}>Learn more</button>}</p>
+            <p>Copy this code to share <BotName color={avatar.color}>{activeBot.name}</BotName> with anyone. {onLearnMore && <button type="button" className="text-action share-learn-more" onClick={onLearnMore}>Learn more</button>}</p>
           </div>
       ) : undefined}
       onClose={onClose}
@@ -234,8 +238,8 @@ export function ShareModal({
           <div className="share-bot-summary">
             <BotFace mascot={avatar.mascot} color={avatar.color} size={72} />
             <div>
-              <h3>{bot.name}</h3>
-              {bot.description?.trim() && <p>{bot.description}</p>}
+              <h3>{activeBot.name}</h3>
+              {activeBot.description?.trim() && <p>{activeBot.description}</p>}
             </div>
           </div>
           <div className="share-code-content">
@@ -276,6 +280,14 @@ export function ShareModal({
         </>
       ) : (
         <div className="publish-content">
+          {bots && bots.length > 1 && (
+            <div className="field publish-bot-field">
+              <label htmlFor="marketplace-publish-bot">Bot to publish</label>
+              <select id="marketplace-publish-bot" value={activeBot.id} onChange={(event) => setBotId(event.target.value)}>
+                {bots.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+            </div>
+          )}
           <div className="publish-options">
             <section className="publish-option">
               <div className="publish-option-head">
