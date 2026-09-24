@@ -68,7 +68,7 @@ gitbot — starting workspace server in /Users/you/projects
 
 Open `http://localhost:3000` (a QR code for the network address is printed too). Then:
 
-1. **Make a bot.** Give it a name and instructions — its standing job, e.g. *"Review the diff against main. Flag bugs and missing tests. Never modify files."* Pick its agent.
+1. **Make a bot.** Use **+** to create it manually, ask an installed agent to draft it, or import a share code.
 2. **Open a thread.** Choose the folder it should work in.
 3. **Say hi.** The bot starts its job on your first message. Approve tool calls as they come up.
 
@@ -113,6 +113,8 @@ A bot can declare what it needs from a machine — *"ffmpeg must be on PATH"*, *
 ### Sharing
 
 **Share** on a bot produces a code like `gitbot:v1:…`. **Import** on another machine recreates the bot: its instructions, agent, model, permissions, tool lists and setup steps. Machine-specific state — its default folder, whether setup has run — stays behind. If the bot has setup steps, its setup run starts right after import; see [Security](#security) before importing a code you did not write.
+
+**Publish to Marketplace** creates a review prompt for the bot. After you approve its public listing and final diff, the bot can open the marketplace pull request for review.
 
 ## Commands
 

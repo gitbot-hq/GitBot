@@ -21,6 +21,10 @@ import ProfilePanelOverlay from "../components/profile-panel-overlay";
 import LearnMorePanel from "../components/learn-more-panel";
 import MarketplaceMascot from "../components/marketplace-mascot";
 import MarketplaceBotDetails from "../components/marketplace-bot-details";
+import { ShareModal } from "../components/share-modals";
+import { useToast } from "../components/toast";
+import { getBots } from "../lib/api";
+import type { Bot } from "../lib/gitbot";
 import type { BotActivity } from "../components/bot-maker/registry";
 import { listMarketplaceBots, MarketplaceError, type MarketplaceBotCard, type MarketplaceCategory } from "../lib/marketplace";
 
@@ -127,6 +131,23 @@ export default function MarketplacePage() {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<MarketplaceCategory | null>(null);
   const pendingDeepLink = useRef<string | null>(null);
+  const [publishBots, setPublishBots] = useState<Bot[]>([]);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const { toast, view: toastView } = useToast();
+
+  function openPublish() {
+    getBots().then(({ bots }) => {
+      if (!bots.length) {
+        toast("Create a bot before publishing to Marketplace.");
+        return;
+      }
+      closeBot();
+      setLearnMoreOpen(false);
+      setUserOpen(false);
+      setPublishBots(bots);
+      setPublishOpen(true);
+    }, (error) => toast(error instanceof Error ? error.message : "Could not load your bots"));
+  }
 
   const loadBots = useCallback(() => {
     setLoad((prev) => ({ status: "loading", bots: prev.bots }));
@@ -249,7 +270,7 @@ export default function MarketplacePage() {
         onProfile={() => { if (!userOpen) closeBot(); setLearnMoreOpen(false); setUserOpen((open) => !open); }}
       />
       <div className={`chat-scroll-edge chat-scroll-edge-top${scrollEdge === "top" && !userOpen && !learnMoreOpen ? " is-visible" : ""}`} aria-hidden="true" />
-      <div ref={marketplaceBodyRef} className={`page-body marketplace-body${userOpen || learnMoreOpen ? " is-profile-open" : ""}`} inert={userOpen || learnMoreOpen} aria-hidden={userOpen || learnMoreOpen}>
+      <div ref={marketplaceBodyRef} className={`page-body marketplace-body${userOpen || learnMoreOpen ? " is-profile-open" : ""}`} inert={userOpen || learnMoreOpen || publishOpen} aria-hidden={userOpen || learnMoreOpen || publishOpen}>
         <main className="marketplace-content" aria-labelledby="marketplace-heading">
           <section className="marketplace-hero">
             <div className="marketplace-mark" role="group" aria-label="Four community GitBots">
@@ -311,8 +332,8 @@ export default function MarketplacePage() {
             <div>
               <h2 id="share-bot-heading">Share your bot<br />with the marketplace</h2>
             </div>
-            <button className="btn-primary marketplace-share-cta" type="button">
-              Share bot
+            <button type="button" className="btn-primary marketplace-share-cta" onClick={openPublish}>
+              Publish your bot
               <AnimatedActionIcon icon={ArrowUpRightIcon} size={16} aria-hidden="true" />
             </button>
           </section>
@@ -400,6 +421,10 @@ export default function MarketplacePage() {
       <div className={`chat-scroll-edge chat-scroll-edge-bottom${scrollEdge === "bottom" && !userOpen && !learnMoreOpen ? " is-visible" : ""}`} aria-hidden="true" />
       </div>
       <MarketplaceBotDetails bot={selectedBot} open={detailsOpen} onClose={closeBot} />
+      {publishOpen && publishBots[0] && (
+        <ShareModal bot={publishBots[0]} bots={publishBots} initialView="publish" onClose={() => setPublishOpen(false)} />
+      )}
+      {toastView}
     </div>
   );
 }

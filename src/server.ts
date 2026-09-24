@@ -260,7 +260,7 @@ export async function handleRequest(
         model = model ?? bot.model;
         // Bot presets speak their own vocabulary ("auto-approve", "plan"); the
         // session speaks PermissionMode. Translate, or nothing auto-approves.
-        const botPermission = botPermissionToSession(bot.permissionMode);
+        const botPermission = botPermissionToSession(bot.permissionMode, agent);
         permissionMode = permissionMode ?? botPermission.permissionMode;
         mode = mode ?? botPermission.mode;
         const isSetup = thread.kind === "setup";
@@ -335,6 +335,15 @@ export async function handleRequest(
         });
       } else if (agent === "codex") {
         runCodex(s).catch((err) => {
+          console.error("[runAgent] unhandled:", err);
+          // Anything thrown past runAgent's own handling would otherwise leave
+          // the session pinned to "running", and every later message on the
+          // thread answers 409 for as long as the server lives.
+          if (s.status === "running") {
+            emitEvent(s, "error", { message: err?.message ?? "Codex failed to start" });
+            s.status = "error";
+            notifyPermissionsChanged();
+          }
         });
       } else if (agent === "opencode") {
         runOpencode(s).catch((err) => {

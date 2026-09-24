@@ -427,10 +427,26 @@ export default function BotForm({
           </Field>
           <Field label="Permissions">
             <select value={permissionMode} onChange={(e) => setPermissionMode(e.target.value)}>
-              <option value="ask-permissions">Ask before each tool</option>
-              <option value="auto-approve">Auto-approve tools</option>
-              <option value="plan">Plan only (no edits)</option>
+              {agent === "codex" ? (
+                <>
+                  <option value="ask-permissions">Edit in the working directory</option>
+                  <option value="auto-approve">Full access (edit anywhere, network)</option>
+                  <option value="plan">Plan only (no edits)</option>
+                </>
+              ) : (
+                <>
+                  <option value="ask-permissions">Ask before each tool</option>
+                  <option value="auto-approve">Auto-approve tools</option>
+                  <option value="plan">Plan only (no edits)</option>
+                </>
+              )}
             </select>
+            {agent === "codex" && (
+              <small className="field-warn">
+                Codex cannot be asked mid-turn, so a mode picks its sandbox instead. Read-only stays
+                available per conversation from the chat composer.
+              </small>
+            )}
           </Field>
           <Field label="Setup instructions" tip="run once per machine — blank means no setup">
             <textarea
@@ -459,6 +475,12 @@ export default function BotForm({
               onChange={(e) => setAllowedTools(e.target.value)}
               placeholder="Read, Grep, Edit, Bash"
             />
+            {agent === "codex" && allowedTools.trim() !== "" && (
+              <small className="field-warn">
+                Codex ignores this list — it has no way to limit its own tools. Claude Code and
+                OpenCode enforce it.
+              </small>
+            )}
           </Field>
           {error && <p className="chat-error">{error}</p>}
           <div className="acts">

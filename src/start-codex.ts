@@ -87,18 +87,22 @@ interface PendingAttachment {
   url: string;
 }
 
-function permissionToCodex(mode: PermissionMode): {
-  approvalPolicy: ThreadOptions["approvalPolicy"];
-  sandboxMode: ThreadOptions["sandboxMode"];
-} {
+/**
+ * A permission mode picks a codex sandbox, and only a sandbox. `codex exec`
+ * reports "Approval policy is currently never" whichever policy it is handed —
+ * checked against 0.155.1 with `on-request`, `untrusted` and `on-failure` — so
+ * an approval policy here would read as a control that does nothing. Asking
+ * per-tool needs the app-server protocol, which this adapter does not speak.
+ */
+function permissionToCodex(mode: PermissionMode): ThreadOptions["sandboxMode"] {
   switch (mode) {
     case "yolo":
-      return { approvalPolicy: "never", sandboxMode: "danger-full-access" };
+      return "danger-full-access";
     case "allow-all-edits":
-      return { approvalPolicy: "never", sandboxMode: "workspace-write" };
+      return "workspace-write";
     case "ask-permissions":
     default:
-      return { approvalPolicy: "on-request", sandboxMode: "read-only" };
+      return "read-only";
   }
 }
 
@@ -116,8 +120,20 @@ export async function runAgent(store: SessionStore): Promise<void> {
     return;
   }
 
-  let { approvalPolicy, sandboxMode } = permissionToCodex(store.permissionMode);
+  let sandboxMode = permissionToCodex(store.permissionMode);
   if (store.mode === "plan") sandboxMode = "read-only";
+
+  // Tool lists are enforced by the claude-code and opencode harnesses; codex has
+  // no equivalent, so say so rather than let the bot look fenced when it is not.
+  const unenforceableTools = [
+    ...(store.botPreset?.allowedTools ?? []),
+    ...(store.botPreset?.disallowedTools ?? []),
+  ];
+  if (unenforceableTools.length > 0) {
+    emitEvent(store, "agent_error", {
+      message: `Tool limits are not enforced on Codex. ${store.botPreset?.name ?? "This bot"} runs with every tool its sandbox allows.`,
+    });
+  }
 
   const baseDir = join(dataDir(), "codex-attachments");
   let attachmentDir: string;
@@ -159,7 +175,6 @@ export async function runAgent(store: SessionStore): Promise<void> {
   const threadOpts: ThreadOptions = {
     workingDirectory: store.repoPath,
     skipGitRepoCheck: true,
-    approvalPolicy,
     sandboxMode,
     ...(store.model ? { model: store.model } : {}),
   };
@@ -478,12 +493,37 @@ export function isPublicHttpUrl(raw: string): boolean {
   return true;
 }
 
-async function fetchToFile(url: string, dir: string): Promise<{ path: string; basename: string } | null> {
-  if (!isPublicHttpUrl(url)) {
-    throw new Error(`refusing to fetch non-public or non-http(s) URL: ${url}`);
+const ATTACHMENT_MAX_REDIRECTS = 5;
+
+/**
+ * Follows redirects by hand so every hop is checked. Letting fetch follow them
+ * would test only the URL the client supplied: a public address is free to
+ * redirect to loopback or a cloud metadata endpoint, and the guard would never
+ * see it.
+ */
+async function fetchPublicUrl(url: string): Promise<{ res: Response; finalUrl: string }> {
+  let current = url;
+  for (let hop = 0; hop <= ATTACHMENT_MAX_REDIRECTS; hop++) {
+    if (!isPublicHttpUrl(current)) {
+      throw new Error(`refusing to fetch non-public or non-http(s) URL: ${current}`);
+    }
+    const res = await fetch(current, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(ATTACHMENT_FETCH_TIMEOUT_MS),
+    });
+    if (res.status < 300 || res.status > 399) {
+      if (!res.ok) throw new Error(`fetch ${current} returned ${res.status}`);
+      return { res, finalUrl: current };
+    }
+    const location = res.headers.get("location");
+    if (!location) throw new Error(`fetch ${current} returned ${res.status} without a location`);
+    current = new URL(location, current).toString();
   }
-  const res = await fetch(url, { signal: AbortSignal.timeout(ATTACHMENT_FETCH_TIMEOUT_MS) });
-  if (!res.ok) throw new Error(`fetch ${url} returned ${res.status}`);
+  throw new Error(`too many redirects (> ${ATTACHMENT_MAX_REDIRECTS}) fetching ${url}`);
+}
+
+async function fetchToFile(url: string, dir: string): Promise<{ path: string; basename: string } | null> {
+  const { res, finalUrl } = await fetchPublicUrl(url);
 
   const declared = res.headers.get("content-length");
   if (declared) {
@@ -493,7 +533,7 @@ async function fetchToFile(url: string, dir: string): Promise<{ path: string; ba
     }
   }
 
-  let ext = extname(new URL(url).pathname);
+  let ext = extname(new URL(finalUrl).pathname);
   if (!ext) {
     const ct = res.headers.get("content-type") || "";
     if (ct.includes("png")) ext = ".png";
@@ -582,6 +622,11 @@ function appendManifest(dir: string, attachments: PendingAttachment[]): void {
 const cwdCache = new Map<string, string | null>();
 const previewCache = new Map<string, string>();
 
+/** Where codex keeps its rollouts. `CODEX_HOME` moves the whole directory. */
+function codexHome(): string {
+  return process.env.CODEX_HOME || join(homedir(), ".codex");
+}
+
 function normalizePath(p: string): string {
   let s = p.replace(/\/+$/, "") || "/";
   try {
@@ -595,8 +640,8 @@ function normalizePath(p: string): string {
 export async function listSessions(
   cwd: string,
 ): Promise<{ id: string; preview: string; updatedAt: string }[]> {
-  const indexPath = join(homedir(), ".codex", "session_index.jsonl");
-  const sessionsRoot = join(homedir(), ".codex", "sessions");
+  const indexPath = join(codexHome(), "session_index.jsonl");
+  const sessionsRoot = join(codexHome(), "sessions");
 
   const normCache = new Map<string, string>();
   const normalize = (p: string): string => {
@@ -785,7 +830,7 @@ async function readSessionMetaAndPreview(
 }
 
 async function findSessionFile(threadId: string): Promise<string | null> {
-  const root = join(homedir(), ".codex", "sessions");
+  const root = join(codexHome(), "sessions");
   if (!existsSync(root)) return null;
   return walkForId(root, threadId);
 }

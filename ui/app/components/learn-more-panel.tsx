@@ -30,7 +30,7 @@ const content = {
     light: "/marketplace/learn-more-marketplace-light.webp",
     dark: "/marketplace/learn-more-marketplace-dark.webp",
     sections: sharingSections,
-    note: "Publishing to Marketplace isn’t available yet. You can still share a bot code from your workspace.",
+    note: "Open your bot’s Share menu and choose Publish to Marketplace. GitBot gives you a reviewed prompt that prepares the listing and pull request.",
     back: "Back to Marketplace",
   },
   share: {

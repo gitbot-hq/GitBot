@@ -20,6 +20,19 @@ const PERMISSION_LABELS: Record<string, string> = {
   plan: "Plan only",
 };
 
+// Codex has no approval channel, so a mode names one of its sandboxes.
+const CODEX_PERMISSION_LABELS: Record<string, string> = {
+  "ask-permissions": "Edit in the working directory",
+  "auto-approve": "Full access",
+  plan: "Plan only",
+};
+
+function permissionLabel(mode: string | undefined, agent: string | undefined): string {
+  if (!mode) return "—";
+  const labels = agent === "codex" ? CODEX_PERMISSION_LABELS : PERMISSION_LABELS;
+  return labels[mode] ?? mode;
+}
+
 function timeAgo(iso: string): string {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
   if (s < 60) return "just now";
@@ -93,7 +106,7 @@ export default function BotProfile({
   pref: AvatarPref;
   onBack: () => void;
   onEdit: () => void;
-  onShare: (view: "code") => void;
+  onShare: (view: "code" | "publish") => void;
   active?: boolean;
 }) {
   const [shareOpen, setShareOpen] = useState(false);
@@ -236,12 +249,14 @@ export default function BotProfile({
         </div>
         <div>
           <dt>Permissions</dt>
-          <dd>{PERMISSION_LABELS[bot.permissionMode] ?? bot.permissionMode ?? "—"}</dd>
+          <dd>{permissionLabel(bot.permissionMode, bot.agent)}</dd>
         </div>
         <div>
           <dt>Tools</dt>
           <dd title={bot.allowedTools?.join(", ")}>
-            {bot.allowedTools?.length ? bot.allowedTools.join(", ") : "All tools"}
+            {bot.allowedTools?.length
+              ? `${bot.allowedTools.join(", ")}${bot.agent === "codex" ? " (not enforced on Codex)" : ""}`
+              : "All tools"}
           </dd>
         </div>
       </dl>

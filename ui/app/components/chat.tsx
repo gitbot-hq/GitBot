@@ -17,7 +17,7 @@ import { ZapIcon } from "@animateicons/react/lucide/zap-icon";
 import { FileTextIcon } from "@animateicons/react/lucide/file-text-icon";
 import { ChevronDownIcon } from "@animateicons/react/lucide/chevron-down-icon";
 
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Children, Fragment, isValidElement, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -43,6 +43,7 @@ import { useMascotPointerFollow } from "../lib/use-mascot-pointer-follow";
 import { useScrollEdge } from "../lib/use-scroll-edge";
 import { useStatusFavicon } from "../lib/status-favicon";
 import { groupTools, type ToolChip } from "../lib/tool-ui";
+import { parseMarketplaceListing, type MarketplaceListing } from "../lib/marketplace-publish";
 import { presentSetupText, readSetupNeedsInput } from "../lib/setup";
 import RunSummary, { ActionRow } from "./run-summary";
 import QueueTray from "./queue-tray";
@@ -104,12 +105,66 @@ function errText(e: unknown) {
 }
 
 // Assistant markdown (GFM). Raw HTML is off by default — no XSS surface.
-function RichText({ text }: { text: string }) {
+function MarketplaceListingCard({ listing, color }: { listing: MarketplaceListing; color?: string }) {
+  const mascot = typeof listing.mascot === "string" ? listing.mascot : listing.mascot?.body;
+  const listingColor = listing.color || (typeof listing.mascot === "object" ? `var(--${listing.mascot.color})` : color);
+  const features = listing.features ?? listing.capabilities;
+  const examplePrompt = listing.examplePrompt ?? listing.starterPrompt;
+  const facts = [
+    ["Agent", listing.agent],
+    ["Model", listing.model],
+    ["Permissions", listing.permissionMode],
+    ["Mascot", mascot],
+    ["Color", typeof listing.mascot === "object" ? listing.mascot.color : listing.color],
+    ["Author", listing.author ? `${listing.author.name} (@${listing.author.github})` : undefined],
+  ].filter((fact): fact is [string, string] => !!fact[1]);
+  return (
+    <section className="marketplace-listing-card" style={{ "--listing-color": listingColor } as React.CSSProperties} aria-label={`${listing.name} marketplace listing`}>
+      <header className="marketplace-listing-head">
+        <span className="marketplace-listing-emoji" aria-hidden="true">{listing.emoji || "🤖"}</span>
+        <div>
+          {listing.category && <span className="marketplace-listing-category">{listing.category}</span>}
+          <h3>{listing.name}</h3>
+          <p>{listing.description}</p>
+        </div>
+        <span className="marketplace-listing-state">Draft</span>
+      </header>
+      {facts.length > 0 && (
+        <dl className="marketplace-listing-facts">
+          {facts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+        </dl>
+      )}
+      {!!listing.tags?.length && <p className="marketplace-listing-tags"><b>Tags</b>{listing.tags.join(", ")}</p>}
+      {!!listing.allowedTools?.length && <p className="marketplace-listing-tags"><b>Allowed tools</b>{listing.allowedTools.join(", ")}</p>}
+      {!!listing.disallowedTools?.length && <p className="marketplace-listing-tags"><b>Blocked tools</b>{listing.disallowedTools.join(", ")}</p>}
+      {listing.about && <section className="marketplace-listing-section"><h4>About</h4><p>{listing.about}</p></section>}
+      {!!features?.length && (
+        <section className="marketplace-listing-section">
+          <h4>Features</h4>
+          <ul>{features.map((item) => <li key={item}><AnimatedActionIcon icon={CheckIcon} size={15} aria-hidden="true" /><span>{item}</span></li>)}</ul>
+        </section>
+      )}
+      {examplePrompt && <section className="marketplace-listing-section"><h4>Example prompt</h4><blockquote>{examplePrompt}</blockquote></section>}
+      {listing.instructions && <section className="marketplace-listing-section"><h4>Instructions</h4><pre>{listing.instructions}</pre></section>}
+      {listing.setupInstructions && <section className="marketplace-listing-section"><h4>Setup instructions</h4><pre>{listing.setupInstructions}</pre></section>}
+    </section>
+  );
+}
+
+function RichText({ text, botColor }: { text: string; botColor?: string }) {
   return (
     <div className="md">
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{
+          pre: ({ children }) => {
+            const child = Children.toArray(children)[0];
+            if (isValidElement<{ className?: string; children?: ReactNode }>(child) && child.props.className === "language-marketplace-listing") {
+              const listing = parseMarketplaceListing(String(child.props.children).trim());
+              if (listing) return <MarketplaceListingCard listing={listing} color={botColor} />;
+            }
+            return <pre>{children}</pre>;
+          },
           a: ({ node, href, children, ...props }) =>
             href && /^https?:\/\//i.test(href)
               ? <a href={href} target="_blank" rel="noreferrer" {...props}>{children}</a>
@@ -198,12 +253,31 @@ const permissionOptions = [
   { mode: "yolo", label: "Auto-approve all", detail: "Every tool runs without asking.", icon: ZapIcon },
   { mode: "plan", label: "Plan only", detail: "Explore without making edits.", icon: FileTextIcon },
 ] as const;
+
+// Codex cannot be asked for permission mid-turn — it has no approval channel,
+// so a mode selects one of its sandboxes and nothing else. Name the sandbox
+// rather than promise a prompt that never arrives.
+const codexPermissionCopy: Record<string, { label: string; detail: string }> = {
+  "ask-permissions": { label: "Read-only", detail: "Codex reads and answers; it cannot edit or reach the network." },
+  "allow-all-edits": { label: "Edit in workspace", detail: "Codex edits inside this folder without asking." },
+  "yolo": { label: "Full access", detail: "Codex edits anywhere and reaches the network." },
+  "plan": { label: "Plan only", detail: "Explore without making edits." },
+};
+
+function permissionOptionsFor(agent: string) {
+  if (agent !== "codex") return permissionOptions;
+  return permissionOptions.map((option) => ({ ...option, ...codexPermissionCopy[option.mode] }));
+}
+
 const threadPermissionKey = "gitbot-thread-permissions";
 
-/** The bot's own vocabulary ("auto-approve") → the chat's. */
-function safePermissionMode(mode?: string): ChatPermissionMode {
+/** The bot's own vocabulary ("auto-approve") → the chat's. Mirrors the server's
+ *  botPermissionToSession, including its codex case: "ask" is not a thing codex
+ *  can do, so those bots run in the workspace-write sandbox. */
+function safePermissionMode(mode: string | undefined, agent: string): ChatPermissionMode {
   if (mode === "auto-approve") return "yolo";
-  return mode === "plan" ? "plan" : "ask-permissions";
+  if (mode === "plan") return "plan";
+  return agent === "codex" ? "allow-all-edits" : "ask-permissions";
 }
 
 function isChatPermissionMode(mode: unknown): mode is ChatPermissionMode {
@@ -292,6 +366,7 @@ export default function Chat({
   botId,
   botName,
   botPermissionMode,
+  botAgent,
   botAvatar,
   autoSend,
   onAutoSent,
@@ -309,6 +384,7 @@ export default function Chat({
   botId?: string;
   botName: string;
   botPermissionMode?: string;
+  botAgent?: string;
   botAvatar?: AvatarPref;
   autoSend: string | null;
   onAutoSent: () => void;
@@ -317,7 +393,7 @@ export default function Chat({
   /** Live activity sentence ("Thinking…", "Running Bash…", null when idle).
    *  Lets the shell show what the bot is doing outside the chat. */
   onActivityChange?: (activity: string | null) => void;
-  onShare?: (view?: "options" | "code") => void;
+  onShare?: (view?: "options" | "code" | "publish") => void;
   onLearnMorePermissions?: () => void;
   onOpenBot?: () => void;
   onNewThread?: () => void;
@@ -329,6 +405,8 @@ export default function Chat({
    *  the chat transport, but is rendered as activation rather than a thread. */
   setup?: SetupMode;
 }) {
+  // An explicit thread choice wins over the bot's, matching the server.
+  const agent = thread?.agent ?? botAgent ?? "claude-code";
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [loading, setLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -1011,7 +1089,7 @@ export default function Chat({
       const { sessionId } = await postChat(
         thread.id,
         prompt,
-        permissionModesRef.current[thread.id] ?? safePermissionMode(botPermissionMode),
+        permissionModesRef.current[thread.id] ?? safePermissionMode(botPermissionMode, agent),
       );
       if (threadRef.current !== thread.id) return;
       sessionRef.current = sessionId;
@@ -1122,7 +1200,7 @@ export default function Chat({
   /** Remember the thread's chosen mode; the bot's own default = no entry. */
   function rememberMode(tid: string, mode: ChatPermissionMode) {
     const next = { ...permissionModesRef.current };
-    if (mode === safePermissionMode(botPermissionMode)) delete next[tid];
+    if (mode === safePermissionMode(botPermissionMode, agent)) delete next[tid];
     else next[tid] = mode;
     permissionModesRef.current = next;
     setPermissionModes(next);
@@ -1136,7 +1214,7 @@ export default function Chat({
   function changeMode(mode: ChatPermissionMode) {
     if (!thread) return;
     const tid = thread.id;
-    const before = permissionModesRef.current[tid] ?? safePermissionMode(botPermissionMode);
+    const before = permissionModesRef.current[tid] ?? safePermissionMode(botPermissionMode, agent);
     rememberMode(tid, mode);
     const sid = sessionRef.current;
     if (!sid || mode === "plan") return;
@@ -1171,9 +1249,10 @@ export default function Chat({
   );
   const showThreadEmpty = !loading && visibleMsgs.length === 0 && !historyError && !setup;
   const permissionMode = thread
-    ? permissionModes[thread.id] ?? safePermissionMode(botPermissionMode)
-    : safePermissionMode(botPermissionMode);
-  const permissionOption = permissionOptions.find((option) => option.mode === permissionMode)!;
+    ? permissionModes[thread.id] ?? safePermissionMode(botPermissionMode, agent)
+    : safePermissionMode(botPermissionMode, agent);
+  const agentPermissionOptions = permissionOptionsFor(agent);
+  const permissionOption = agentPermissionOptions.find((option) => option.mode === permissionMode)!;
   useMascotPointerFollow({
     group: botId,
     enabled: !!botId && !setup && (!thread || showThreadEmpty),
@@ -1330,7 +1409,7 @@ export default function Chat({
             >
               {m.segs.map((s, si) =>
                 s.kind === "text" ? (
-                  <RichText key={si} text={setup && m.role === "assistant" ? presentSetupText(s.text) : s.text} />
+                  <RichText key={si} botColor={botAvatar?.color} text={setup && m.role === "assistant" ? presentSetupText(s.text) : s.text} />
                 ) : null,
               )}
               {m.role === "assistant" &&
@@ -1376,7 +1455,7 @@ export default function Chat({
           <article key={live.key} className="bubble assistant msg-in">
             {revealSegs(live.segs, live.shown).map((s, si) =>
               s.kind === "text" ? (
-                <RichText key={`t${si}`} text={setup ? presentSetupText(s.text) : s.text} />
+                <RichText key={`t${si}`} botColor={botAvatar?.color} text={setup ? presentSetupText(s.text) : s.text} />
               ) : (
                 <Fragment key={`g${si}`}>
                   {groupTools(s.tools).map((g, gi) => {
@@ -1589,7 +1668,7 @@ export default function Chat({
                       onLearnMorePermissions();
                     }}>Learn more</button>}
                   </div>
-                  {permissionOptions.map((option) => (
+                  {agentPermissionOptions.map((option) => (
                     <button
                       key={option.mode}
                       type="button"
