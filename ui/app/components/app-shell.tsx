@@ -1138,6 +1138,7 @@ export default function V2() {
                 botId={bot?.id}
                 botName={bot?.name ?? "bot"}
                 botPermissionMode={bot?.permissionMode}
+                botAgent={bot?.agent}
                 botAvatar={bot ? avatarFor(bot.id) : undefined}
                 autoSend={autoSend && autoSend.botId === bot?.id ? autoSend.prompt : null}
                 onAutoSent={() => setAutoSend(null)}

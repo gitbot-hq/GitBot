@@ -198,12 +198,31 @@ const permissionOptions = [
   { mode: "yolo", label: "Auto-approve all", detail: "Every tool runs without asking.", icon: ZapIcon },
   { mode: "plan", label: "Plan only", detail: "Explore without making edits.", icon: FileTextIcon },
 ] as const;
+
+// Codex cannot be asked for permission mid-turn — it has no approval channel,
+// so a mode selects one of its sandboxes and nothing else. Name the sandbox
+// rather than promise a prompt that never arrives.
+const codexPermissionCopy: Record<string, { label: string; detail: string }> = {
+  "ask-permissions": { label: "Read-only", detail: "Codex reads and answers; it cannot edit or reach the network." },
+  "allow-all-edits": { label: "Edit in workspace", detail: "Codex edits inside this folder without asking." },
+  "yolo": { label: "Full access", detail: "Codex edits anywhere and reaches the network." },
+  "plan": { label: "Plan only", detail: "Explore without making edits." },
+};
+
+function permissionOptionsFor(agent: string) {
+  if (agent !== "codex") return permissionOptions;
+  return permissionOptions.map((option) => ({ ...option, ...codexPermissionCopy[option.mode] }));
+}
+
 const threadPermissionKey = "gitbot-thread-permissions";
 
-/** The bot's own vocabulary ("auto-approve") → the chat's. */
-function safePermissionMode(mode?: string): ChatPermissionMode {
+/** The bot's own vocabulary ("auto-approve") → the chat's. Mirrors the server's
+ *  botPermissionToSession, including its codex case: "ask" is not a thing codex
+ *  can do, so those bots run in the workspace-write sandbox. */
+function safePermissionMode(mode: string | undefined, agent: string): ChatPermissionMode {
   if (mode === "auto-approve") return "yolo";
-  return mode === "plan" ? "plan" : "ask-permissions";
+  if (mode === "plan") return "plan";
+  return agent === "codex" ? "allow-all-edits" : "ask-permissions";
 }
 
 function isChatPermissionMode(mode: unknown): mode is ChatPermissionMode {
@@ -292,6 +311,7 @@ export default function Chat({
   botId,
   botName,
   botPermissionMode,
+  botAgent,
   botAvatar,
   autoSend,
   onAutoSent,
@@ -309,6 +329,7 @@ export default function Chat({
   botId?: string;
   botName: string;
   botPermissionMode?: string;
+  botAgent?: string;
   botAvatar?: AvatarPref;
   autoSend: string | null;
   onAutoSent: () => void;
@@ -329,6 +350,8 @@ export default function Chat({
    *  the chat transport, but is rendered as activation rather than a thread. */
   setup?: SetupMode;
 }) {
+  // An explicit thread choice wins over the bot's, matching the server.
+  const agent = thread?.agent ?? botAgent ?? "claude-code";
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [loading, setLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -1011,7 +1034,7 @@ export default function Chat({
       const { sessionId } = await postChat(
         thread.id,
         prompt,
-        permissionModesRef.current[thread.id] ?? safePermissionMode(botPermissionMode),
+        permissionModesRef.current[thread.id] ?? safePermissionMode(botPermissionMode, agent),
       );
       if (threadRef.current !== thread.id) return;
       sessionRef.current = sessionId;
@@ -1122,7 +1145,7 @@ export default function Chat({
   /** Remember the thread's chosen mode; the bot's own default = no entry. */
   function rememberMode(tid: string, mode: ChatPermissionMode) {
     const next = { ...permissionModesRef.current };
-    if (mode === safePermissionMode(botPermissionMode)) delete next[tid];
+    if (mode === safePermissionMode(botPermissionMode, agent)) delete next[tid];
     else next[tid] = mode;
     permissionModesRef.current = next;
     setPermissionModes(next);
@@ -1136,7 +1159,7 @@ export default function Chat({
   function changeMode(mode: ChatPermissionMode) {
     if (!thread) return;
     const tid = thread.id;
-    const before = permissionModesRef.current[tid] ?? safePermissionMode(botPermissionMode);
+    const before = permissionModesRef.current[tid] ?? safePermissionMode(botPermissionMode, agent);
     rememberMode(tid, mode);
     const sid = sessionRef.current;
     if (!sid || mode === "plan") return;
@@ -1171,9 +1194,10 @@ export default function Chat({
   );
   const showThreadEmpty = !loading && visibleMsgs.length === 0 && !historyError && !setup;
   const permissionMode = thread
-    ? permissionModes[thread.id] ?? safePermissionMode(botPermissionMode)
-    : safePermissionMode(botPermissionMode);
-  const permissionOption = permissionOptions.find((option) => option.mode === permissionMode)!;
+    ? permissionModes[thread.id] ?? safePermissionMode(botPermissionMode, agent)
+    : safePermissionMode(botPermissionMode, agent);
+  const agentPermissionOptions = permissionOptionsFor(agent);
+  const permissionOption = agentPermissionOptions.find((option) => option.mode === permissionMode)!;
   useMascotPointerFollow({
     group: botId,
     enabled: !!botId && !setup && (!thread || showThreadEmpty),
@@ -1589,7 +1613,7 @@ export default function Chat({
                       onLearnMorePermissions();
                     }}>Learn more</button>}
                   </div>
-                  {permissionOptions.map((option) => (
+                  {agentPermissionOptions.map((option) => (
                     <button
                       key={option.mode}
                       type="button"
