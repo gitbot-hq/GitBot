@@ -1,4 +1,4 @@
-[Overview](#gitbot) · [Get running](#get-running) · [Create a bot](#create-your-first-bot) · [How it works](#how-gitbot-works) · [Share](#share-a-bot-or-submit-one-to-marketplace) · [Security](#security-and-privacy)
+<a href="#gitbot"><img src="ui/public/gitbot-logo-light.svg#gh-light-mode-only" alt="GitBot" width="112"><img src="ui/public/gitbot-logo-dark.svg#gh-dark-mode-only" alt="GitBot" width="112"></a>&nbsp;&nbsp; [Overview](#gitbot) · [Get running](#get-running) · [Create a bot](#create-your-first-bot) · [How it works](#how-gitbot-works) · [Share](#share-a-bot-or-submit-one-to-marketplace) · [Security](#security-and-privacy)
 
 <br><br>
 
