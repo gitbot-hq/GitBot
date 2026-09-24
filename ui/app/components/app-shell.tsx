@@ -53,7 +53,7 @@ import "../onboarding/onboarding.css";
 
 const DEFAULT_WIDTH = 260;
 const COLLAPSED_WIDTH = 96;
-// Four 32px header buttons + "Your bots" + side padding: anything less
+// Three 32px header buttons + "Your bots" + side padding: anything less
 // truncates the title.
 const MIN_WIDTH = 240;
 const MAX_WIDTH = 420;
@@ -144,6 +144,7 @@ export default function V2() {
   const searchRef = useRef<HTMLInputElement | null>(null);
   const searchBtnRef = useRef<HTMLButtonElement | null>(null);
   const createBtnRef = useRef<HTMLButtonElement | null>(null);
+  const collapsedCreateRef = useRef<HTMLDivElement | null>(null);
   const createMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -153,7 +154,7 @@ export default function V2() {
       if (event.key !== "Escape") return;
       event.preventDefault();
       setCreateMenuOpen(false);
-      createBtnRef.current?.focus();
+      (createBtnRef.current ?? collapsedCreateRef.current?.querySelector<HTMLButtonElement>("button"))?.focus();
     }
     document.addEventListener("keydown", escape);
     return () => { cancelAnimationFrame(frame); document.removeEventListener("keydown", escape); };
@@ -163,6 +164,26 @@ export default function V2() {
     setSearchOpen(false);
     setQuery("");
     searchBtnRef.current?.focus({ preventScroll: true });
+  }
+
+  function createBotMenu() {
+    return createMenuOpen && <>
+      <div ref={createMenuRef} className="chat-options-menu bot-create-menu" role="menu" aria-label="Add bot" onKeyDown={moveMenuFocus}>
+        <button type="button" role="menuitem" onClick={() => { setCreateMenuOpen(false); openBotEditor("new"); }}>
+          <AnimatedActionIcon icon={PencilIcon} size={15} aria-hidden="true" />
+          <span className="chat-menu-label">Create manually</span>
+        </button>
+        <button type="button" role="menuitem" onClick={() => { setCreateMenuOpen(false); dismissLearnMore(); setModal({ kind: "create-agent" }); }}>
+          <AnimatedActionIcon icon={CodeIcon} size={15} aria-hidden="true" />
+          <span className="chat-menu-label">Create with an agent</span>
+        </button>
+        <button type="button" role="menuitem" onClick={() => { setCreateMenuOpen(false); dismissLearnMore(); setModal({ kind: "import" }); }}>
+          <AnimatedActionIcon icon={DownloadIcon} size={15} aria-hidden="true" />
+          <span className="chat-menu-label">Import bot</span>
+        </button>
+      </div>
+      <button type="button" className="menu-scrim" onClick={() => setCreateMenuOpen(false)} aria-label="Close menu" tabIndex={-1} />
+    </>;
   }
 
   // Threads header search: same morph as the bots header — title collapses
@@ -855,7 +876,7 @@ export default function V2() {
                 ref={searchBtnRef}
                 onClick={() => {
                   if (searchOpen) searchRef.current?.focus({ preventScroll: true });
-                  else setSearchOpen(true);
+                  else { setCreateMenuOpen(false); setSearchOpen(true); }
                 }}
                 aria-label="Search bots"
                 data-tip="Search bots"
@@ -877,15 +898,6 @@ export default function V2() {
                   tabIndex={searchOpen ? 0 : -1}
                 />
               </div>
-              <button
-                type="button"
-                className="collapse-btn fades"
-                onClick={() => { dismissLearnMore(); setModal({ kind: "import" }); }}
-                aria-label="Import bot"
-                data-tip="Import bot"
-              >
-                <AnimatedActionIcon icon={DownloadIcon} size={18} aria-hidden="true" />
-              </button>
               <span className="bot-create-action">
                 <button
                   ref={createBtnRef}
@@ -899,19 +911,7 @@ export default function V2() {
                 >
                   <AnimatedActionIcon icon={PlusIcon} size={18} aria-hidden="true" />
                 </button>
-                {createMenuOpen && <>
-                  <div ref={createMenuRef} className="chat-options-menu bot-create-menu" role="menu" aria-label="Create bot" onKeyDown={moveMenuFocus}>
-                    <button type="button" role="menuitem" onClick={() => { setCreateMenuOpen(false); openBotEditor("new"); }}>
-                      <AnimatedActionIcon icon={PencilIcon} size={15} aria-hidden="true" />
-                      <span className="chat-menu-label">Create manually</span>
-                    </button>
-                    <button type="button" role="menuitem" onClick={() => { setCreateMenuOpen(false); dismissLearnMore(); setModal({ kind: "create-agent" }); }}>
-                      <AnimatedActionIcon icon={CodeIcon} size={15} aria-hidden="true" />
-                      <span className="chat-menu-label">Create with an agent</span>
-                    </button>
-                  </div>
-                  <button type="button" className="menu-scrim" onClick={() => setCreateMenuOpen(false)} aria-label="Close menu" tabIndex={-1} />
-                </>}
+                {createBotMenu()}
               </span>
               </>
             )}
@@ -1014,7 +1014,10 @@ export default function V2() {
             <div className={`side-scroll-edge side-scroll-edge-bottom${botsScrollEdge === "bottom" ? " is-visible" : ""}`} aria-hidden="true" />
           </div>
           {collapsed && settled && (
-            <NewBotButton onClick={() => openBotEditor("new")} />
+            <div ref={collapsedCreateRef} className="collapsed-create-action">
+              <NewBotButton onClick={() => setCreateMenuOpen((open) => !open)} />
+              {createBotMenu()}
+            </div>
           )}
           <span
             className="side-handle"

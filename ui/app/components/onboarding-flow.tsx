@@ -2,9 +2,10 @@
 
 import { useRef, useState } from "react";
 import BotForm from "./bot-form";
-import { ImportModal } from "./share-modals";
+import { CreateBotWithAgentModal, ImportModal } from "./share-modals";
 import { useToast } from "./toast";
 import { LogoMark } from "./logo";
+import Link from "./page-link";
 import { createBot } from "../lib/api";
 import { setAvatarPref } from "../lib/avatar-prefs";
 
@@ -21,7 +22,7 @@ const SLIDES = [
   },
   {
     title: "A marketplace",
-    body: "A public shelf of bots worth stealing. Opening soon.",
+    body: "A public shelf of bots you can browse, inspect, and add to your workspace.",
     image: "/onboarding/slide-3-marketplace.webp",
   },
   {
@@ -37,8 +38,8 @@ const SLIDES = [
 export default function OnboardingFlow({ onDone, active = true }: { onDone: () => void; active?: boolean }) {
   const [studio, setStudio] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [agentCreating, setAgentCreating] = useState(false);
   const [slide, setSlide] = useState(0);
-  const [soonTip, setSoonTip] = useState<{ x: number; y: number } | null>(null);
   const { toast, view: toastView } = useToast();
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -110,24 +111,13 @@ export default function OnboardingFlow({ onDone, active = true }: { onDone: () =
                 className="btn-primary"
                 onClick={goStudio}
               >
-                Create bot
+                Create manually
+              </button>
+              <button type="button" className="btn-secondary" onClick={() => setAgentCreating(true)}>
+                Create with an agent
               </button>
               <div className="onboarding-acts-row">
-                <span
-                  className="soon-wrap"
-                  onMouseMove={(e) =>
-                    setSoonTip({ x: e.clientX, y: e.clientY })
-                  }
-                  onMouseLeave={() => setSoonTip(null)}
-                >
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    disabled
-                  >
-                    Start from marketplace
-                  </button>
-                </span>
+                <Link href="/marketplace" className="btn-secondary">Start from marketplace</Link>
                 <button
                   type="button"
                   className="btn-secondary"
@@ -144,7 +134,7 @@ export default function OnboardingFlow({ onDone, active = true }: { onDone: () =
             <div className="ob-pane-inner">
           <div className="form-pane">
             <BotForm
-              active={active && studio && !importing}
+              active={active && studio && !importing && !agentCreating}
               bot={null}
               onClose={goHero}
               onSaved={(saved, pref) => {
@@ -159,15 +149,7 @@ export default function OnboardingFlow({ onDone, active = true }: { onDone: () =
           </div>
       </div>
       {toastView}
-      {soonTip && (
-        <span
-          className="soon-tip"
-          aria-hidden="true"
-          style={{ left: soonTip.x, top: soonTip.y }}
-        >
-          Coming soon
-        </span>
-      )}
+      {agentCreating && <CreateBotWithAgentModal onClose={() => setAgentCreating(false)} />}
       {importing && (
         <ImportModal
           onClose={() => setImporting(false)}

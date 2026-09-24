@@ -113,10 +113,13 @@ function errText(e: unknown) {
 function MarketplaceListingCard({ listing, color }: { listing: MarketplaceListing; color?: string }) {
   const facts = [
     ["Agent", listing.agent],
+    ["Model", listing.model],
     ["Permissions", listing.permissionMode],
+    ["Mascot", listing.mascot],
+    ["Color", listing.color],
   ].filter((fact): fact is [string, string] => !!fact[1]);
   return (
-    <section className="marketplace-listing-card" style={{ "--listing-color": color } as React.CSSProperties} aria-label={`${listing.name} marketplace listing`}>
+    <section className="marketplace-listing-card" style={{ "--listing-color": listing.color || color } as React.CSSProperties} aria-label={`${listing.name} marketplace listing`}>
       <header className="marketplace-listing-head">
         <span className="marketplace-listing-emoji" aria-hidden="true">{listing.emoji || "🤖"}</span>
         <div>
@@ -132,6 +135,8 @@ function MarketplaceListingCard({ listing, color }: { listing: MarketplaceListin
         </dl>
       )}
       {!!listing.tags?.length && <p className="marketplace-listing-tags"><b>Tags</b>{listing.tags.join(", ")}</p>}
+      {!!listing.allowedTools?.length && <p className="marketplace-listing-tags"><b>Allowed tools</b>{listing.allowedTools.join(", ")}</p>}
+      {!!listing.disallowedTools?.length && <p className="marketplace-listing-tags"><b>Blocked tools</b>{listing.disallowedTools.join(", ")}</p>}
       {listing.about && <section className="marketplace-listing-section"><h4>About</h4><p>{listing.about}</p></section>}
       {!!listing.capabilities?.length && (
         <section className="marketplace-listing-section">

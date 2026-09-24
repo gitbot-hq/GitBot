@@ -84,9 +84,12 @@ function Shell({
 
 export function CreateBotWithAgentModal({ onClose }: { onClose: () => void }) {
   const [copied, setCopied] = useState(false);
+  const [hubUrl, setHubUrl] = useState("http://localhost:3000");
   const promptRef = useRef<HTMLTextAreaElement>(null);
-  const prompt = botAuthorPromptLines.join("\n");
+  const prompt = botAuthorPromptLines.join("\n").replaceAll("{{GITBOT_URL}}", hubUrl);
   const scrollEdge = useScrollEdge(promptRef, prompt);
+
+  useEffect(() => setHubUrl(window.location.origin), []);
 
   async function copyPrompt() {
     try {
@@ -124,7 +127,7 @@ export function CreateBotWithAgentModal({ onClose }: { onClose: () => void }) {
             <span className="share-privacy-icon" style={{ color: "var(--brand-sun)" }} aria-hidden="true">
               <AnimatedActionIcon icon={ShieldCheckIcon} size={22} />
             </span>
-            <p>The agent must show you the complete definition before writing. Existing bots are preserved and backed up.</p>
+            <p>The agent must show you the complete definition before adding it through your running GitBot.</p>
           </div>
           <button type="button" className="btn-primary share-copy-button" data-initial-focus data-copied={copied} onClick={copyPrompt} aria-label={copied ? "Prompt copied" : "Copy agent prompt"}>
             <span aria-hidden="true"><AnimatedActionIcon icon={CopyIcon} size={16} />Copy prompt</span>

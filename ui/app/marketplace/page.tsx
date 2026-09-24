@@ -196,7 +196,7 @@ export default function MarketplacePage() {
             <div>
               <h2 id="share-bot-heading">Share your bot<br />with the marketplace</h2>
             </div>
-            <button className="btn-primary marketplace-share-cta" type="button">
+            <button type="button" className="btn-primary marketplace-share-cta" onClick={() => window.location.assign("/")}>
               Share bot
               <AnimatedActionIcon icon={ArrowUpRightIcon} size={16} aria-hidden="true" />
             </button>

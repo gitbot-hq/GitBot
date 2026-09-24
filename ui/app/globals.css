@@ -587,7 +587,14 @@ pre {
   display: grid;
 }
 
-.bot-create-menu { min-width: 220px; }
+.bot-create-menu { left: 0; right: auto; min-width: 220px; }
+
+.collapsed-create-action { position: relative; flex-shrink: 0; }
+.collapsed-create-action .bot-create-menu {
+  top: auto;
+  bottom: 0;
+  left: calc(100% + var(--space-2));
+}
 
 .chat-share-menu .chat-menu-label { white-space: nowrap; }
 
