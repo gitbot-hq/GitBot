@@ -60,14 +60,13 @@ function LoaderGrid({
 }
 
 function useElapsed() {
-  const [ds, setDs] = useState(0);
+  const [seconds, setSeconds] = useState(0);
   useEffect(() => {
-    const t = setInterval(() => setDs((d) => d + 1), 100);
+    const t = setInterval(() => setSeconds((value) => value + 1), 1000);
     return () => clearInterval(t);
   }, []);
-  const total = ds / 10;
-  if (total < 60) return `${total.toFixed(1)}s`;
-  return `${Math.floor(total / 60)}m ${(total % 60).toFixed(1)}s`;
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
 export default function LoadingState({
