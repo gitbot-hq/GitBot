@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { useEffect, useRef } from "react";
 import { ArrowRightIcon } from "@animateicons/react/lucide/arrow-right-icon";
 import AnimatedActionIcon from "./animated-action-icon";
@@ -114,8 +113,8 @@ export default function LearnMorePanel({ kind, onBack }: { kind: LearnMoreKind; 
       <PanelBack onClick={onBack} aria-label={item.back} />
       <div className="profile-pane-inner">
         {"light" in item && <>
-          <Image className="learn-more-cover-image light" src={item.light} alt="" width={1360} height={433} sizes="(max-width: 728px) calc(100vw - 48px), 680px" />
-          <Image className="learn-more-cover-image dark" src={item.dark} alt="" width={1360} height={433} sizes="(max-width: 728px) calc(100vw - 48px), 680px" />
+          <img className="learn-more-cover-image light" src={item.light} alt="" width={1360} height={433} />
+          <img className="learn-more-cover-image dark" src={item.dark} alt="" width={1360} height={433} />
         </>}
         <article className="learn-more-article">
           <header className="learn-more-head">
