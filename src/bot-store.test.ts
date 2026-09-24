@@ -17,13 +17,14 @@ test("changing agent replaces an unfinished setup thread", async (t) => {
     setupInstructions: "Check the tool",
   });
   const first = store.ensureSetupThread(bot.id, dir)!;
+  store.updateThread(first.id, { agent: "claude-code" });
 
   const changed = store.updateBot(bot.id, { agent: "codex" })!;
   assert.equal(changed.setupStatus, "pending");
-  assert.equal(store.getThread(first.id), undefined);
 
   const replacement = store.ensureSetupThread(bot.id, dir)!;
   assert.notEqual(replacement.id, first.id);
+  assert.equal(store.getThread(first.id), undefined);
   recordSetupOutcome(bot.id, "SETUP_COMPLETE", first.id);
   assert.equal(store.getBot(bot.id)?.setupStatus, "pending");
   recordSetupOutcome(bot.id, "SETUP_COMPLETE", replacement.id);
