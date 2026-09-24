@@ -50,7 +50,7 @@ A bot is a named, reusable agent preset.
 | `agent` | `claude-code` \| `opencode` \| `codex` | Which agent runs the bot. Default `claude-code`. Any other value is a `400` |
 | `instructions` | string | The bot's job. Sent to the agent on top of its own system prompt |
 | `setupInstructions` | string | What the bot needs from a machine. Blank means no setup run. See [setup](../README.md#bots-set-themselves-up) |
-| `model` | string | Optional. OpenCode needs `provider/model`, e.g. `anthropic/claude-haiku-4-5` |
+| `model` | string | Optional. OpenCode needs `provider/model` — run `opencode models` for the values that install accepts |
 | `repoPath` | string | Default folder for new threads |
 | `permissionMode` | `ask-permissions` \| `auto-approve` \| `plan` | Default `ask-permissions` |
 | `allowedTools` | string[] | The only tools the bot may use. Blank means all. Not applied to setup runs. Not supported on Codex |

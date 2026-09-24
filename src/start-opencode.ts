@@ -1,3 +1,4 @@
+import { execSync } from "child_process";
 import { basename } from "path";
 import { bindSession } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcomeFromEvents } from "./bot-prompt";
@@ -37,6 +38,17 @@ const permissionConfig = {
 } as const;
 
 export async function initAgent(): Promise<boolean> {
+  // The SDK is a hard dependency, so importing it proves nothing about whether
+  // opencode itself is installed — and the SDK shells out to `opencode serve`.
+  // Without this check the agent is offered on every machine and only fails
+  // later, when a turn cannot reach a server that was never started.
+  try {
+    execSync("opencode --version", { stdio: "ignore" });
+  } catch {
+    console.warn("  opencode CLI not found — opencode agent unavailable");
+    return false;
+  }
+
   const loaded = await loadOpencodeSdk().catch(() => null) as any;
 
   if (!loaded?.createOpencode || !loaded?.createOpencodeClient) {
