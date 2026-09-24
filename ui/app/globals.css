@@ -4167,6 +4167,7 @@ button.file-chip:hover {
   text-align: left;
   cursor: pointer;
 }
+.thread-row:not(.active) .thread-open { padding-right: 40px; }
 .thread-open:disabled { cursor: default; opacity: 0.7; }
 .thread-kill {
   position: absolute;
