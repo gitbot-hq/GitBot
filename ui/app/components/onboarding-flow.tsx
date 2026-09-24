@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "./page-link";
+
 import { useRef, useState } from "react";
 import BotForm from "./bot-form";
 import { ImportModal } from "./share-modals";
@@ -21,7 +23,7 @@ const SLIDES = [
   },
   {
     title: "A marketplace",
-    body: "A public shelf of bots worth stealing. Opening soon.",
+    body: "A public shelf of bots worth stealing. Read one, install it in a click.",
     image: "/onboarding/slide-3-marketplace.webp",
   },
   {
@@ -38,7 +40,6 @@ export default function OnboardingFlow({ onDone, active = true }: { onDone: () =
   const [studio, setStudio] = useState(false);
   const [importing, setImporting] = useState(false);
   const [slide, setSlide] = useState(0);
-  const [soonTip, setSoonTip] = useState<{ x: number; y: number } | null>(null);
   const { toast, view: toastView } = useToast();
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -113,21 +114,9 @@ export default function OnboardingFlow({ onDone, active = true }: { onDone: () =
                 Create bot
               </button>
               <div className="onboarding-acts-row">
-                <span
-                  className="soon-wrap"
-                  onMouseMove={(e) =>
-                    setSoonTip({ x: e.clientX, y: e.clientY })
-                  }
-                  onMouseLeave={() => setSoonTip(null)}
-                >
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    disabled
-                  >
-                    Start from marketplace
-                  </button>
-                </span>
+                <Link href="/marketplace" className="btn-secondary">
+                  Start from marketplace
+                </Link>
                 <button
                   type="button"
                   className="btn-secondary"
@@ -159,15 +148,6 @@ export default function OnboardingFlow({ onDone, active = true }: { onDone: () =
           </div>
       </div>
       {toastView}
-      {soonTip && (
-        <span
-          className="soon-tip"
-          aria-hidden="true"
-          style={{ left: soonTip.x, top: soonTip.y }}
-        >
-          Coming soon
-        </span>
-      )}
       {importing && (
         <ImportModal
           onClose={() => setImporting(false)}

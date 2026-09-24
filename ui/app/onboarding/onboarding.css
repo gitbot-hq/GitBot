@@ -243,28 +243,8 @@
   min-width: 0;
 }
 
-.soon-wrap {
-  display: flex;
-}
 
-.soon-wrap > * {
-  flex: 1;
-  min-width: 0;
-}
 
-.soon-tip {
-  position: fixed;
-  z-index: 70;
-  translate: 14px 18px;
-  padding: 6px 10px;
-  background: var(--text);
-  color: var(--bg);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-xs);
-  font-weight: 600;
-  white-space: nowrap;
-  pointer-events: none;
-}
 
 @media (max-width: 640px) {
   .onboarding-slide {
