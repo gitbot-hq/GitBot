@@ -179,14 +179,6 @@ export function updateBot(id: string, patch: Partial<Bot>): Bot | undefined {
     }
   }
 
-  // A setup conversation cannot move between agent runtimes. Replace only the
-  // unfinished setup thread; ordinary chat threads remain on their first agent.
-  if (setupAgentChanged && before.setupThreadId) {
-    const threads = readCollection<Thread>(THREADS_FILE);
-    writeCollection(THREADS_FILE, threads.filter((thread) => thread.id !== before.setupThreadId));
-    merged.setupThreadId = undefined;
-  }
-
   bots[idx] = merged;
   writeCollection(BOTS_FILE, bots);
   return bots[idx];
@@ -223,7 +215,9 @@ export function ensureSetupThread(botId: string, fallbackPath: string): Thread |
   if (!bot || !bot.setupInstructions?.trim()) return undefined;
 
   const existing = bot.setupThreadId ? getThread(bot.setupThreadId) : undefined;
-  if (existing) return existing;
+  const agent = bot.agent ?? DEFAULT_BOT_AGENT;
+  if (existing && (!existing.agent || existing.agent === agent)) return existing;
+  if (existing) deleteThread(existing.id);
 
   const thread = createThread(bot.id, bot.repoPath || fallbackPath, `Set up ${bot.name}`, "setup");
   updateBot(bot.id, { setupThreadId: thread.id, setupStatus: bot.setupStatus ?? "pending" });
