@@ -166,11 +166,25 @@ export function updateBot(id: string, patch: Partial<Bot>): Bot | undefined {
   // again. An explicit status in the patch is the caller's own call and stands.
   const had = !!before.setupInstructions?.trim();
   const has = !!merged.setupInstructions?.trim();
+  const setupAgentChanged =
+    has &&
+    before.setupStatus !== "complete" &&
+    (before.agent ?? DEFAULT_BOT_AGENT) !== (merged.agent ?? DEFAULT_BOT_AGENT);
   if (!has) {
     merged.setupStatus = undefined;
     merged.setupThreadId = undefined;
   } else if (rest.setupStatus === undefined) {
-    if (!had || merged.setupInstructions !== before.setupInstructions) merged.setupStatus = "pending";
+    if (!had || merged.setupInstructions !== before.setupInstructions || setupAgentChanged) {
+      merged.setupStatus = "pending";
+    }
+  }
+
+  // A setup conversation cannot move between agent runtimes. Replace only the
+  // unfinished setup thread; ordinary chat threads remain on their first agent.
+  if (setupAgentChanged && before.setupThreadId) {
+    const threads = readCollection<Thread>(THREADS_FILE);
+    writeCollection(THREADS_FILE, threads.filter((thread) => thread.id !== before.setupThreadId));
+    merged.setupThreadId = undefined;
   }
 
   bots[idx] = merged;

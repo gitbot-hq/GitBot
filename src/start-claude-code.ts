@@ -164,7 +164,7 @@ export async function runAgent(store: SessionStore): Promise<void> {
       }
     }
 
-    if (preset?.setup) recordSetupOutcome(preset.id, assistantText);
+    if (preset?.setup) recordSetupOutcome(preset.id, assistantText, store.threadId);
 
     if (!receivedResult) {
       console.log("[query] stream ended without result message — treating as error");

@@ -1,4 +1,4 @@
-import { setSetupStatus } from "./bot-store";
+import { getBot, setSetupStatus } from "./bot-store";
 import type { SessionStore } from "./server-common";
 
 // How a bot's preset is put to an agent. Shared by every harness, so a bot
@@ -82,7 +82,8 @@ export function setupSystemPrompt(preset: NonNullable<SessionStore["botPreset"]>
  * Reads the run's verdict off the end of the transcript. The last marker wins,
  * so a later turn that fixes a failure can flip the bot to ready.
  */
-export function recordSetupOutcome(botId: string, text: string): void {
+export function recordSetupOutcome(botId: string, text: string, threadId?: string): void {
+  if (threadId && getBot(botId)?.setupThreadId !== threadId) return;
   const matches = text.match(/^\s*SETUP_(COMPLETE|FAILED)\b/gm);
   if (!matches?.length) return;
   const done = /COMPLETE/.test(matches[matches.length - 1]);
@@ -102,5 +103,5 @@ export function recordSetupOutcomeFromEvents(store: SessionStore): void {
     .filter((e) => e.type === "assistant" && !(e as any).parent_tool_use_id)
     .map((e) => String((e as any).content ?? ""))
     .join("\n");
-  recordSetupOutcome(preset.id, text);
+  recordSetupOutcome(preset.id, text, store.threadId);
 }
