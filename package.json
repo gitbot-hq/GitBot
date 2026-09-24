@@ -7,7 +7,8 @@
     "gitbot": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "scripts/postinstall.mjs"
   ],
   "publishConfig": {
     "access": "public"
@@ -19,8 +20,10 @@
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && npm run build:cli && npm run build:ui",
     "build:cli": "tsc",
+    "postbuild:cli": "node -e \"require('fs').chmodSync('dist/index.js',0o755)\"",
     "build:ui": "node scripts/build-ui.mjs",
     "dev": "tsx src/index.ts",
+    "postinstall": "node scripts/postinstall.mjs || exit 0",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
