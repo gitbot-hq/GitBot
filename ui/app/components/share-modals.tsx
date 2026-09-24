@@ -17,7 +17,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { BackButton, CloseButton } from "./panel-controls";
 import { parseShare, shareCode, sharePrefix } from "../lib/share";
-import { MARKETPLACE_REPO_URL, marketplacePublishPrompt } from "../lib/marketplace-publish";
+import { MARKETPLACE_PUBLISH_GUIDE_URL, marketplacePublishPrompt } from "../lib/marketplace-publish";
 import botAuthorPromptLines from "../lib/bot-author-prompt.json";
 import { useScrollEdge } from "../lib/use-scroll-edge";
 import type { Bot } from "../lib/gitbot";
@@ -351,7 +351,7 @@ export function ShareModal({
           </div>
           <div className="publish-manual">
             <div><strong>Publish manually</strong><p>Add the listing yourself and open a pull request on GitHub.</p></div>
-            <a className="btn-secondary" href={MARKETPLACE_REPO_URL} target="_blank" rel="noreferrer">Open GitHub<AnimatedActionIcon icon={ArrowRightIcon} size={16} aria-hidden="true" /></a>
+            <a className="btn-secondary" href={MARKETPLACE_PUBLISH_GUIDE_URL} target="_blank" rel="noreferrer">Open guide<AnimatedActionIcon icon={ArrowRightIcon} size={16} aria-hidden="true" /></a>
           </div>
         </div>
       )}

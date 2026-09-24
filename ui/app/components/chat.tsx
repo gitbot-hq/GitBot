@@ -111,15 +111,20 @@ function errText(e: unknown) {
 
 // Assistant markdown (GFM). Raw HTML is off by default — no XSS surface.
 function MarketplaceListingCard({ listing, color }: { listing: MarketplaceListing; color?: string }) {
+  const mascot = typeof listing.mascot === "string" ? listing.mascot : listing.mascot?.body;
+  const listingColor = listing.color || (typeof listing.mascot === "object" ? `var(--${listing.mascot.color})` : color);
+  const features = listing.features ?? listing.capabilities;
+  const examplePrompt = listing.examplePrompt ?? listing.starterPrompt;
   const facts = [
     ["Agent", listing.agent],
     ["Model", listing.model],
     ["Permissions", listing.permissionMode],
-    ["Mascot", listing.mascot],
-    ["Color", listing.color],
+    ["Mascot", mascot],
+    ["Color", typeof listing.mascot === "object" ? listing.mascot.color : listing.color],
+    ["Author", listing.author ? `${listing.author.name} (@${listing.author.github})` : undefined],
   ].filter((fact): fact is [string, string] => !!fact[1]);
   return (
-    <section className="marketplace-listing-card" style={{ "--listing-color": listing.color || color } as React.CSSProperties} aria-label={`${listing.name} marketplace listing`}>
+    <section className="marketplace-listing-card" style={{ "--listing-color": listingColor } as React.CSSProperties} aria-label={`${listing.name} marketplace listing`}>
       <header className="marketplace-listing-head">
         <span className="marketplace-listing-emoji" aria-hidden="true">{listing.emoji || "🤖"}</span>
         <div>
@@ -138,13 +143,13 @@ function MarketplaceListingCard({ listing, color }: { listing: MarketplaceListin
       {!!listing.allowedTools?.length && <p className="marketplace-listing-tags"><b>Allowed tools</b>{listing.allowedTools.join(", ")}</p>}
       {!!listing.disallowedTools?.length && <p className="marketplace-listing-tags"><b>Blocked tools</b>{listing.disallowedTools.join(", ")}</p>}
       {listing.about && <section className="marketplace-listing-section"><h4>About</h4><p>{listing.about}</p></section>}
-      {!!listing.capabilities?.length && (
+      {!!features?.length && (
         <section className="marketplace-listing-section">
-          <h4>Capabilities</h4>
-          <ul>{listing.capabilities.map((item) => <li key={item}><AnimatedActionIcon icon={CheckIcon} size={15} aria-hidden="true" /><span>{item}</span></li>)}</ul>
+          <h4>Features</h4>
+          <ul>{features.map((item) => <li key={item}><AnimatedActionIcon icon={CheckIcon} size={15} aria-hidden="true" /><span>{item}</span></li>)}</ul>
         </section>
       )}
-      {listing.starterPrompt && <section className="marketplace-listing-section"><h4>Starter prompt</h4><blockquote>{listing.starterPrompt}</blockquote></section>}
+      {examplePrompt && <section className="marketplace-listing-section"><h4>Example prompt</h4><blockquote>{examplePrompt}</blockquote></section>}
       {listing.instructions && <section className="marketplace-listing-section"><h4>Instructions</h4><pre>{listing.instructions}</pre></section>}
       {listing.setupInstructions && <section className="marketplace-listing-section"><h4>Setup instructions</h4><pre>{listing.setupInstructions}</pre></section>}
     </section>
