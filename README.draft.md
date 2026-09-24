@@ -1,3 +1,7 @@
+[Overview](#gitbot) · [Get running](#get-running) · [Create a bot](#create-your-first-bot) · [How it works](#how-gitbot-works) · [Share](#share-a-bot-or-submit-one-to-marketplace) · [Security](#security-and-privacy)
+
+&nbsp;
+
 # GitBot
 
 [![npm version](https://img.shields.io/npm/v/%40gitbot-hq%2Fgitbot?style=flat-square&label=npm)](https://www.npmjs.com/package/@gitbot-hq/gitbot)
@@ -14,7 +18,7 @@ GitBot runs Claude Code, Codex, or OpenCode on your machine and gives each agent
 npm install -g @gitbot-hq/gitbot
 ```
 
-[Get running](#get-running) | [Create a bot manually](#create-your-first-bot) | [See how GitBot works](#how-gitbot-works)
+&nbsp;
 
 > **Video to add:** A 30-45 second tour. Start at `gitbot start`, create a bot, open a thread in a repo, and show one useful reply. Keep the install command visible in the opening frame.
 
