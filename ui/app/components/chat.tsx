@@ -578,6 +578,15 @@ export default function Chat({
     if (boxRef.current) boxRef.current.style.height = "auto";
   }
 
+  /** Queued text and composer text combined. `enqueue` clears the composer,
+   *  but the user can type again while the turn runs — so both can hold
+   *  text, and picking one silently drops the other. The queued message was
+   *  typed first, so it leads. */
+  function mergeQueued(queued: string | null, typed: string) {
+    if (!queued) return typed;
+    return typed.trim() ? `${queued}\n\n${typed}` : queued;
+  }
+
   function fitBox() {
     const box = boxRef.current;
     if (box) {
@@ -667,7 +676,7 @@ export default function Chat({
     // Stash this thread's draft, restore the next one's. A queued
     // follow-up rides back into the draft — never silently dropped.
     const prevId = threadRef.current;
-    if (prevId) drafts.current[prevId] = queueRef.current ?? draftRef.current;
+    if (prevId) drafts.current[prevId] = mergeQueued(queueRef.current, draftRef.current);
     sessionRef.current = null;
     liveIdRef.current = null;
     liveTextRef.current = "";
@@ -1135,13 +1144,20 @@ export default function Chat({
       setQueue(null);
       // Steering disabled — kept for reference.
       // pendingSteer.current = null;
-      setDraft(q);
-      draftRef.current = q;
-      if (threadRef.current) drafts.current[threadRef.current] = q;
-      fitBox();
+      restoreToDraft(q);
     }
     setup?.onPause();
     abortCurrent();
+  }
+
+  /** Move queued text back into the composer, keeping whatever is already
+   *  typed there. */
+  function restoreToDraft(q: string) {
+    const merged = mergeQueued(q, draftRef.current);
+    setDraft(merged);
+    draftRef.current = merged;
+    if (threadRef.current) drafts.current[threadRef.current] = merged;
+    fitBox();
   }
 
   // Steering disabled — kept for reference.
@@ -1163,10 +1179,7 @@ export default function Chat({
     queueRef.current = null;
     setQueue(null);
     if (!q) return;
-    setDraft(q);
-    draftRef.current = q;
-    if (threadRef.current) drafts.current[threadRef.current] = q;
-    fitBox();
+    restoreToDraft(q);
     boxRef.current?.focus({ preventScroll: true });
   }
 
