@@ -42,12 +42,14 @@ export default function ReadmePreview() {
             h3: ({ children }) => <h3 id={slug(children)}>{children}</h3>,
             a: ({ href, children }) => <a href={href && !href.startsWith("#") && !href.startsWith("http") ? `https://github.com/gitbot-hq/GitBot/blob/main/${href}` : href}>{children}</a>,
             img: ({ src, alt }) => {
-              const screenshot = typeof src === "string" ? screenshots[src] : undefined;
+              if (typeof src !== "string") return <span role="img" aria-label={alt ?? "Image to add"}>{alt ?? "Image to add"}</span>;
+              const imageSrc = src;
+              const screenshot = screenshots[imageSrc];
               return screenshot
-                ? <Image src={`data:image/png;base64,${readFileSync(join(process.cwd(), "..", src)).toString("base64")}`} width={screenshot.width} height={screenshot.height} alt={alt ?? ""} unoptimized />
-                : typeof src === "string" && src.startsWith("https://img.shields.io/")
-                  ? <img src={src} alt={alt ?? ""} />
-                : <span role="img" aria-label={alt ?? "Image to add"}>{alt ?? "Image to add"}</span>;
+                ? <Image src={`data:image/png;base64,${readFileSync(join(process.cwd(), "..", imageSrc)).toString("base64")}`} width={screenshot.width} height={screenshot.height} alt={alt ?? ""} unoptimized />
+                : imageSrc.startsWith("https://img.shields.io/")
+                  ? <img src={imageSrc} alt={alt ?? ""} />
+                  : <span role="img" aria-label={alt ?? "Image to add"}>{alt ?? "Image to add"}</span>;
             },
           }}>{markdown}</ReactMarkdown>
         </article>
