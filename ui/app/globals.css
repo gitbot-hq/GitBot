@@ -2205,6 +2205,12 @@ pre {
   width: auto;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+
 .user-chip {
   display: inline-flex;
   align-items: center;
