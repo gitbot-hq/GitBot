@@ -7,7 +7,7 @@ import remarkGfm from "remark-gfm";
 import styles from "./readme-preview.module.css";
 
 export const metadata: Metadata = {
-  title: "README draft",
+  title: "README preview",
   robots: { index: false, follow: false },
 };
 
@@ -26,12 +26,12 @@ const screenshots: Record<string, { width: number; height: number }> = {
 const slug = (value: React.ReactNode) => String(value).toLowerCase().replace(/[^a-z0-9 -]/g, "").trim().replace(/ +/g, "-");
 
 export default function ReadmePreview() {
-  const markdown = readFileSync(join(process.cwd(), "..", "README.draft.md"), "utf8");
+  const markdown = readFileSync(join(process.cwd(), "..", "README.md"), "utf8");
 
   return (
     <div className={styles.page}>
       <div className={styles.previewBar}>
-        <span><strong>README draft</strong><span className={styles.previewState}>Local preview. Not published.</span></span>
+        <span><strong>README preview</strong><span className={styles.previewState}>Root README on this branch.</span></span>
         <a href="/">Back to GitBot</a>
       </div>
       <main className={styles.content}>
