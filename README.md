@@ -1,7 +1,7 @@
 | [![GitBot](ui/public/gitbot-logo.svg)](#gitbot) | [Overview](#gitbot) · [Get running](#get-running) · [Create a bot](#create-your-first-bot) · [How it works](#how-gitbot-works) · [Share](#share-a-bot-or-submit-one-to-marketplace) · [Security](#security-and-privacy) |
 | :--- | ---: |
 
-<br><br>
+<br><br><br>
 
 # GitBot
 
@@ -22,6 +22,8 @@ npm install -g @gitbot-hq/gitbot
 <br><br>
 
 ![GitBot workspace with bots, threads, and a conversation](assets/screenshots/hub.png)
+
+<br><br><br>
 
 ## Get running
 
@@ -44,6 +46,8 @@ gitbot start
 Open **http://localhost:3000** on your computer. GitBot prints a network address and QR code if you want to connect from another device on the same trusted network. The workspace works best on desktop.
 
 > **Before connecting another device:** GitBot has no authentication. Anyone who can reach its port can use the agents running on your machine. Keep it on a trusted network and never expose the port to the public internet. [Read the security notes](#security-and-privacy).
+
+<br><br><br>
 
 ## Create your first bot
 
@@ -71,6 +75,8 @@ The instructions give the bot its job. Your message gives it today's task. A thr
 
 You can also choose **Create with an agent** and give an installed agent the guided authoring prompt, or **Import bot** if someone has shared a code with you. In both cases, review the bot's instructions and permissions before you let it work.
 
+<br><br><br>
+
 ## See a bot at work
 
 Choose a repo when you start a thread. The bot runs its agent in that folder and streams the conversation back to GitBot. You can close the browser tab and return to a running turn.
@@ -78,6 +84,8 @@ Choose a repo when you start a thread. The bot runs its agent in that folder and
 With Claude Code or OpenCode, GitBot shows an approval card when a tool requires permission. Codex has no per-action approval channel, so its selected permission mode chooses a sandbox instead.
 
 ![Approval request inside a GitBot conversation](assets/screenshots/approval.png)
+
+<br><br><br>
 
 ## How GitBot works
 
@@ -94,6 +102,8 @@ Browser  ->  GitBot on your machine  ->  Claude Code, Codex, or OpenCode
 - **Setup steps** run in their own thread when a bot first needs preparation on a machine. The bot is not ready for regular work until setup is complete.
 - **Your files stay on your machine.** Your chosen coding agent may send prompts and code to its configured provider. GitBot itself does not host the agent or your conversations.
 
+<br><br><br>
+
 ## Share a bot, or submit one to Marketplace
 
 **Share with code** copies the bot's settings and instructions so someone else can import it. It does not include chat history or local files. Check the instructions for private details before sharing.
@@ -105,6 +115,8 @@ Prefer to submit a listing yourself? Open the [GitBot Library publishing guide](
 | Choose how to share | Share with code | Publish to Marketplace |
 | --- | --- | --- |
 | ![Share a bot with a code or publish it to Marketplace](assets/screenshots/share-menu.png) | ![Share a bot using its generated code](assets/screenshots/share-code.png) | ![Publish a bot to Marketplace with an agent or manually](assets/screenshots/publish-marketplace.png) |
+
+<br><br><br>
 
 ## Permissions and agent differences
 
@@ -119,6 +131,8 @@ Start with **Ask before tools** for Claude Code or OpenCode. For Codex, use **Re
 
 An **Allowed tools** list limits which tools a bot can use; its permission mode decides when to ask. Codex cannot enforce that list, so choose Claude Code or OpenCode when a strict tool fence matters.
 
+<br><br><br>
+
 ## Security and privacy
 
 > **Important:** GitBot has no authentication and listens on all network interfaces. Anyone who can reach its port can run agents using your machine's access. Use a trusted network, do not expose the port to the internet, and stop GitBot when you are not using it.
@@ -126,6 +140,8 @@ An **Allowed tools** list limits which tools a bot can use; its permission mode 
 Bots act with your user account's file and shell access. Auto-approval removes a chance to inspect individual tool calls. Imported bots may include setup instructions that run when imported, so read them and their permission mode first.
 
 GitBot has no account, telemetry, or hosted database. Bots and thread records live under `~/.gitbot` by default. Your chosen agent sends prompts and code according to its provider configuration. GitBot also looks up your public IP at startup to print its network address.
+
+<br><br><br>
 
 ## Useful commands
 
@@ -136,6 +152,8 @@ gitbot start --caffeinate    # keep a Mac awake during long jobs
 ```
 
 The folder where you run `gitbot start` becomes the workspace shown first in the folder picker. A thread can still run in another folder you can read.
+
+<br><br><br>
 
 ## Need help?
 
@@ -148,9 +166,13 @@ The folder where you run `gitbot start` becomes the workspace shown first in the
 
 For implementation details, see the [API reference](docs/API.md), [architecture notes](docs/ARCHITECTURE.md), and [web UI guide](ui/README.md).
 
+<br><br><br>
+
 ## Contribute
 
 GitBot is open source. For more than a small fix, [open an issue](https://github.com/gitbot-hq/GitBot/issues) first. Keep the change focused, run the build and TypeScript checks, and describe the behavior you tested in your pull request.
+
+<br><br><br>
 
 ## License
 
