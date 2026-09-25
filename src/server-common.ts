@@ -191,14 +191,21 @@ export const TOOL_BLACKLIST: Record<"claude-code" | "opencode" | "codex", Set<st
  * PermissionMode (and, for plan, a run mode). Keep the two vocabularies in sync
  * here — a preset value with no translation silently ends up asking for
  * everything.
+ *
+ * `ask-permissions` has no meaning on codex: `codex exec` has no channel to ask
+ * on and pins its approval policy to `never`, so the mode would leave the bot in
+ * a read-only sandbox that can never act and never prompts. Codex bots get the
+ * workspace-write sandbox instead, and the UI names the sandbox rather than
+ * claiming an approval step that cannot happen.
  */
 export function botPermissionToSession(
-  botMode: "ask-permissions" | "auto-approve" | "plan"
+  botMode: "ask-permissions" | "auto-approve" | "plan",
+  agent: "claude-code" | "opencode" | "codex"
 ): { permissionMode: PermissionMode; mode?: "plan" | "build" } {
   switch (botMode) {
     case "auto-approve": return { permissionMode: "yolo" };
     case "plan": return { permissionMode: "yolo", mode: "plan" };
-    default: return { permissionMode: "ask-permissions" };
+    default: return { permissionMode: agent === "codex" ? "allow-all-edits" : "ask-permissions" };
   }
 }
 

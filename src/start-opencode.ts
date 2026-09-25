@@ -1,3 +1,4 @@
+import { execSync } from "child_process";
 import { basename } from "path";
 import { bindSession } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcomeFromEvents } from "./bot-prompt";
@@ -37,6 +38,17 @@ const permissionConfig = {
 } as const;
 
 export async function initAgent(): Promise<boolean> {
+  // The SDK is a hard dependency, so importing it proves nothing about whether
+  // opencode itself is installed — and the SDK shells out to `opencode serve`.
+  // Without this check the agent is offered on every machine and only fails
+  // later, when a turn cannot reach a server that was never started.
+  try {
+    execSync("opencode --version", { stdio: "ignore" });
+  } catch {
+    console.warn("  opencode CLI not found — opencode agent unavailable");
+    return false;
+  }
+
   const loaded = await loadOpencodeSdk().catch(() => null) as any;
 
   if (!loaded?.createOpencode || !loaded?.createOpencodeClient) {
@@ -51,7 +63,13 @@ export async function initAgent(): Promise<boolean> {
     // Seed the default client (no directory) from the spawned server's client
     clientsByDir.set("", result.client);
     console.log("  opencode: ready");
-  } catch {
+  } catch (err: any) {
+    // Not fatal, and deliberately not `return false`: the usual cause is that
+    // something already holds port 4096 — a second gitbot, or the user's own
+    // `opencode serve` — and getClientForDir talks to that server quite happily.
+    // Disabling the agent here would turn a working opencode into a missing one.
+    // When the port is dead instead, this line is the only clue the turn leaves.
+    console.warn(`  opencode: could not start a server (${err?.message ?? err}) — falling back to an existing one on 127.0.0.1:4096`);
   }
 
   return true;
@@ -86,9 +104,13 @@ export async function runAgent(store: SessionStore): Promise<void> {
   const attachments = lastUserEvent?.attachments as Array<{ url: string }> | undefined;
   (store as any)._msgRoles = new Map<string, string>();
   store.lastTaskToolUseId = undefined;
-  const client = await getClientForDir(store.repoPath);
 
   try {
+    // Inside the try: reaching the opencode server is the first thing that can
+    // fail, and a throw here used to escape runAgent entirely, leaving the
+    // session pinned to "running" — 409 on every later message, stream never closed.
+    const client = await getClientForDir(store.repoPath);
+
     if (!store.sdkSessionId) {
       const repoName = basename(store.repoPath);
       const sessionResult = await client.session.create({

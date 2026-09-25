@@ -29,6 +29,7 @@ import { initAgent as initClaudeCode, runAgent as runClaudeCode, listSessions as
 import { initAgent as initOpencode, runAgent as runOpencode, listSessions as listOpencodeSessions, getSessionHistory, abortSession as opencodeAbort, respondPermission as opencodePermission } from "./start-opencode";
 import { initAgent as initCodex, runAgent as runCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
 import { handleBotRoutes } from "./bot-routes";
+import { handleMarketplaceRoutes } from "./marketplace-proxy";
 import { getBot, getThread, touchThread, updateThread, botNeedsSetup, DEFAULT_BOT_AGENT } from "./bot-store";
 import { botPermissionToSession } from "./server-common";
 import { uiFileFor } from "./static-ui";
@@ -59,6 +60,9 @@ export async function handleRequest(
   if (method === "GET" && (path === "/" || path === "")) return;
 
   try {
+    // Marketplace: proxied to the gitbot-api service
+    if (await handleMarketplaceRoutes(req, res)) return;
+
     // Workspace + file system routes
     if (await handleWorkspaceRoutes(req, res, workspaceCwd, availableAgents)) return;
 
@@ -256,7 +260,7 @@ export async function handleRequest(
         model = model ?? bot.model;
         // Bot presets speak their own vocabulary ("auto-approve", "plan"); the
         // session speaks PermissionMode. Translate, or nothing auto-approves.
-        const botPermission = botPermissionToSession(bot.permissionMode);
+        const botPermission = botPermissionToSession(bot.permissionMode, agent);
         permissionMode = permissionMode ?? botPermission.permissionMode;
         mode = mode ?? botPermission.mode;
         const isSetup = thread.kind === "setup";
@@ -325,21 +329,29 @@ export async function handleRequest(
 
       const s = store;
       if (threadId) touchThread(threadId, prompt ?? '');
+
+      // Anything thrown past runAgent's own handling would otherwise leave the
+      // session pinned to "running": every later message on the thread answers
+      // 409 for as long as the server lives, and the event stream — which only
+      // closes on done/error/aborted — hangs the client that is watching it.
+      // Each runAgent already reports its own failures and lands on "error"
+      // before returning, so the status check makes this a no-op on every path
+      // that handled itself.
+      const onRunRejected = (err: any) => {
+        console.error("[runAgent] unhandled:", err);
+        if (s.status === "running") {
+          emitEvent(s, "error", { message: err?.message ?? `${agent} failed to start` });
+          s.status = "error";
+          notifyPermissionsChanged();
+        }
+      };
+
       if (agent === "claude-code") {
-        runClaudeCode(s).catch((err) => {
-          console.error("[runAgent] unhandled:", err);
-        });
+        runClaudeCode(s).catch(onRunRejected);
       } else if (agent === "codex") {
-        runCodex(s).catch((err) => {
-        });
-      } else if (agent === "opencode") {
-        runOpencode(s).catch((err) => {
-          console.error("[runAgent] unhandled:", err);
-        });
+        runCodex(s).catch(onRunRejected);
       } else {
-        runOpencode(s).catch((err) => {
-          console.error("[runAgent] unhandled:", err);
-        });
+        runOpencode(s).catch(onRunRejected);
       }
 
       jsonOk(res, { sessionId: s.gitbotId });

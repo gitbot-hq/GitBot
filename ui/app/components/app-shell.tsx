@@ -211,14 +211,7 @@ export default function V2() {
     getBots()
       .then(({ bots }) => {
         setBots(bots);
-        let installedId: string | null = null;
-        try {
-          installedId = sessionStorage.getItem("gitbot-marketplace-installed-bot");
-          sessionStorage.removeItem("gitbot-marketplace-installed-bot");
-        } catch {}
-        setSelectedId((prev) => installedId && bots.some((bot) => bot.id === installedId)
-          ? installedId
-          : prev ?? bots[0]?.id ?? null);
+        setSelectedId((prev) => prev ?? bots[0]?.id ?? null);
       })
       .catch((e) => setBotsError(e instanceof Error ? e.message : "Failed to load bots"))
       .finally(() => setBotsLoading(false));
@@ -1179,6 +1172,7 @@ export default function V2() {
                 botId={bot?.id}
                 botName={bot?.name ?? "bot"}
                 botPermissionMode={bot?.permissionMode}
+                botAgent={bot?.agent}
                 botAvatar={bot ? avatarFor(bot.id) : undefined}
                 autoSend={autoSend && autoSend.botId === bot?.id ? autoSend.prompt : null}
                 onAutoSent={() => setAutoSend(null)}

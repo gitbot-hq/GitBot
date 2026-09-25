@@ -147,7 +147,7 @@ The folder you run `gitbot start` in is the **workspace**: its subfolders show u
 | Model | optional, default `claude-sonnet-4-6` | **required**, as `provider/model` | optional |
 
 - **Claude Code** loads your Claude settings, so bots can use the MCP servers you have configured.
-- **OpenCode** bots need a model such as `anthropic/claude-haiku-4-5`. OpenCode's free default model refuses requests that do not come from OpenCode itself.
+- **OpenCode** bots need a model in `provider/model` form. Run `opencode models` to see the ones your install can actually reach, and pick from that list — naming a provider you are not set up for fails with *"Model not found"*. OpenCode's free default model refuses requests that do not come from OpenCode itself, so the field cannot be left blank.
 - **Codex** runs the Codex binary bundled with its SDK and uses your `codex login`. It never asks for approval; the permission mode sets its sandbox: *Ask* → read-only, *Auto-approve edits* → may write inside the thread's folder, *Auto-approve all* → full access. It cannot restrict tools either, so use another agent when a bot's tool fence or per-call approval matters.
 
 A thread stays on the agent that ran its first turn. Changing a bot's agent applies to threads that have not started yet.
@@ -157,6 +157,7 @@ A thread stays on the agent that ran its first turn. Changing a bot's agent appl
 | Setting | Default | Notes |
 |---|---|---|
 | `GITBOT_DATA_DIR` | `~/.gitbot` | Where bots and threads are stored, as two JSON files |
+| `GITBOT_MARKETPLACE_API` | `https://uat.revise.network/gitbot/api` | The marketplace API the Discover page reads from. gitbot proxies it under `/marketplace/` |
 
 There is no config file. Everything else is set per bot, in the hub.
 
@@ -182,7 +183,8 @@ To report a vulnerability, please open a [GitHub issue](https://github.com/gitbo
 |---|---|
 | An agent is missing from the Agent menu | Its CLI is not installed or not on `PATH`. Install it, log in, restart gitbot |
 | *"…runs on codex, which is not installed on this machine"* | The bot (often an imported one) uses an agent you do not have. Install it or edit the bot's agent |
-| OpenCode bot fails with *"free tier can only be used from within OpenCode"* | Set the bot's **Model** to a `provider/model` you are logged in to |
+| OpenCode bot fails with *"free tier can only be used from within OpenCode"* | Set the bot's **Model** to a `provider/model` you are logged in to. Run `opencode models` for the list |
+| OpenCode bot fails with *"Model not found"* | The bot names a provider your OpenCode is not configured for. Run `opencode models` and set the bot's **Model** to one of those values |
 | macOS blocks `codex` as malware | You are on an old gitbot. Its bundled Codex was signed with a certificate that has since been revoked. Upgrade: `npm i -g @gitbot-hq/gitbot@latest` |
 | Warning about `CLAUDECODE` at startup; Claude bots will not start | You launched gitbot from inside a Claude Code session. Start it from a plain terminal |
 | *"The gitbot web UI has not been built"* | Only when running from source: run `npm run build` |

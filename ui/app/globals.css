@@ -803,6 +803,7 @@ pre {
   gap: 2px;
 }
 
+/* Steering disabled — kept for reference.
 .queue-steer {
   display: inline-flex;
   align-items: center;
@@ -826,6 +827,7 @@ pre {
   background: var(--surface-2);
   color: var(--text);
 }
+*/
 
 .queue-icon-btn {
   display: grid;

@@ -111,9 +111,11 @@ state. This is a pending implementation note, not an implemented feature.
   threads moves a queued follow-up back into that thread's draft.
 - One turn per thread (server 409s a second `POST /chat` while running).
   The composer stays enabled: mid-turn sends park in a single "up next"
-  queue slot (`queueRef`, flushed by `finish()`), with steer (abort +
-  send) and remove actions. `startTurn` owns no streaming check — callers
-  (`sendPrompt`, `maybeFlush`) guarantee state.
+  queue slot (`queueRef`, flushed by `finish()`), with edit and remove
+  actions. `startTurn` owns no streaming check — callers (`sendPrompt`,
+  `maybeFlush`) guarantee state. Steer (abort + send now) is commented out
+  in `chat.tsx`/`queue-tray.tsx`, not deleted — Stop returns a queued
+  message to the composer, so that is the interrupt path for now.
 - `body` resolves `color` before scoped theme vars — re-resolve `color` at theme
   boundaries (see `.page.v2`).
 - `confirm()` dialogs need `pg.on('dialog', accept)` in tests. AI e2e turns cost

@@ -44,12 +44,7 @@ import { useScrollEdge } from "../lib/use-scroll-edge";
 import { useStatusFavicon } from "../lib/status-favicon";
 import { groupTools, type ToolChip } from "../lib/tool-ui";
 import { parseMarketplaceListing, type MarketplaceListing } from "../lib/marketplace-publish";
-import {
-  presentSetupText,
-  readSetupNeedsInput,
-  readSetupOutcome,
-  type SetupOutcome,
-} from "../lib/setup";
+import { presentSetupText, readSetupNeedsInput } from "../lib/setup";
 import RunSummary, { ActionRow } from "./run-summary";
 import QueueTray from "./queue-tray";
 
@@ -258,12 +253,31 @@ const permissionOptions = [
   { mode: "yolo", label: "Auto-approve all", detail: "Every tool runs without asking.", icon: ZapIcon },
   { mode: "plan", label: "Plan only", detail: "Explore without making edits.", icon: FileTextIcon },
 ] as const;
+
+// Codex cannot be asked for permission mid-turn — it has no approval channel,
+// so a mode selects one of its sandboxes and nothing else. Name the sandbox
+// rather than promise a prompt that never arrives.
+const codexPermissionCopy: Record<string, { label: string; detail: string }> = {
+  "ask-permissions": { label: "Read-only", detail: "Codex reads and answers; it cannot edit or reach the network." },
+  "allow-all-edits": { label: "Edit in workspace", detail: "Codex edits inside this folder without asking." },
+  "yolo": { label: "Full access", detail: "Codex edits anywhere and reaches the network." },
+  "plan": { label: "Plan only", detail: "Explore without making edits." },
+};
+
+function permissionOptionsFor(agent: string) {
+  if (agent !== "codex") return permissionOptions;
+  return permissionOptions.map((option) => ({ ...option, ...codexPermissionCopy[option.mode] }));
+}
+
 const threadPermissionKey = "gitbot-thread-permissions";
 
-/** The bot's own vocabulary ("auto-approve") → the chat's. */
-function safePermissionMode(mode?: string): ChatPermissionMode {
+/** The bot's own vocabulary ("auto-approve") → the chat's. Mirrors the server's
+ *  botPermissionToSession, including its codex case: "ask" is not a thing codex
+ *  can do, so those bots run in the workspace-write sandbox. */
+function safePermissionMode(mode: string | undefined, agent: string): ChatPermissionMode {
   if (mode === "auto-approve") return "yolo";
-  return mode === "plan" ? "plan" : "ask-permissions";
+  if (mode === "plan") return "plan";
+  return agent === "codex" ? "allow-all-edits" : "ask-permissions";
 }
 
 function isChatPermissionMode(mode: unknown): mode is ChatPermissionMode {
@@ -352,6 +366,7 @@ export default function Chat({
   botId,
   botName,
   botPermissionMode,
+  botAgent,
   botAvatar,
   autoSend,
   onAutoSent,
@@ -369,6 +384,7 @@ export default function Chat({
   botId?: string;
   botName: string;
   botPermissionMode?: string;
+  botAgent?: string;
   botAvatar?: AvatarPref;
   autoSend: string | null;
   onAutoSent: () => void;
@@ -389,6 +405,8 @@ export default function Chat({
    *  the chat transport, but is rendered as activation rather than a thread. */
   setup?: SetupMode;
 }) {
+  // An explicit thread choice wins over the bot's, matching the server.
+  const agent = thread?.agent ?? botAgent ?? "claude-code";
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [loading, setLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -401,8 +419,9 @@ export default function Chat({
   // here and flush when the turn ends. One slot — a newer send replaces it.
   const [queue, setQueue] = useState<string | null>(null);
   const queueRef = useRef<string | null>(null);
+  // Steering disabled — kept for reference.
   // Steer: abort the running turn and send this text the moment it ends.
-  const pendingSteer = useRef<string | null>(null);
+  // const pendingSteer = useRef<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [copyErrorId, setCopyErrorId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -559,6 +578,15 @@ export default function Chat({
     if (boxRef.current) boxRef.current.style.height = "auto";
   }
 
+  /** Queued text and composer text combined. `enqueue` clears the composer,
+   *  but the user can type again while the turn runs — so both can hold
+   *  text, and picking one silently drops the other. The queued message was
+   *  typed first, so it leads. */
+  function mergeQueued(queued: string | null, typed: string) {
+    if (!queued) return typed;
+    return typed.trim() ? `${queued}\n\n${typed}` : queued;
+  }
+
   function fitBox() {
     const box = boxRef.current;
     if (box) {
@@ -648,7 +676,7 @@ export default function Chat({
     // Stash this thread's draft, restore the next one's. A queued
     // follow-up rides back into the draft — never silently dropped.
     const prevId = threadRef.current;
-    if (prevId) drafts.current[prevId] = queueRef.current ?? draftRef.current;
+    if (prevId) drafts.current[prevId] = mergeQueued(queueRef.current, draftRef.current);
     sessionRef.current = null;
     liveIdRef.current = null;
     liveTextRef.current = "";
@@ -673,7 +701,8 @@ export default function Chat({
     pendingRun.current = null;
     queueRef.current = null;
     setQueue(null);
-    pendingSteer.current = null;
+    // Steering disabled — kept for reference.
+    // pendingSteer.current = null;
     lastPrompt.current = "";
     const nextDraft = thread?.id ? (drafts.current[thread.id] ?? "") : "";
     draftRef.current = nextDraft;
@@ -848,13 +877,15 @@ export default function Chat({
     }
   }
 
-  /** A turn just ended: start whatever is waiting (steer wins over the
-   *  queue) as the next turn on the same thread. */
+  /** A turn just ended: start whatever is waiting in the queue as the next
+   *  turn on the same thread. */
   function maybeFlush(tid: string | null) {
     if (!tid || threadRef.current !== tid) return;
     turnActiveRef.current = false;
-    const next = pendingSteer.current ?? queueRef.current;
-    pendingSteer.current = null;
+    // Steering disabled — the queue is the only source of the next turn.
+    // const next = pendingSteer.current ?? queueRef.current;
+    // pendingSteer.current = null;
+    const next = queueRef.current;
     if (queueRef.current) {
       queueRef.current = null;
       setQueue(null);
@@ -1071,7 +1102,7 @@ export default function Chat({
       const { sessionId } = await postChat(
         thread.id,
         prompt,
-        permissionModesRef.current[thread.id] ?? safePermissionMode(botPermissionMode),
+        permissionModesRef.current[thread.id] ?? safePermissionMode(botPermissionMode, agent),
       );
       if (threadRef.current !== thread.id) return;
       sessionRef.current = sessionId;
@@ -1111,27 +1142,36 @@ export default function Chat({
     if (q) {
       queueRef.current = null;
       setQueue(null);
-      pendingSteer.current = null;
-      setDraft(q);
-      draftRef.current = q;
-      if (threadRef.current) drafts.current[threadRef.current] = q;
-      fitBox();
+      // Steering disabled — kept for reference.
+      // pendingSteer.current = null;
+      restoreToDraft(q);
     }
     setup?.onPause();
     abortCurrent();
   }
 
-  /** Steer: abort this turn and send the queued message the moment it ends.
-   *  Falls back to staying queued if the turn hasn't reached the server. */
-  function steerNow() {
-    const q = queueRef.current;
-    if (!q || !thread) return;
-    if (!sessionRef.current && !esRef.current) return;
-    queueRef.current = null;
-    setQueue(null);
-    pendingSteer.current = q;
-    abortCurrent();
+  /** Move queued text back into the composer, keeping whatever is already
+   *  typed there. */
+  function restoreToDraft(q: string) {
+    const merged = mergeQueued(q, draftRef.current);
+    setDraft(merged);
+    draftRef.current = merged;
+    if (threadRef.current) drafts.current[threadRef.current] = merged;
+    fitBox();
   }
+
+  // Steering disabled — kept for reference.
+  // /** Steer: abort this turn and send the queued message the moment it ends.
+  //  *  Falls back to staying queued if the turn hasn't reached the server. */
+  // function steerNow() {
+  //   const q = queueRef.current;
+  //   if (!q || !thread) return;
+  //   if (!sessionRef.current && !esRef.current) return;
+  //   queueRef.current = null;
+  //   setQueue(null);
+  //   pendingSteer.current = q;
+  //   abortCurrent();
+  // }
 
   /** Drop the queued message back into the composer for editing. */
   function editQueue() {
@@ -1139,10 +1179,7 @@ export default function Chat({
     queueRef.current = null;
     setQueue(null);
     if (!q) return;
-    setDraft(q);
-    draftRef.current = q;
-    if (threadRef.current) drafts.current[threadRef.current] = q;
-    fitBox();
+    restoreToDraft(q);
     boxRef.current?.focus({ preventScroll: true });
   }
 
@@ -1182,7 +1219,7 @@ export default function Chat({
   /** Remember the thread's chosen mode; the bot's own default = no entry. */
   function rememberMode(tid: string, mode: ChatPermissionMode) {
     const next = { ...permissionModesRef.current };
-    if (mode === safePermissionMode(botPermissionMode)) delete next[tid];
+    if (mode === safePermissionMode(botPermissionMode, agent)) delete next[tid];
     else next[tid] = mode;
     permissionModesRef.current = next;
     setPermissionModes(next);
@@ -1196,7 +1233,7 @@ export default function Chat({
   function changeMode(mode: ChatPermissionMode) {
     if (!thread) return;
     const tid = thread.id;
-    const before = permissionModesRef.current[tid] ?? safePermissionMode(botPermissionMode);
+    const before = permissionModesRef.current[tid] ?? safePermissionMode(botPermissionMode, agent);
     rememberMode(tid, mode);
     const sid = sessionRef.current;
     if (!sid || mode === "plan") return;
@@ -1231,9 +1268,10 @@ export default function Chat({
   );
   const showThreadEmpty = !loading && visibleMsgs.length === 0 && !historyError && !setup;
   const permissionMode = thread
-    ? permissionModes[thread.id] ?? safePermissionMode(botPermissionMode)
-    : safePermissionMode(botPermissionMode);
-  const permissionOption = permissionOptions.find((option) => option.mode === permissionMode)!;
+    ? permissionModes[thread.id] ?? safePermissionMode(botPermissionMode, agent)
+    : safePermissionMode(botPermissionMode, agent);
+  const agentPermissionOptions = permissionOptionsFor(agent);
+  const permissionOption = agentPermissionOptions.find((option) => option.mode === permissionMode)!;
   useMascotPointerFollow({
     group: botId,
     enabled: !!botId && !setup && (!thread || showThreadEmpty),
@@ -1585,7 +1623,8 @@ export default function Chat({
           {jumpLatest}
           <QueueTray
             text={queue}
-            onSteer={steerNow}
+            /* Steering disabled — kept for reference. */
+            /* onSteer={steerNow} */
             onEdit={editQueue}
             onDiscard={discardQueue}
           />
@@ -1649,7 +1688,7 @@ export default function Chat({
                       onLearnMorePermissions();
                     }}>Learn more</button>}
                   </div>
-                  {permissionOptions.map((option) => (
+                  {agentPermissionOptions.map((option) => (
                     <button
                       key={option.mode}
                       type="button"

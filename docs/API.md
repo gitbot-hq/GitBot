@@ -50,7 +50,7 @@ A bot is a named, reusable agent preset.
 | `agent` | `claude-code` \| `opencode` \| `codex` | Which agent runs the bot. Default `claude-code`. Any other value is a `400` |
 | `instructions` | string | The bot's job. Sent to the agent on top of its own system prompt |
 | `setupInstructions` | string | What the bot needs from a machine. Blank means no setup run. See [setup](../README.md#bots-set-themselves-up) |
-| `model` | string | Optional. OpenCode needs `provider/model`, e.g. `anthropic/claude-haiku-4-5` |
+| `model` | string | Optional. OpenCode needs `provider/model` — run `opencode models` for the values that install accepts |
 | `repoPath` | string | Default folder for new threads |
 | `permissionMode` | `ask-permissions` \| `auto-approve` \| `plan` | Default `ask-permissions` |
 | `allowedTools` | string[] | The only tools the bot may use. Blank means all. Not applied to setup runs. Not supported on Codex |
@@ -89,6 +89,24 @@ Two body forms:
 Both accept `attachments: { url }[]`. Session `permissionMode` values are `ask-permissions`, `allow-all-edits` and `yolo`.
 
 Errors: `400` with `{ agentUnavailable: "<agent>" }` when the bot's agent is not installed; `409` with `{ setupRequired: true }` when the bot still needs setup; `409` when that session is already running.
+
+## Marketplace
+
+The Discover page reads from a separate service, the gitbot marketplace API, which indexes the
+[gitbot-hq/Library](https://github.com/gitbot-hq/Library) repo. gitbot proxies its public routes so
+the UI stays on one origin:
+
+| Method | Path | Forwarded to |
+|---|---|---|
+| GET | `/marketplace/v1/bots` | `GET /v1/bots` — cards; query `q`, `category`, `agent`, `verified`, `featured`, `sort`, `limit`, `offset` |
+| GET | `/marketplace/v1/bots/:slug` | `GET /v1/bots/:slug` — full detail incl. `instructions`, `setupInstructions`, `shareCode` |
+| GET | `/marketplace/v1/categories` | `GET /v1/categories` |
+| GET | `/marketplace/v1/index` | `GET /v1/index` — when the library was last indexed |
+| POST | `/marketplace/v1/bots/:slug/installs` | `POST /v1/bots/:slug/installs` — anonymous install counter |
+
+Anything else under `/marketplace/` is 404. Errors from this service are shaped
+`{ "error": { "code", "message" } }`; when it cannot be reached gitbot answers
+`502 MARKETPLACE_UNAVAILABLE`. The upstream is `GITBOT_MARKETPLACE_API`.
 
 ## Sessions
 

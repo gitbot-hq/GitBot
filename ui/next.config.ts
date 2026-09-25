@@ -4,6 +4,9 @@ import type { NextConfig } from "next";
 // gitbot CLI bundles and serves itself — there is no Next server at runtime.
 const nextConfig: NextConfig = {
   output: "export",
+  // There is no Next server to run the image optimizer, so `next/image` must
+  // emit plain asset paths; otherwise it points at /_next/image and 404s.
+  images: { unoptimized: true },
   // This app lives in a subfolder of the CLI's repo, which has its own
   // lockfile. Pin the root here so Next doesn't guess the parent folder.
   outputFileTracingRoot: __dirname,
