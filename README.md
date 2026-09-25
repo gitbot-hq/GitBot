@@ -179,7 +179,7 @@ The folder where you run `gitbot start` becomes the workspace shown first in the
 | An imported bot needs an agent you don't have | Install that agent or change the bot's agent. |
 | The web UI has not been built | If running from source, run `npm run build`. |
 
-For implementation details, see the [API reference](docs/API.md), [architecture notes](docs/ARCHITECTURE.md), and [web UI guide](ui/README.md).
+For implementation details, see the [API reference](docs/API.md), [architecture notes](docs/ARCHITECTURE.md), [bot authoring prompt](docs/bot-author-prompt.md), and [web UI guide](ui/README.md).
 
 <br><br><br>
 

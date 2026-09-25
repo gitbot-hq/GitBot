@@ -112,11 +112,56 @@
   animation: marketplace-reveal 420ms 230ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.marketplace-benefit-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-5);
+  margin-top: var(--space-6);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+  animation: marketplace-reveal 420ms 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.marketplace-benefit-summary {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  color: var(--muted);
+  font-size: var(--market-text-meta);
+  line-height: 1.35;
+}
+
+.marketplace-benefit-summary strong {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--text);
+  font-size: var(--market-text-control);
+  font-weight: 600;
+}
+
+.marketplace-benefit-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--brand-sun);
+  background: color-mix(in srgb, var(--brand-sun) 14%, transparent);
+}
+
+.marketplace-benefit-icon.permissions { color: var(--brand-sky); background: color-mix(in srgb, var(--brand-sky) 14%, transparent); }
+.marketplace-benefit-icon.install { color: var(--brand-leaf); background: color-mix(in srgb, var(--brand-leaf) 14%, transparent); }
+
+.marketplace-benefits-section {
+  margin-top: clamp(80px, 10vh, 112px);
+}
+
 .marketplace-benefits {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-8);
-  margin-top: clamp(40px, 5vh, 56px);
+  margin-top: var(--space-6);
   padding: var(--space-8);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -151,7 +196,7 @@
 [data-theme="dark"] .marketplace-benefit-art.permissions { background-image: url("/marketplace/permissions-dark.webp"); }
 [data-theme="dark"] .marketplace-benefit-art.install { background-image: url("/marketplace/install-dark.webp"); }
 
-.marketplace-benefit h2 {
+.marketplace-benefit h3 {
   margin: var(--space-4) 0 0;
   font-size: var(--market-text-lead);
   font-weight: 600;
@@ -166,7 +211,7 @@
 }
 
 .marketplace-popular {
-  margin-top: clamp(96px, 12vh, 136px);
+  margin-top: clamp(72px, 9vh, 112px);
 }
 
 .marketplace-section-heading {
@@ -432,6 +477,7 @@
   .marketplace-mark-bot,
   .marketplace-hero h1,
   .marketplace-hero p,
+  .marketplace-benefit-strip,
   .marketplace-benefits,
   .marketplace-benefit,
   .marketplace-section-heading,
@@ -457,12 +503,17 @@
   .marketplace-benefits {
     grid-template-columns: 1fr;
     gap: var(--space-8);
-    margin-top: 40px;
+    margin-top: var(--space-5);
     padding: var(--space-6);
   }
 
+  .marketplace-benefit-strip {
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+  }
+
   .marketplace-popular {
-    margin-top: 80px;
+    margin-top: 64px;
   }
 
   .popular-bot-grid {
