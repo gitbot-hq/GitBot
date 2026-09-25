@@ -44,6 +44,12 @@ const GITBOT_TEAM_BOTS: PopularBot[] = [
   { name: "GitBot Release", description: "Turns merged work into polished release notes, ready to share.", author: "GitBot", authorPhoto: "/favicon-light.svg", body: "birdy-3", color: "var(--brand-sun)", activity: "success", verified: true },
 ];
 
+const MARKETPLACE_BENEFITS = [
+  { kind: "community", short: "Built for GitBot", summary: "Community-made helpers", title: "Community-built, GitBot-ready", description: "Useful helpers made by people who understand the work around a repo." },
+  { kind: "permissions", short: "Safe by default", summary: "Permissions stay in your hands", title: "Permissions you control", description: "New marketplace installs start with permission checks enabled." },
+  { kind: "install", short: "Ready in minutes", summary: "Add one without breaking flow", title: "Install in a few clicks", description: "Bring a new GitBot into your workspace without breaking your flow." },
+] as const;
+
 // 0.5s: One confident promise in generous space, followed by three quiet reasons to trust it.
 export default function MarketplacePage() {
   const marketplaceBodyRef = useRef<HTMLDivElement>(null);
@@ -147,24 +153,14 @@ export default function MarketplacePage() {
             <p>
               Explore each GitBot&apos;s instructions before making it your own.
             </p>
-          </section>
-
-          <section className="marketplace-benefits" aria-label="Marketplace benefits">
-            <article className="marketplace-benefit">
-              <span className="marketplace-benefit-art community" aria-hidden="true" />
-              <h2>Community-built, GitBot-ready</h2>
-              <p>Useful helpers made by people who understand the work around a repo.</p>
-            </article>
-            <article className="marketplace-benefit">
-              <span className="marketplace-benefit-art permissions" aria-hidden="true" />
-              <h2>Permissions you control</h2>
-              <p>New marketplace installs start with permission checks enabled.</p>
-            </article>
-            <article className="marketplace-benefit">
-              <span className="marketplace-benefit-art install" aria-hidden="true" />
-              <h2>Install in a few clicks</h2>
-              <p>Bring a new GitBot into your workspace without breaking your flow.</p>
-            </article>
+            <div className="marketplace-benefit-strip" aria-label="Marketplace benefits">
+              {MARKETPLACE_BENEFITS.map((benefit) => (
+                <div className="marketplace-benefit-summary" key={benefit.kind}>
+                  <span className={`marketplace-benefit-dot ${benefit.kind}`} aria-hidden="true" />
+                  <span><strong>{benefit.short}</strong>{benefit.summary}</span>
+                </div>
+              ))}
+            </div>
           </section>
 
           <section className="marketplace-popular" aria-labelledby="popular-bots-heading">
@@ -208,6 +204,24 @@ export default function MarketplacePage() {
                       <AnimatedActionIcon icon={ArrowUpRightIcon} size={16} aria-hidden="true" />
                     </button>
                   </div>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="marketplace-benefits-section" aria-labelledby="marketplace-benefits-heading">
+            <div className="marketplace-section-heading">
+              <div>
+                <h2 id="marketplace-benefits-heading">Built for your workspace</h2>
+                <p>Useful bots, clear permissions, and a quick path to getting started.</p>
+              </div>
+            </div>
+            <div className="marketplace-benefits">
+              {MARKETPLACE_BENEFITS.map((benefit) => (
+                <article className="marketplace-benefit" key={benefit.kind}>
+                  <span className={`marketplace-benefit-art ${benefit.kind}`} aria-hidden="true" />
+                  <h3>{benefit.title}</h3>
+                  <p>{benefit.description}</p>
                 </article>
               ))}
             </div>
