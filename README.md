@@ -83,7 +83,7 @@ Choose a repo when you start a thread. The bot runs its agent in that folder and
 
 With Claude Code or OpenCode, GitBot shows an approval card when a tool requires permission. Codex has no per-action approval channel, so its selected permission mode chooses a sandbox instead.
 
-![Approval request inside a GitBot conversation](assets/screenshots/approval.png)
+![A GitBot working through a task in a conversation](assets/screenshots/gitbot-working.gif)
 
 <br><br><br>
 

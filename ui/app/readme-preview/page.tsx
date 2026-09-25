@@ -14,7 +14,7 @@ export const metadata: Metadata = {
 const screenshots: Record<string, { width: number; height: number }> = {
   "assets/screenshots/hub.png": { width: 2880, height: 1800 },
   "assets/screenshots/bot-studio.png": { width: 2880, height: 1800 },
-  "assets/screenshots/approval.png": { width: 1200, height: 610 },
+  "assets/screenshots/gitbot-working.gif": { width: 1256, height: 720 },
   "assets/screenshots/create-menu.png": { width: 1044, height: 570 },
   "assets/screenshots/create-bot-form.png": { width: 2904, height: 1590 },
   "assets/screenshots/create-thread.png": { width: 2234, height: 1494 },
@@ -46,7 +46,7 @@ export default function ReadmePreview() {
               const imageSrc = src;
               const screenshot = screenshots[imageSrc];
               return screenshot
-                ? <Image src={`data:image/png;base64,${readFileSync(join(process.cwd(), "..", imageSrc)).toString("base64")}`} width={screenshot.width} height={screenshot.height} alt={alt ?? ""} unoptimized />
+                ? <Image src={`data:image/${imageSrc.endsWith(".gif") ? "gif" : "png"};base64,${readFileSync(join(process.cwd(), "..", imageSrc)).toString("base64")}`} width={screenshot.width} height={screenshot.height} alt={alt ?? ""} unoptimized />
                 : imageSrc === "ui/public/gitbot-logo.svg"
                   ? <img src={`/${imageSrc.split("/").at(-1)?.split("#")[0]}`} alt={alt ?? ""} />
                 : imageSrc.startsWith("https://img.shields.io/")
