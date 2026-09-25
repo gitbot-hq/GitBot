@@ -53,6 +53,14 @@ Open **http://localhost:3000** on your computer. GitBot prints a network address
 
 A bot is a reusable set of instructions for a coding agent. You decide what it does, which agent runs it, and what it may do without asking.
 
+<p align="center">
+  <img src="assets/mascots/ghost.gif" width="80" alt="Ghost GitBot mascot">
+  &nbsp;&nbsp;
+  <img src="assets/mascots/star.gif" width="80" alt="Star GitBot mascot">
+  &nbsp;&nbsp;
+  <img src="assets/mascots/cat.gif" width="80" alt="Cat GitBot mascot">
+</p>
+
 1. In the **Bots** panel, select **+** and then **Create manually**.
 2. Give the bot a **name** and a short **description** so you can recognize it later.
 3. Choose an installed **agent**. Write the bot's standing job in **Instructions**.
