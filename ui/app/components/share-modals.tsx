@@ -85,12 +85,9 @@ function Shell({
 
 export function CreateBotWithAgentModal({ onClose }: { onClose: () => void }) {
   const [copied, setCopied] = useState(false);
-  const [hubUrl, setHubUrl] = useState("http://localhost:3000");
   const promptRef = useRef<HTMLTextAreaElement>(null);
-  const prompt = botAuthorPromptLines.join("\n").replaceAll("{{GITBOT_URL}}", hubUrl);
+  const prompt = botAuthorPromptLines.join("\n");
   const scrollEdge = useScrollEdge(promptRef, prompt);
-
-  useEffect(() => setHubUrl(window.location.origin), []);
 
   async function copyPrompt() {
     try {
@@ -106,7 +103,7 @@ export function CreateBotWithAgentModal({ onClose }: { onClose: () => void }) {
   return (
     <Shell title="Create bot with an agent" onClose={onClose}>
       <div className="agent-create-content">
-        <p className="agent-create-intro">Copy this prompt into Claude Code, Codex, or OpenCode. The agent will ask a few questions, show the complete bot for review, and only add it after you approve.</p>
+        <p className="agent-create-intro">Copy this prompt into Claude Code, Codex, or OpenCode. The agent works out the bot with you, shows the complete definition for review, and only adds it after you approve.</p>
         <div className="field share-code-field agent-create-prompt">
           <label htmlFor="bot-author-prompt">Agent prompt<span className="share-code-format">Markdown</span></label>
           <div className="share-code-viewport">
@@ -128,7 +125,7 @@ export function CreateBotWithAgentModal({ onClose }: { onClose: () => void }) {
             <span className="share-privacy-icon" style={{ color: "var(--brand-sun)" }} aria-hidden="true">
               <AnimatedActionIcon icon={ShieldCheckIcon} size={22} />
             </span>
-            <p>The agent must show you the complete definition before adding it through your running GitBot.</p>
+            <p>The agent must show you the complete definition before it writes the bot. Refresh this page once it has.</p>
           </div>
           <button type="button" className="btn-primary share-copy-button" data-initial-focus data-copied={copied} onClick={copyPrompt} aria-label={copied ? "Prompt copied" : "Copy agent prompt"}>
             <span aria-hidden="true"><AnimatedActionIcon icon={CopyIcon} size={16} />Copy prompt</span>
