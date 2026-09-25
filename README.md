@@ -1,21 +1,22 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/cover/dark.webp">
-  <source media="(prefers-color-scheme: light)" srcset="assets/cover/light.webp">
-  <img alt="GitBot" src="assets/cover/light.webp">
-</picture>
+
 
 | [![GitBot](ui/public/gitbot-logo.svg)](#gitbot) | [Overview](#gitbot) · [Get running](#get-running) · [Create a bot](#create-your-first-bot) · [How it works](#how-gitbot-works) · [Share](#share-a-bot-or-submit-one-to-marketplace) · [Security](#security-and-privacy) |
 | :--- | ---: |
-
-<br><br><br>
-
-# GitBot
 
 [![npm version](https://img.shields.io/npm/v/%40gitbot-hq%2Fgitbot?style=flat-square&label=npm)](https://www.npmjs.com/package/@gitbot-hq/gitbot)
 [![npm downloads](https://img.shields.io/npm/dm/%40gitbot-hq%2Fgitbot?style=flat-square&label=downloads)](https://www.npmjs.com/package/@gitbot-hq/gitbot)
 [![Node.js 18+](https://img.shields.io/badge/node-%3E%3D18-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![MIT license](https://img.shields.io/github/license/gitbot-hq/GitBot?style=flat-square)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/gitbot-hq/GitBot?style=flat-square&logo=github)](https://github.com/gitbot-hq/GitBot/stargazers)
+
+<br>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/cover/dark.webp">
+  <source media="(prefers-color-scheme: light)" srcset="assets/cover/light.webp">
+  <img alt="GitBot" src="assets/cover/light.webp">
+</picture><br><br>
+
+
 
 Create a bot once. Put your coding agents to work across your repos.
 
