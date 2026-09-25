@@ -166,11 +166,17 @@ export function updateBot(id: string, patch: Partial<Bot>): Bot | undefined {
   // again. An explicit status in the patch is the caller's own call and stands.
   const had = !!before.setupInstructions?.trim();
   const has = !!merged.setupInstructions?.trim();
+  const setupAgentChanged =
+    has &&
+    before.setupStatus !== "complete" &&
+    (before.agent ?? DEFAULT_BOT_AGENT) !== (merged.agent ?? DEFAULT_BOT_AGENT);
   if (!has) {
     merged.setupStatus = undefined;
     merged.setupThreadId = undefined;
   } else if (rest.setupStatus === undefined) {
-    if (!had || merged.setupInstructions !== before.setupInstructions) merged.setupStatus = "pending";
+    if (!had || merged.setupInstructions !== before.setupInstructions || setupAgentChanged) {
+      merged.setupStatus = "pending";
+    }
   }
 
   bots[idx] = merged;
@@ -209,7 +215,9 @@ export function ensureSetupThread(botId: string, fallbackPath: string): Thread |
   if (!bot || !bot.setupInstructions?.trim()) return undefined;
 
   const existing = bot.setupThreadId ? getThread(bot.setupThreadId) : undefined;
-  if (existing) return existing;
+  const agent = bot.agent ?? DEFAULT_BOT_AGENT;
+  if (existing && (!existing.agent || existing.agent === agent)) return existing;
+  if (existing) deleteThread(existing.id);
 
   const thread = createThread(bot.id, bot.repoPath || fallbackPath, `Set up ${bot.name}`, "setup");
   updateBot(bot.id, { setupThreadId: thread.id, setupStatus: bot.setupStatus ?? "pending" });

@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { useEffect, useRef } from "react";
 import { ArrowRightIcon } from "@animateicons/react/lucide/arrow-right-icon";
 import AnimatedActionIcon from "./animated-action-icon";
@@ -55,15 +54,15 @@ const content = {
   },
   permissions: {
     title: "Choose how your bot works",
-    lead: "Permissions decide when your bot needs your approval to use tools. Choose a mode for each conversation before you send a message.",
+    lead: "Permissions control which actions run directly and which need your approval. The exact boundary depends on the agent behind your bot.",
     light: "/marketplace/learn-more-permissions-light.webp",
     dark: "/marketplace/learn-more-permissions-dark.webp",
     sections: [
-      { title: "Ask before tools", text: "Review each tool action before it runs. Choose this when you want to stay closely involved in the work." },
-      { title: "Auto-approve", text: "The bot can run tools without asking, including actions that may edit files or run commands. Use this only when you trust the bot and the task." },
-      { title: "Plan only", text: "The bot can explore the task and suggest an approach without making edits. Switch modes when you are ready for it to act." },
+      { title: "Ask when needed", text: "Safe actions can run without a prompt. Claude Code and OpenCode ask when a tool requires approval. Codex can read freely but asks before writing or crossing its read-only boundary." },
+      { title: "Allow more", text: "Allow edits skips approval for file edits in Claude Code and OpenCode. In Codex, Allow workspace edits also lets commands run inside the workspace sandbox; blocked access does not get an approval prompt. Run without asking grants Codex full access, so use it only for a trusted task." },
+      { title: "Plan or read only", text: "Claude Code and OpenCode can plan without edits. Codex uses a read-only sandbox: it can inspect and answer, but cannot write files. Read actions can still run." },
     ],
-    note: "A change applies to the next message in this conversation. It does not change the bot’s default or a reply already in progress.",
+    note: "A change stays in this conversation, not the bot default. Codex and Plan changes wait for the next message. Claude Code and OpenCode can also apply a broader mode to approvals already waiting in this reply.",
     back: "Back to conversation",
   },
 } as const;
@@ -114,8 +113,8 @@ export default function LearnMorePanel({ kind, onBack }: { kind: LearnMoreKind; 
       <PanelBack onClick={onBack} aria-label={item.back} />
       <div className="profile-pane-inner">
         {"light" in item && <>
-          <Image className="learn-more-cover-image light" src={item.light} alt="" width={1360} height={433} sizes="(max-width: 728px) calc(100vw - 48px), 680px" />
-          <Image className="learn-more-cover-image dark" src={item.dark} alt="" width={1360} height={433} sizes="(max-width: 728px) calc(100vw - 48px), 680px" />
+          <img className="learn-more-cover-image light" src={item.light} alt="" width={1360} height={433} />
+          <img className="learn-more-cover-image dark" src={item.dark} alt="" width={1360} height={433} />
         </>}
         <article className="learn-more-article">
           <header className="learn-more-head">

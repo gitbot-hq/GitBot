@@ -640,7 +640,8 @@ export default function V2() {
     const setupChanged =
       editing !== "new" &&
       editing != null &&
-      editing.setupInstructions !== saved.setupInstructions &&
+      (editing.setupInstructions !== saved.setupInstructions ||
+        (editing.agent || "claude-code") !== (saved.agent || "claude-code")) &&
       needsSetup(saved);
     setAvatarPref(saved.id, pref);
     setSwitchTo(null);
@@ -1178,6 +1179,7 @@ export default function V2() {
                 thread={activeThread}
                 botId={bot?.id}
                 botName={bot?.name ?? "bot"}
+                botAgent={bot?.agent}
                 botPermissionMode={bot?.permissionMode}
                 botAvatar={bot ? avatarFor(bot.id) : undefined}
                 autoSend={autoSend && autoSend.botId === bot?.id ? autoSend.prompt : null}

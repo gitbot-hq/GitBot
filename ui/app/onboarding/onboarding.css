@@ -7,11 +7,14 @@
 .ob-stack {
   flex: 1;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   display: grid;
 }
 
 .ob-pane {
   grid-area: 1 / 1;
+  min-height: 0;
   display: grid;
   grid-template-rows: 1fr;
   opacity: 1;
@@ -31,6 +34,7 @@
 .ob-pane-inner > .onboarding,
 .ob-pane-inner > .form-pane {
   height: 100%;
+  min-height: 0;
 }
 
 .ob-pane.ob-hide {

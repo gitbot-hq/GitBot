@@ -1173,33 +1173,6 @@ pre {
   cursor: pointer;
 }
 
-.perm-card {
-  display: grid;
-  gap: var(--space-2);
-  max-width: 65ch;
-  padding: var(--space-3) var(--space-4);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  font-size: var(--text-sm);
-}
-
-.perm-card pre {
-  margin: 0;
-  max-height: 160px;
-  overflow: auto;
-  padding: var(--space-2) var(--space-3);
-  background: var(--surface-2);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-}
-
-.perm-acts {
-  display: flex;
-  gap: var(--space-2);
-}
-
 .perm-note {
   color: var(--muted);
   font-size: var(--text-sm);
@@ -1242,6 +1215,117 @@ pre {
 
 .composer-pill textarea:disabled {
   opacity: 0.6;
+}
+
+.composer-permission-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3) var(--space-4);
+  padding: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.18);
+  animation: msg-in 250ms var(--ease-out);
+}
+
+.composer-permission-card-copy {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.composer-permission-card-copy > span:last-child { display: grid; gap: 2px; }
+.composer-permission-card-copy b { font-size: var(--text-md); font-weight: 600; }
+.composer-permission-card-copy small { color: var(--muted); font-size: var(--text-sm); }
+
+.composer-permission-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  color: var(--text);
+  background: var(--surface-2);
+  border-radius: 50%;
+}
+
+.composer-permission-details {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.composer-permission-details-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.composer-permission-details-trigger:hover { color: var(--text); }
+.composer-permission-details-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.composer-permission-details-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    grid-template-rows 220ms var(--ease-out),
+    opacity 160ms var(--ease-out),
+    visibility 0s linear 220ms;
+}
+
+.composer-permission-details-body.open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    grid-template-rows 220ms var(--ease-out),
+    opacity 160ms var(--ease-out),
+    visibility 0s;
+}
+
+.composer-permission-details-clip { min-height: 0; overflow: hidden; }
+
+.composer-permission-details pre {
+  max-height: 180px;
+  margin: var(--space-2) 0 0;
+  overflow: auto;
+  padding: var(--space-3);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.composer-permission-actions {
+  display: flex;
+  grid-column: 2;
+  grid-row: 1;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.composer-permission-stop { white-space: nowrap; }
+
+@media (max-width: 600px) {
+  .composer-permission-card { grid-template-columns: 1fr; }
+  .composer-permission-actions {
+    grid-column: 1;
+    grid-row: auto;
+    flex-wrap: wrap;
+  }
+  .composer-permission-stop { margin-left: auto; }
 }
 
 .composer-permissions { position: relative; justify-self: start; min-width: 0; }
@@ -3345,15 +3429,10 @@ button.file-chip:hover {
   color: var(--text);
 }
 
-/* Approval card entrance */
-.perm-card {
-  animation: msg-in 250ms var(--ease-out);
-}
-
 /* Press feedback */
 .send-btn,
 .collapse-btn,
-.perm-acts button {
+.composer-permission-actions button {
   transition:
     background var(--duration-fast) var(--ease-out),
     color var(--duration-fast) var(--ease-out),
@@ -3363,7 +3442,7 @@ button.file-chip:hover {
 
 .send-btn:active,
 .collapse-btn:active,
-.perm-acts button:active {
+.composer-permission-actions button:active {
   transform: scale(0.96);
 }
 
@@ -3451,7 +3530,7 @@ button.file-chip:hover {
   .px-cell,
   .tool-chip,
   .msg-in,
-  .perm-card,
+  .composer-permission-card,
   .fade-in {
     animation: none;
   }
