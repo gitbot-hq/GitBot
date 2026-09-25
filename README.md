@@ -196,6 +196,7 @@ To report a vulnerability, please open a [GitHub issue](https://github.com/gitbo
 
 - [API reference](docs/API.md) — the REST + SSE API the hub uses, for building your own client
 - [Architecture](docs/ARCHITECTURE.md) — how the server, sessions and agent integrations fit together
+- [Bot authoring prompt](docs/bot-author-prompt.md) — paste into any coding agent to have it interview you and write a bot; works without a running hub
 - [Web UI](ui/README.md) — the Next.js app in `ui/`
 
 ## Development
