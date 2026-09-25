@@ -47,6 +47,8 @@ export default function ReadmePreview() {
               const screenshot = screenshots[imageSrc];
               return screenshot
                 ? <Image src={`data:image/png;base64,${readFileSync(join(process.cwd(), "..", imageSrc)).toString("base64")}`} width={screenshot.width} height={screenshot.height} alt={alt ?? ""} unoptimized />
+                : imageSrc.startsWith("ui/public/gitbot-logo-")
+                  ? <img src={`/${imageSrc.split("/").at(-1)?.split("#")[0]}`} alt={alt ?? ""} />
                 : imageSrc.startsWith("https://img.shields.io/")
                   ? <img src={imageSrc} alt={alt ?? ""} />
                   : <span role="img" aria-label={alt ?? "Image to add"}>{alt ?? "Image to add"}</span>;
