@@ -144,7 +144,7 @@ The folder you run `gitbot start` in is the **workspace**: its subfolders show u
 | Approve / deny each tool call | ✅ | ✅ | ❌ sandbox instead |
 | Switch permission mode mid-turn | ✅ | ✅ | from the next turn |
 | Allowed / disallowed tools | ✅ incl. MCP tools | ✅ | ❌ not supported |
-| Model | optional, default `claude-sonnet-4-6` | **required**, as `provider/model` | optional |
+| Model | optional, resolved by Claude Code | **required**, as `provider/model` | optional |
 
 - **Claude Code** loads your Claude settings, so bots can use the MCP servers you have configured.
 - **OpenCode** bots need a model in `provider/model` form. Run `opencode models` to see the ones your install can actually reach, and pick from that list — naming a provider you are not set up for fails with *"Model not found"*. OpenCode's free default model refuses requests that do not come from OpenCode itself, so the field cannot be left blank.

@@ -22,6 +22,7 @@
     "build:cli": "tsc",
     "postbuild:cli": "node -e \"require('fs').chmodSync('dist/index.js',0o755)\"",
     "build:ui": "node scripts/build-ui.mjs",
+    "test": "npm run build:cli && node --test \"scripts/*.test.mjs\"",
     "dev": "tsx src/index.ts",
     "postinstall": "node scripts/postinstall.mjs || exit 0",
     "prepublishOnly": "npm run build"
