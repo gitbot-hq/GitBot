@@ -43,7 +43,6 @@
 .prose > table:first-child th:first-child { width: 112px; }
 .prose > table:first-child th:last-child { text-align: right; }
 .prose > table:first-child img { width: 112px; margin: 0; border: 0; border-radius: 0; }
-.prose > table:first-child img[src*="gitbot-logo-light"] { display: none; }
 .prose > pre:first-of-type { margin-bottom: 66px; }
 .prose h1 + p + p { max-width: 720px; font-size: 20px; line-height: 1.5; }
 .prose h1 + p + p + p { max-width: 720px; }
@@ -71,9 +70,4 @@
   .prose { font-size: 15px; }
   .prose h2 { margin-top: 56px; }
   .prose blockquote { padding: 14px 16px; }
-}
-
-@media (prefers-color-scheme: light) {
-  .prose > table:first-child img[src*="gitbot-logo-light"] { display: block; }
-  .prose > table:first-child img[src*="gitbot-logo-dark"] { display: none; }
 }

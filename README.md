@@ -1,4 +1,4 @@
-| [![GitBot](ui/public/gitbot-logo-light.svg#gh-light-mode-only)](#gitbot) [![GitBot](ui/public/gitbot-logo-dark.svg#gh-dark-mode-only)](#gitbot) | [Overview](#gitbot) · [Get running](#get-running) · [Create a bot](#create-your-first-bot) · [How it works](#how-gitbot-works) · [Share](#share-a-bot-or-submit-one-to-marketplace) · [Security](#security-and-privacy) |
+| [![GitBot](ui/public/gitbot-logo.svg)](#gitbot) | [Overview](#gitbot) · [Get running](#get-running) · [Create a bot](#create-your-first-bot) · [How it works](#how-gitbot-works) · [Share](#share-a-bot-or-submit-one-to-marketplace) · [Security](#security-and-privacy) |
 | :--- | ---: |
 
 <br><br>
