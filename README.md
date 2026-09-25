@@ -1,3 +1,9 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/cover/dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="assets/cover/light.png">
+  <img alt="GitBot" src="assets/cover/light.png">
+</picture>
+
 | [![GitBot](ui/public/gitbot-logo.svg)](#gitbot) | [Overview](#gitbot) · [Get running](#get-running) · [Create a bot](#create-your-first-bot) · [How it works](#how-gitbot-works) · [Share](#share-a-bot-or-submit-one-to-marketplace) · [Security](#security-and-privacy) |
 | :--- | ---: |
 
