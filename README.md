@@ -1,7 +1,7 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/cover/dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/cover/light.png">
-  <img alt="GitBot" src="assets/cover/light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/cover/dark.webp">
+  <source media="(prefers-color-scheme: light)" srcset="assets/cover/light.webp">
+  <img alt="GitBot" src="assets/cover/light.webp">
 </picture>
 
 | [![GitBot](ui/public/gitbot-logo.svg)](#gitbot) | [Overview](#gitbot) · [Get running](#get-running) · [Create a bot](#create-your-first-bot) · [How it works](#how-gitbot-works) · [Share](#share-a-bot-or-submit-one-to-marketplace) · [Security](#security-and-privacy) |
@@ -27,7 +27,7 @@ npm install -g @gitbot-hq/gitbot
 
 <br><br>
 
-![GitBot workspace with bots, threads, and a conversation](assets/screenshots/hub.png)
+![GitBot workspace with bots, threads, and a conversation](assets/screenshots/hub.webp)
 
 <br><br><br>
 
@@ -60,11 +60,11 @@ Open **http://localhost:3000** on your computer. GitBot prints a network address
 A bot is a reusable set of instructions for a coding agent. You decide what it does, which agent runs it, and what it may do without asking.
 
 <p align="center">
-  <img src="assets/mascots/ghost.gif" width="80" alt="Ghost GitBot mascot">
+  <img src="assets/mascots/ghost.webp" width="80" alt="Ghost GitBot mascot">
   &nbsp;&nbsp;
-  <img src="assets/mascots/star.gif" width="80" alt="Star GitBot mascot">
+  <img src="assets/mascots/star.webp" width="80" alt="Star GitBot mascot">
   &nbsp;&nbsp;
-  <img src="assets/mascots/cat.gif" width="80" alt="Cat GitBot mascot">
+  <img src="assets/mascots/cat.webp" width="80" alt="Cat GitBot mascot">
 </p>
 
 1. In the **Bots** panel, select **+** and then **Create manually**.
@@ -85,7 +85,7 @@ The instructions give the bot its job. Your message gives it today's task. A thr
 
 | Choose how to create | Define the bot | Start a thread |
 | --- | --- | --- |
-| ![Create, generate, or import a bot from the Bots panel](assets/screenshots/create-menu.png) | ![Create a bot with its name, agent, instructions, permissions, and mascot](assets/screenshots/create-bot-form.png) | ![Choose a workspace and agent for a new thread](assets/screenshots/create-thread.png) |
+| ![Create, generate, or import a bot from the Bots panel](assets/screenshots/create-menu.webp) | ![Create a bot with its name, agent, instructions, permissions, and mascot](assets/screenshots/create-bot-form.webp) | ![Choose a workspace and agent for a new thread](assets/screenshots/create-thread.webp) |
 
 You can also choose **Create with an agent** and give an installed agent the guided authoring prompt, or **Import bot** if someone has shared a code with you. In both cases, review the bot's instructions and permissions before you let it work.
 
@@ -97,7 +97,7 @@ Choose a repo when you start a thread. The bot runs its agent in that folder and
 
 With Claude Code or OpenCode, GitBot shows an approval card when a tool requires permission. Codex has no per-action approval channel, so its selected permission mode chooses a sandbox instead.
 
-![A GitBot working through a task in a conversation](assets/screenshots/gitbot-working.gif)
+![A GitBot working through a task in a conversation](assets/screenshots/gitbot-working.webp)
 
 <br><br><br>
 
@@ -128,7 +128,7 @@ Prefer to submit a listing yourself? Open the [GitBot Library publishing guide](
 
 | Choose how to share | Share with code | Publish to Marketplace |
 | --- | --- | --- |
-| ![Share a bot with a code or publish it to Marketplace](assets/screenshots/share-menu.png) | ![Share a bot using its generated code](assets/screenshots/share-code.png) | ![Publish a bot to Marketplace with an agent or manually](assets/screenshots/publish-marketplace.png) |
+| ![Share a bot with a code or publish it to Marketplace](assets/screenshots/share-menu.webp) | ![Share a bot using its generated code](assets/screenshots/share-code.webp) | ![Publish a bot to Marketplace with an agent or manually](assets/screenshots/publish-marketplace.webp) |
 
 <br><br><br>
 
