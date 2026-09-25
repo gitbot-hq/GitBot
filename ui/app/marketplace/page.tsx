@@ -23,10 +23,8 @@ import ProfilePanelOverlay from "../components/profile-panel-overlay";
 import LearnMorePanel from "../components/learn-more-panel";
 import MarketplaceMascot from "../components/marketplace-mascot";
 import MarketplaceBotDetails from "../components/marketplace-bot-details";
-import { ShareModal } from "../components/share-modals";
+import { PublishToMarketplaceModal } from "../components/share-modals";
 import { useToast } from "../components/toast";
-import { getBots } from "../lib/api";
-import type { Bot } from "../lib/gitbot";
 import type { BotActivity } from "../components/bot-maker/registry";
 import { listMarketplaceBots, MarketplaceError, type MarketplaceBotCard, type MarketplaceCategory } from "../lib/marketplace";
 
@@ -139,22 +137,14 @@ export default function MarketplacePage() {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<MarketplaceCategory | null>(null);
   const pendingDeepLink = useRef<string | null>(null);
-  const [publishBots, setPublishBots] = useState<Bot[]>([]);
   const [publishOpen, setPublishOpen] = useState(false);
   const { toast, view: toastView } = useToast();
 
   function openPublish() {
-    getBots().then(({ bots }) => {
-      if (!bots.length) {
-        toast("Create a bot before publishing to Marketplace.");
-        return;
-      }
-      closeBot();
-      setLearnMoreOpen(false);
-      setUserOpen(false);
-      setPublishBots(bots);
-      setPublishOpen(true);
-    }, (error) => toast(error instanceof Error ? error.message : "Could not load your bots"));
+    closeBot();
+    setLearnMoreOpen(false);
+    setUserOpen(false);
+    setPublishOpen(true);
   }
 
   const loadBots = useCallback(() => {
@@ -438,9 +428,7 @@ export default function MarketplacePage() {
       <div className={`chat-scroll-edge chat-scroll-edge-bottom${scrollEdge === "bottom" && !userOpen && !learnMoreOpen ? " is-visible" : ""}`} aria-hidden="true" />
       </div>
       <MarketplaceBotDetails bot={selectedBot} open={detailsOpen} onClose={closeBot} />
-      {publishOpen && publishBots[0] && (
-        <ShareModal bot={publishBots[0]} bots={publishBots} initialView="publish" onClose={() => setPublishOpen(false)} />
-      )}
+      {publishOpen && <PublishToMarketplaceModal onClose={() => setPublishOpen(false)} />}
       {toastView}
     </div>
   );
