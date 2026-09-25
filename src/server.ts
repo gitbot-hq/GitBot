@@ -26,7 +26,7 @@ import {
   type BotPreset,
 } from "./server-common";
 import { initAgent as initClaudeCode, runAgent as runClaudeCode, listSessions as listClaudeSessions, loadTranscript } from "./start-claude-code";
-import { initAgent as initOpencode, runAgent as runOpencode, listSessions as listOpencodeSessions, getSessionHistory, abortSession as opencodeAbort, respondPermission as opencodePermission } from "./start-opencode";
+import { initAgent as initOpencode, stopAgent as stopOpencode, runAgent as runOpencode, listSessions as listOpencodeSessions, getSessionHistory, abortSession as opencodeAbort, respondPermission as opencodePermission } from "./start-opencode";
 import { initAgent as initCodex, runAgent as runCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
 import { handleBotRoutes } from "./bot-routes";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
@@ -501,7 +501,9 @@ export async function start(network: string = "local", portOverride?: number, ca
     handleRequest(req as unknown as IRequest, res as unknown as IResponse, availableAgents, workspaceCwd);
   });
 
+  process.on("exit", stopOpencode);
   setupShutdown(() => {
+    stopOpencode();
     server.close(() => process.exit(0));
   }, caffeinatePid);
 }

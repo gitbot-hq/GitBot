@@ -29,6 +29,14 @@ const resolveInflight = new Map<string, Promise<SessionStore | undefined>>();
 
 let sdkLoaded: any = null;
 
+// Where the SDK's createOpencode starts its server.
+const OPENCODE_URL = "http://127.0.0.1:4096";
+
+// The server createOpencode spawned. It is not detached, but it outlives gitbot
+// whenever gitbot exits without passing on a signal, and every later start then
+// finds the port taken — so gitbot stops it on the way out.
+let spawnedServer: { close(): void } | null = null;
+
 const permissionConfig = {
   edit: "ask",
   bash: "ask",
@@ -58,28 +66,63 @@ export async function initAgent(): Promise<boolean> {
 
   sdkLoaded = loaded;
 
+  // An opencode server already on the port — the user's own `opencode serve`,
+  // or another gitbot's — is used as is. Spawning over it only fails with
+  // "Failed to start server on port 4096" and a dump of opencode's output.
+  const running = await runningServerVersion();
+  if (running !== null) {
+    console.log(`  opencode: using the server already running on ${OPENCODE_URL}${running ? ` (opencode ${running})` : ""}`);
+    return true;
+  }
+
   try {
     const result = await loaded.createOpencode({ config: { permission: permissionConfig } });
+    spawnedServer = result.server;
     // Seed the default client (no directory) from the spawned server's client
     clientsByDir.set("", result.client);
     console.log("  opencode: ready");
   } catch (err: any) {
-    // Not fatal, and deliberately not `return false`: the usual cause is that
-    // something already holds port 4096 — a second gitbot, or the user's own
-    // `opencode serve` — and getClientForDir talks to that server quite happily.
-    // Disabling the agent here would turn a working opencode into a missing one.
-    // When the port is dead instead, this line is the only clue the turn leaves.
-    console.warn(`  opencode: could not start a server (${err?.message ?? err}) — falling back to an existing one on 127.0.0.1:4096`);
+    // Not fatal, and deliberately not `return false`: getClientForDir retries
+    // the port on every turn, so a server started later still gets used.
+    // Only the first line: the rest is opencode's own startup output.
+    const reason = String(err?.message ?? err).split("\n")[0];
+    console.warn(`  opencode: could not start a server on ${OPENCODE_URL} (${reason}) — opencode turns will fail until one is running`);
   }
 
   return true;
+}
+
+/** Stops the opencode server this gitbot started, if it started one. */
+export function stopAgent(): void {
+  spawnedServer?.close();
+  spawnedServer = null;
+}
+
+/**
+ * The version of the opencode server answering on the port: "" when it answers
+ * without saying, null when nothing answers.
+ */
+async function runningServerVersion(): Promise<string | null> {
+  try {
+    const res = await fetch(`${OPENCODE_URL}/config`, { signal: AbortSignal.timeout(1000) });
+    if (!res.ok) return null;
+  } catch {
+    return null;
+  }
+  try {
+    const res = await fetch(`${OPENCODE_URL}/global/health`, { signal: AbortSignal.timeout(1000) });
+    const health = (await res.json()) as { version?: string };
+    return health.version ?? "";
+  } catch {
+    return "";
+  }
 }
 
 async function getClientForDir(directory: string): Promise<any> {
   if (clientsByDir.has(directory)) return clientsByDir.get(directory);
 
   const { createOpencodeClient } = sdkLoaded;
-  const client = createOpencodeClient({ baseUrl: "http://127.0.0.1:4096", directory });
+  const client = createOpencodeClient({ baseUrl: OPENCODE_URL, directory });
   clientsByDir.set(directory, client);
 
   try {
