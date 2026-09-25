@@ -79,7 +79,7 @@ export function parseShare(text: string): Record<string, unknown> | null {
   ["emoji", "description", "instructions", "setupInstructions", "model"].forEach((k) => {
     if (typeof obj[k] === "string") bot[k] = obj[k];
   });
-  if (["claude-code", "opencode", "codex"].indexOf(obj.agent as string) !== -1) {
+  if (["claude-code", "opencode", "codex", "grok"].indexOf(obj.agent as string) !== -1) {
     bot.agent = obj.agent;
   }
   if (["ask-permissions", "auto-approve", "plan"].indexOf(obj.permissionMode as string) !== -1) {

@@ -31,6 +31,7 @@ const AGENT_OPTIONS = [
   { id: "claude-code", label: "Claude Code" },
   { id: "codex", label: "Codex" },
   { id: "opencode", label: "OpenCode" },
+  { id: "grok", label: "Grok" },
 ] as const;
 
 // New-thread folder picker as a slide-over panel. This mirrors
@@ -278,7 +279,7 @@ export default function ThreadPanel({
               );
             })}
           </div>
-          {installed?.length === 0 && <p className="field-warn">Install Claude Code, Codex, or OpenCode to create a thread.</p>}
+          {installed?.length === 0 && <p className="field-warn">Install Claude Code, Codex, OpenCode, or the Grok CLI to create a thread.</p>}
         </section>
 
         <footer className="pick-acts">

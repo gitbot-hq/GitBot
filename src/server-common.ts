@@ -5,6 +5,7 @@ import http from "node:http";
 import { EventEmitter } from "events";
 import qrcode from "qrcode-terminal";
 import { serveUiFile, uiAvailable, uiFileFor } from "./static-ui";
+import type { BotAgent } from "./bot-store";
 import { listRepos, cloneRepo, createFolder, listDir, readFile, getRepoDetails, browseDirs } from "./workspace";
 
 // --- Transport abstractions ---
@@ -180,10 +181,11 @@ export type PermissionMode = "ask-permissions" | "allow-all-edits" | "yolo";
 
 export const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
 
-export const TOOL_BLACKLIST: Record<"claude-code" | "opencode" | "codex", Set<string>> = {
+export const TOOL_BLACKLIST: Record<BotAgent, Set<string>> = {
   "claude-code": new Set(["ExitPlanMode", "AskUserQuestion"]),
   "opencode": new Set(),
   "codex": new Set(),
+  "grok": new Set(),
 };
 
 /**
@@ -200,7 +202,7 @@ export const TOOL_BLACKLIST: Record<"claude-code" | "opencode" | "codex", Set<st
  */
 export function botPermissionToSession(
   botMode: "ask-permissions" | "auto-approve" | "plan",
-  agent: "claude-code" | "opencode" | "codex"
+  agent: BotAgent
 ): { permissionMode: PermissionMode; mode?: "plan" | "build" } {
   switch (botMode) {
     case "auto-approve": return { permissionMode: "yolo" };
@@ -210,7 +212,7 @@ export function botPermissionToSession(
 }
 
 export function shouldAutoApprove(
-  agent: "claude-code" | "opencode" | "codex",
+  agent: BotAgent,
   toolName: string,
   mode: PermissionMode
 ): boolean {
@@ -224,7 +226,7 @@ export function shouldAutoApprove(
 export interface SessionStore {
   gitbotId: string;
   sdkSessionId: string | null;
-  agent: "claude-code" | "opencode" | "codex";
+  agent: BotAgent;
   repoPath: string;
   model?: string;
   mode?: "plan" | "build";
@@ -265,7 +267,7 @@ export const permissionsEmitter = new EventEmitter();
 export interface PermissionDumpItem {
   sessionId: string;
   sdkSessionId: string | null;
-  agent: "claude-code" | "opencode" | "codex";
+  agent: BotAgent;
   repoPath: string;
   repoName: string;
   toolUseID: string;
@@ -315,7 +317,7 @@ export function notifyPermissionsChanged(): void {
 
 export function createSession(
   gitbotId: string,
-  agent: "claude-code" | "opencode" | "codex",
+  agent: BotAgent,
   repoPath: string,
   model?: string,
   mode?: SessionStore["mode"],

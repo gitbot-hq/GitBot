@@ -18,7 +18,7 @@ The workspace is the directory `gitbot start` was run in. Repos are its subdirec
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/health` | `{ status: "ok", cwd, serverVersion, clientVersionRange }` |
-| `GET` | `/agents` | `{ agents: string[] }` — the agents installed on this machine, in order of preference. Values: `claude-code`, `opencode`, `codex` |
+| `GET` | `/agents` | `{ agents: string[] }` — the agents installed on this machine, in order of preference. Values: `claude-code`, `opencode`, `codex`, `grok` |
 | `GET` | `/repos` | Subdirectories of the workspace as `{ name, path, isGit }[]` |
 | `GET` | `/repos/details?repoPath=<path>` | `{ branch, lastCommit, dominantLanguage }`. `lastCommit` has the message, hash and timestamp; `dominantLanguage` is the most common file extension from `git ls-files`, so it respects `.gitignore` |
 | `POST` | `/repos/clone` | Clone a git repo into the workspace. Body: `{ url }`. Returns `{ path, name }` |
@@ -47,7 +47,7 @@ A bot is a named, reusable agent preset.
 |---|---|---|
 | `name` | string | Required |
 | `description`, `emoji` | string | Shown in the hub |
-| `agent` | `claude-code` \| `opencode` \| `codex` | Which agent runs the bot. Default `claude-code`. Any other value is a `400` |
+| `agent` | `claude-code` \| `opencode` \| `codex` \| `grok` | Which agent runs the bot. Default `claude-code`. Any other value is a `400` |
 | `instructions` | string | The bot's job. Sent to the agent on top of its own system prompt |
 | `setupInstructions` | string | What the bot needs from a machine. Blank means no setup run. See [setup](../README.md#bots-set-themselves-up) |
 | `model` | string | Optional. OpenCode needs `provider/model` — run `opencode models` for the values that install accepts |

@@ -147,30 +147,31 @@ you would pick from the job we just agreed, then put the choices to me in one pa
 recommendation marked on each. If I say "use your judgement", take the defaults below, tell me what
 you chose in one line, and move on — do not ask again.
 
-**Agent** — one of `claude-code`, `opencode`, `codex`. First run `command -v claude`,
-`command -v opencode`, and `command -v codex`. Only offer agents whose command is installed.
+**Agent** — one of `claude-code`, `opencode`, `codex`, `grok`. First run `command -v claude`,
+`command -v opencode`, `command -v codex`, and `command -v grok`. Only offer agents whose command is installed.
 Default to `claude-code` when available, otherwise the first installed agent. If none are installed,
 stop and tell me instead of writing a bot that cannot run. The differences that matter:
 
-| | `claude-code` | `opencode` | `codex` |
-|---|---|---|---|
-| Approve each tool call | yes | yes | no — sandbox instead |
-| Tool allow/deny lists | yes, incl. MCP tools | yes | **not supported** |
-| Model | optional | **required**, as `provider/model` | optional |
+| | `claude-code` | `opencode` | `codex` | `grok` |
+|---|---|---|---|---|
+| Approve each tool call | yes | yes | no — sandbox instead | no — reads run, writes are refused unless auto-approve |
+| Tool allow/deny lists | yes, incl. MCP tools | yes | **not supported** | yes, as `--tools` and `--disallowed-tools` |
+| Model | optional | **required**, as `provider/model` | optional | optional. `grok models` lists ids |
 
-If the bot depends on a tool fence or on per-call approval, do not put it on `codex`.
+If the bot depends on a tool fence or on per-call approval, do not put it on `codex`. If it depends on per-call approval, do not put it on `grok` either.
 
 **Permission mode** — exactly one of:
 
 - `ask-permissions` — the agent asks before each tool call. The safe default; use it for anything
   that writes. **On `codex` this does not ask** — codex has no approval channel, so the bot instead
   gets a sandbox that may edit the workspace. Do not rely on this mode as the thing standing between
-  a codex bot and my files.
+  a codex bot and my files. **On `grok` this does not ask either** — a headless turn allows reads and
+  refuses writes. Use `auto-approve` when a grok bot must edit files.
 - `auto-approve` — the agent acts without asking. Only for bots I have said I trust, and prefer to
   pair it with a tool fence.
 - `plan` — the agent may read and think but not edit. Right for reviewers, auditors, explainers.
 
-**Model** — leave unset for `claude-code` (it defaults sensibly) and for `codex`. **Required** for
+**Model** — leave unset for `claude-code` (it defaults sensibly), for `codex`, and for `grok` unless a `grok models` id was chosen. **Required** for
 `opencode`, in `provider/model` form. Do not guess one: run `opencode models` and pick a value from
 that list, because a provider I am not configured for fails at the first turn with "Model not
 found". Ask me which to use if the list has several plausible options.

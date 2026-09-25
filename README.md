@@ -20,7 +20,7 @@
 
 Create a bot once. Put your coding agents to work across your repos.
 
-GitBot runs Claude Code, Codex, or OpenCode on your machine and gives each agent a reusable job, a place to work, and a conversation you can return to. You stay in control of its permissions.
+GitBot runs Claude Code, Codex, OpenCode, or the Grok CLI on your machine and gives each agent a reusable job, a place to work, and a conversation you can return to. You stay in control of its permissions.
 
 ```bash
 npm install -g @gitbot-hq/gitbot
@@ -41,6 +41,7 @@ You'll need Node.js 18 or newer and at least one installed, signed-in coding age
 | Claude Code | Install and sign in to the `claude` CLI. |
 | Codex | Install the `codex` CLI and run `codex login`. |
 | OpenCode | Install the `opencode` CLI and configure a provider with `opencode auth login`. |
+| Grok CLI | Install and sign in to the `grok` CLI. |
 
 Install GitBot, then start it from the folder that holds your projects:
 
@@ -71,7 +72,7 @@ A bot is a reusable set of instructions for a coding agent. You decide what it d
 1. In the **Bots** panel, select **+** and then **Create manually**.
 2. Give the bot a **name** and a short **description** so you can recognize it later.
 3. Choose an installed **agent**. Write the bot's standing job in **Instructions**.
-4. Leave **Permissions** on **Ask before each tool** for Claude Code or OpenCode. For Codex, **Edit in the working directory** allows edits inside the selected folder; choose **Plan only** for read-only exploration. Add **Setup instructions** only if the bot needs to check or prepare something once on this machine.
+4. Leave **Permissions** on **Ask before each tool** for Claude Code or OpenCode. For Codex, **Edit in the working directory** allows edits inside the selected folder; choose **Plan only** for read-only exploration. For the Grok CLI, **Ask before each tool** allows reads and refuses writes, because a headless turn cannot show an approval; **Auto-approve tools** is what allows edits. Add **Setup instructions** only if the bot needs to check or prepare something once on this machine.
 5. Select **Create bot**. Open a new thread, choose the repo folder, and send your first message.
 
 For a first bot, try instructions like these:
@@ -107,7 +108,7 @@ With Claude Code or OpenCode, GitBot shows an approval card when a tool requires
 GitBot is a local server between your browser and the coding agents already installed on your machine:
 
 ```text
-Browser  ->  GitBot on your machine  ->  Claude Code, Codex, or OpenCode
+Browser  ->  GitBot on your machine  ->  Claude Code, Codex, OpenCode, or Grok
                   |                              |
                   +-- bots and threads           +-- works in your repo
 ```

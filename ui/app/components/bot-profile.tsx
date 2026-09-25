@@ -12,6 +12,7 @@ const AGENT_LABELS: Record<string, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
   opencode: "OpenCode",
+  grok: "Grok",
 };
 
 const PERMISSION_LABELS: Record<string, string> = {
@@ -27,9 +28,20 @@ const CODEX_PERMISSION_LABELS: Record<string, string> = {
   plan: "Plan only",
 };
 
+// Headless `grok -p` cannot ask the hub, so Ask refuses writes instead of prompting.
+const GROK_PERMISSION_LABELS: Record<string, string> = {
+  "ask-permissions": "Read only. Writes are refused",
+  "auto-approve": "Auto-approve tools",
+  plan: "Plan only",
+};
+
 function permissionLabel(mode: string | undefined, agent: string | undefined): string {
   if (!mode) return "—";
-  const labels = agent === "codex" ? CODEX_PERMISSION_LABELS : PERMISSION_LABELS;
+  const labels = agent === "codex"
+    ? CODEX_PERMISSION_LABELS
+    : agent === "grok"
+      ? GROK_PERMISSION_LABELS
+      : PERMISSION_LABELS;
   return labels[mode] ?? mode;
 }
 

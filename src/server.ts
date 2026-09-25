@@ -28,9 +28,10 @@ import {
 import { initAgent as initClaudeCode, runAgent as runClaudeCode, listSessions as listClaudeSessions, loadTranscript } from "./start-claude-code";
 import { initAgent as initOpencode, stopAgent as stopOpencode, runAgent as runOpencode, listSessions as listOpencodeSessions, getSessionHistory, abortSession as opencodeAbort, respondPermission as opencodePermission } from "./start-opencode";
 import { initAgent as initCodex, runAgent as runCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
+import { initAgent as initGrok, runAgent as runGrok, listSessions as listGrokSessions, loadTranscript as loadGrokTranscript } from "./start-grok";
 import { handleBotRoutes } from "./bot-routes";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
-import { getBot, getThread, touchThread, updateThread, botNeedsSetup, DEFAULT_BOT_AGENT } from "./bot-store";
+import { getBot, getThread, touchThread, updateThread, botNeedsSetup, DEFAULT_BOT_AGENT, isBotAgent } from "./bot-store";
 import { botPermissionToSession } from "./server-common";
 import { uiFileFor } from "./static-ui";
 
@@ -72,7 +73,7 @@ export async function handleRequest(
     // GET /sessions
     if (method === "GET" && path === "/sessions") {
       const repoPath = query.repoPath ?? workspaceCwd;
-      const agent = query.agent as "claude-code" | "opencode" | "codex" | undefined;
+      const agent = query.agent as "claude-code" | "opencode" | "codex" | "grok" | undefined;
 
       if (!agent || agent === "claude-code") {
         const list = await listClaudeSessions(repoPath);
@@ -89,6 +90,11 @@ export async function handleRequest(
         jsonOk(res, { sessions: list });
         return;
       }
+      if (agent === "grok") {
+        const list = await listGrokSessions(repoPath);
+        jsonOk(res, { sessions: list });
+        return;
+      }
       jsonOk(res, { sessions: [] });
       return;
     }
@@ -98,13 +104,17 @@ export async function handleRequest(
     if (method === "GET" && path.endsWith("/history") && historyId) {
       const store = sessions.get(historyId);
       if (!store) {
-        const agentParam = query.agent as "claude-code" | "opencode" | "codex" | undefined;
+        const agentParam = query.agent as "claude-code" | "opencode" | "codex" | "grok" | undefined;
         if (agentParam === "opencode") {
           const history = await getSessionHistory(historyId, query.repoPath ?? workspaceCwd);
           jsonOk(res, { messages: history });
         } else if (agentParam === "codex") {
           const repoPath = query.repoPath ?? workspaceCwd;
           const history = await loadCodexTranscript(historyId, repoPath);
+          jsonOk(res, { messages: history });
+        } else if (agentParam === "grok") {
+          const repoPath = query.repoPath ?? workspaceCwd;
+          const history = await loadGrokTranscript(historyId, repoPath);
           jsonOk(res, { messages: history });
         } else {
           const repoPath = query.repoPath ?? workspaceCwd;
@@ -122,6 +132,13 @@ export async function handleRequest(
           return;
         }
         const history = await loadCodexTranscript(store.sdkSessionId, store.repoPath);
+        jsonOk(res, { messages: history });
+      } else if (store.agent === "grok") {
+        if (!store.sdkSessionId) {
+          jsonOk(res, { messages: [] });
+          return;
+        }
+        const history = await loadGrokTranscript(store.sdkSessionId, store.repoPath);
         jsonOk(res, { messages: history });
       } else {
         const history = await loadTranscript(store.sdkSessionId ?? historyId, store.repoPath);
@@ -179,6 +196,8 @@ export async function handleRequest(
       if (store.agent === "claude-code" && store.abortController) {
         store.abortController.abort();
       } else if (store.agent === "codex" && store.abortController) {
+        store.abortController.abort();
+      } else if (store.agent === "grok" && store.abortController) {
         store.abortController.abort();
       } else if (store.agent === "opencode" && store.sdkSessionId) {
         await opencodeAbort(store.sdkSessionId, store.repoPath).catch(() => {});
@@ -292,8 +311,8 @@ export async function handleRequest(
       if (attachments != null && (!Array.isArray(attachments) || attachments.some((a: any) => typeof a?.url !== "string" || !a.url))) {
         jsonError(res, 400, "attachments must be an array of { url: string }"); return;
       }
-      if (agent !== "claude-code" && agent !== "opencode" && agent !== "codex") {
-        jsonError(res, 400, "agent must be claude-code, opencode, or codex");
+      if (!isBotAgent(agent)) {
+        jsonError(res, 400, "agent must be claude-code, opencode, codex, or grok");
         return;
       }
       if (!availableAgents.includes(agent)) {
@@ -350,6 +369,8 @@ export async function handleRequest(
         runClaudeCode(s).catch(onRunRejected);
       } else if (agent === "codex") {
         runCodex(s).catch(onRunRejected);
+      } else if (agent === "grok") {
+        runGrok(s).catch(onRunRejected);
       } else {
         runOpencode(s).catch(onRunRejected);
       }
@@ -439,8 +460,8 @@ export async function handleRequest(
             }
           }
           notifyPermissionsChanged();
-        } else if (store.agent === "codex") {
-          // codex applies approvalPolicy at thread start — mode change takes effect next turn
+        } else if (store.agent === "codex" || store.agent === "grok") {
+          // Applied on the next turn. Grok's headless CLI has no in-turn approval channel.
         } else if (store.agent === "opencode" && store.sdkSessionId) {
           for (const [id, perm] of store.pendingPermissions) {
             if (shouldAutoApprove(store.agent, perm.toolName, store.permissionMode)) {
@@ -481,10 +502,12 @@ export async function start(network: string = "local", portOverride?: number, ca
   const claudeAvailable = await initClaudeCode();
   const opencodeAvailable = await initOpencode();
   const codexAvailable = await initCodex();
+  const grokAvailable = await initGrok();
   const availableAgents: string[] = [
     ...(claudeAvailable ? ["claude-code"] : []),
     ...(opencodeAvailable ? ["opencode"] : []),
     ...(codexAvailable ? ["codex"] : []),
+    ...(grokAvailable ? ["grok"] : []),
   ];
   console.log(`  available agents: ${availableAgents.join(", ") || "none"}`);
 

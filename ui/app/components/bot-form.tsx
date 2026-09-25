@@ -48,6 +48,7 @@ const AGENT_OPTIONS = [
   { id: "claude-code", label: "Claude Code" },
   { id: "codex", label: "Codex" },
   { id: "opencode", label: "OpenCode" },
+  { id: "grok", label: "Grok" },
 ];
 
 function fallbackPref(id: string): AvatarPref {

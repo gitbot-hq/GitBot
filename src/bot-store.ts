@@ -9,7 +9,7 @@ import { homedir } from "os";
 export type SetupStatus = "pending" | "complete" | "failed";
 
 /** The coding harnesses a bot can run on. */
-export const BOT_AGENTS = ["claude-code", "opencode", "codex"] as const;
+export const BOT_AGENTS = ["claude-code", "opencode", "codex", "grok"] as const;
 export type BotAgent = (typeof BOT_AGENTS)[number];
 
 /** Bots and threads saved before the field existed all ran on Claude Code. */
