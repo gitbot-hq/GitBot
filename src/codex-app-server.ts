@@ -725,31 +725,46 @@ const activeClients = new Map<SessionStore, CodexAppServerClient>();
  */
 const ABORT_GRACE_MS = 300;
 
+type CodexApprovalPolicy = "untrusted" | "never";
+
 /**
- * The only policy that actually gates every tool. Under `on-request` it is the
- * *model* that decides whether to ask at all — `echo hello` runs with no prompt
- * and only a self-declared escalation reaches the user, which is not an approval
- * step. `untrusted` asks before every command execution and every file edit,
- * independent of the sandbox.
+ * `untrusted` is the only policy that actually gates every tool. Under
+ * `on-request` it is the *model* that decides whether to ask at all — `echo
+ * hello` runs with no prompt and only a self-declared escalation reaches the
+ * user, which is not an approval step. `untrusted` asks before every command
+ * execution and every file edit, independent of the sandbox.
  *
  * TRAP: `untrusted` is rejected when it arrives as configuration — `config.toml`
  * or a `-c approval_policy=untrusted` flag makes app-server refuse the config and
  * never answer `initialize`, so the turn hangs on the handshake. It is fully
  * supported as a `thread/start` / `thread/resume` / `turn/start` /
- * `thread/settings/update` *param*. Keep it here, in params, only.
+ * `thread/settings/update` *param*. Keep it in params, only.
  *
- * Mapping the hub's permission modes onto policy/sandbox/reviewer is CDX-5; this
- * constant only makes the tracer bullet's per-tool approval honest.
+ * `yolo` gets `never` instead, which means codex raises no approval request at
+ * all — so the mode means what it says: nothing was asked, and nothing was
+ * auto-answered on the user's behalf. The cost is that `never` also refuses a
+ * small set of destructive commands outright, with no approval path: measured,
+ * `rm -rf` under `danger-full-access` + `never` is rejected as "rm -f style
+ * commands are not permitted" and the directory survives. So yolo is NOT
+ * strictly more permissive than `allow-all-edits`, which is surprising enough
+ * that the mode's copy has to say so. Keeping codex's own guardrail is the point
+ * — yolo is the one mode with no human in the loop.
  */
-const APPROVAL_POLICY = "untrusted";
+function approvalPolicyFor(store: SessionStore): CodexApprovalPolicy {
+  return sandboxFor(store) === "danger-full-access" ? "never" : "untrusted";
+}
 
 type CodexSandbox = "read-only" | "workspace-write" | "danger-full-access";
 
 /**
- * The sandbox a session runs in. Mirrors the SDK path's mapping; policy work
- * proper is CDX-5. Plan mode is read-only whatever the permission mode says —
- * `botPermissionToSession("plan")` hands it `permissionMode: "yolo"`, so the
- * mode alone is not the truth about what this session may do.
+ * The sandbox a session runs in, and the single source of truth for what a
+ * session may do — `approvalPolicyFor` and `codexAutoApprove` both derive from
+ * it rather than reading `permissionMode` directly.
+ *
+ * That matters for plan mode, which is read-only whatever the permission mode
+ * says: `botPermissionToSession("plan")` hands it `permissionMode: "yolo"`, so
+ * the mode alone is not the truth. Deriving from the sandbox is what stops plan
+ * mode auto-approving the escalation requests that ask to leave it.
  */
 function sandboxFor(store: SessionStore): CodexSandbox {
   if (store.mode === "plan") return "read-only";
@@ -1243,6 +1258,7 @@ export async function runAppServerTurn(store: SessionStore): Promise<void> {
   }
 
   const sandbox = sandboxFor(store);
+  const approvalPolicy = approvalPolicyFor(store);
 
   const abortController = new AbortController();
   store.abortController = abortController;
@@ -1344,7 +1360,7 @@ export async function runAppServerTurn(store: SessionStore): Promise<void> {
     await client.start();
 
     const developerInstructions = presetSystemPrompt(store.botPreset);
-    console.log(`[codex-app-server] starting turn (resume=${!!store.sdkSessionId}) sandbox=${sandbox}`);
+    console.log(`[codex-app-server] starting turn (resume=${!!store.sdkSessionId}) sandbox=${sandbox} policy=${approvalPolicy}`);
 
     // Aborting during the handshake already reported the turn; starting a
     // thread now would emit events after the client stopped listening.
@@ -1357,7 +1373,7 @@ export async function runAppServerTurn(store: SessionStore): Promise<void> {
         cwd: store.repoPath,
         excludeTurns: true,
         sandbox,
-        approvalPolicy: APPROVAL_POLICY,
+        approvalPolicy,
         // The default routes approvals to an LLM subagent, not to the user.
         approvalsReviewer: "user",
         ...(store.model ? { model: store.model } : {}),
@@ -1368,7 +1384,7 @@ export async function runAppServerTurn(store: SessionStore): Promise<void> {
       const started = await client.request("thread/start", {
         cwd: store.repoPath,
         sandbox,
-        approvalPolicy: APPROVAL_POLICY,
+        approvalPolicy,
         approvalsReviewer: "user",
         ...(store.model ? { model: store.model } : {}),
         ...(developerInstructions ? { developerInstructions } : {}),

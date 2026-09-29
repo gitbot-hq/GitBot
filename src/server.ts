@@ -270,7 +270,7 @@ export async function handleRequest(
         model = model ?? bot.model;
         // Bot presets speak their own vocabulary ("auto-approve", "plan"); the
         // session speaks PermissionMode. Translate, or nothing auto-approves.
-        const botPermission = botPermissionToSession(bot.permissionMode, agent);
+        const botPermission = botPermissionToSession(bot.permissionMode);
         permissionMode = permissionMode ?? botPermission.permissionMode;
         mode = mode ?? botPermission.mode;
         const isSetup = thread.kind === "setup";

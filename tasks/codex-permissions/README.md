@@ -131,22 +131,54 @@ binary degrades to today's sandbox-only behaviour instead of hanging (CDX-2).
 
 ## Issues
 
-Tracer-bullet order — each slice is end-to-end and leaves `main` working.
-
-| # | Issue | Depends on |
+| # | Issue | Status |
 | --- | --- | --- |
-| [CDX-1](CDX-1-app-server-tracer-bullet.md) | app-server client + command approval, end to end, behind a flag | — |
-| [CDX-2](CDX-2-binary-resolution-and-probe.md) | Binary resolution, capability probe, graceful degradation | CDX-1 |
-| [CDX-3](CDX-3-event-mapping-parity.md) | Full event/item mapping parity | CDX-1 |
-| [CDX-4](CDX-4-file-change-and-remaining-approvals.md) | File-change approvals + remaining ServerRequest kinds | CDX-1 |
-| [CDX-5](CDX-5-permission-modes.md) | Permission modes → policy/sandbox/reviewer, mid-turn switching | CDX-1, CDX-4 |
-| [CDX-6](CDX-6-tool-fencing.md) | Enforce bot allowedTools / disallowedTools | CDX-4 |
-| [CDX-7](CDX-7-cutover.md) | Delete the SDK path, drop the flag, update UI copy and docs | all |
-| [CDX-8](CDX-8-approval-card-ui.md) | Approval card: expiry, legibility, honest verdicts | CDX-1 |
+| [CDX-1](CDX-1-app-server-tracer-bullet.md) | app-server client + command approval, behind a flag | **done** |
+| [CDX-4](CDX-4-file-change-and-remaining-approvals.md) | File-change approvals + remaining ServerRequest kinds | **done** |
+| [CDX-3](CDX-3-event-mapping-parity.md) | Full event/item mapping parity, plus image input | **done** |
+| [CDX-5](CDX-5-permission-modes.md) | Permission modes → policy/sandbox | **done**, trimmed |
+| [CDX-2](CDX-2-binary-resolution-and-probe.md) | Binary resolution, capability probe | descoped |
+| [CDX-6](CDX-6-tool-fencing.md) | Enforce bot allowedTools / disallowedTools | descoped |
+| [CDX-7](CDX-7-cutover.md) | Delete the SDK path, drop the flag | descoped |
+| [CDX-8](CDX-8-approval-card-ui.md) | Approval card: expiry, legibility, honest verdicts | descoped |
 
-CDX-8 came out of browser-testing CDX-1. Its defects are in the **shared** card
-component, so they affect claude-code and opencode too — codex only made them
-visible by raising far more approvals than anything did before.
+## Where this stopped, and why
+
+The goal was cut to "permissions work, nothing more". What shipped is the four
+issues above, behind `GITBOT_CODEX_APP_SERVER=1`: codex asks before every command
+and every file change, a bot set to `ask-permissions` actually gets asked, and
+the mode copy describes what the code does.
+
+CDX-5 landed trimmed — the sandbox/policy mapping and the honest copy, but not
+`thread/settings/update` mid-turn switching or `TOOL_BLACKLIST["codex"]`.
+Switching mode mid-turn already resolves pending cards via `PATCH /sessions/:id`
+(CDX-1) and the auto-approve check re-runs per request, so the missing piece
+would only change the policy codex is *started* with, which is next-turn anyway.
+
+The four descoped issues are real, but none of them is permissions:
+
+- **CDX-2** — the bundled 0.155.1 works and CDX-1 already falls back to the
+  `codex` on `PATH`. Worth doing if that fallback is ever exercised in anger:
+  measured, **0.135.0 + `untrusted` does not gate commands** — it gated file
+  changes but ran `echo` unprompted. A user driven onto an old binary would
+  silently get weaker approvals than the UI promises. That is the argument for
+  the capability probe.
+- **CDX-6** — tool fencing is a separate feature; the "not enforced on Codex"
+  warning stays accurate.
+- **CDX-7** — the flag can stay off by default. Nothing requires deleting the SDK
+  path in order to use the new one.
+- **CDX-8** — its defects are in the **shared** card component, so claude-code and
+  opencode have them too; codex only made them visible by raising far more
+  approvals than anything did before. The sharpest two: aborting leaves a dead
+  card with live-looking buttons that silently do nothing, and a long command is
+  clipped mid-string so the part that matters scrolls off screen.
+
+Known gaps in what did ship, each recorded in its issue file: `acceptForSession`
+is deliberately unwired (measured inert on 0.155.1 — it asks again on the next
+edit, the next turn and the next thread); `item/fileChange/patchUpdated` is
+handled but was never provoked from real codex; and
+`item/permissions/requestApproval`'s response shape is verified against the
+generated types and a stub, never a live server.
 
 ## Ground rules for every issue
 
