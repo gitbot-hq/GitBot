@@ -15,9 +15,65 @@ auto-answering**, exactly as the claude-code harness pairs `canUseTool` with
 | session mode | `sandbox` | `approvalPolicy` | `approvalsReviewer` | client auto-answer |
 | --- | --- | --- | --- | --- |
 | `ask-permissions` | `read-only` | `untrusted` | `user` | none — surface everything |
-| `allow-all-edits` | `workspace-write` | `untrusted` | `user` | auto-accept `fileChange` when `grantRoot == null`; surface all `commandExecution` |
-| `yolo` | `danger-full-access` | `on-request` | `user` | auto-accept everything |
+| `allow-all-edits` | `workspace-write` | `untrusted` | `user` | auto-accept a **non-destructive** `fileChange` when `grantRoot == null`; surface deletions, unreadable changes and all `commandExecution` |
+| `yolo` | `danger-full-access` | `never` | — | n/a — nothing is ever raised |
 | `plan` | `read-only` | `untrusted` | `user` | auto-decline `fileChange`; surface `commandExecution` |
+
+### `allow-all-edits` does **not** cover deletions — deliberate
+
+The client-side auto-answer is `shouldAutoApprove()`, which under
+`allow-all-edits` means "the card's `toolName` is in `EDIT_TOOLS`"
+(`server-common.ts:181` — `Edit`, `Write`, `NotebookEdit`). CDX-4 gives a
+file-change card one of four names, and two of them are deliberately outside
+that set:
+
+| the item's changes | card name | in `EDIT_TOOLS`? | `allow-all-edits` |
+| --- | --- | --- | --- |
+| all `add` | `Write` | yes | auto-accepted |
+| no `delete` | `Edit` | yes | auto-accepted |
+| all `delete` | `Delete` | **no** | **asks** |
+| some `delete`, some not | `Edit and delete` | **no** | **asks** |
+| any unrecognised `kind`, or no changes at all | `a file change GitBot cannot show you` | **no** | **never auto-accepted, in any mode** |
+
+`codex` spells a deletion as an ordinary `fileChange` — measured payload
+`{"path":"…/doomed.txt","kind":{"type":"delete"},"diff":"doomed\n"}` — so before
+this split, `allow-all-edits` (which `botPermissionToSession` hands **every**
+codex bot) deleted workspace files with no card at all, and the card it would
+have shown read `{old_string:"doomed\n", new_string:""}` under the headline
+"Allow Edit?", which looks like blanking a file, not removing it.
+
+`Edit and delete` is a separate name for the same reason: one `apply_patch` is
+one item with N changes, and a rename is a delete plus an add. Folding mixed
+items into `Edit` would put every deletion that travels with an edit straight
+back on the silent path.
+
+This is the safer option throughout, and it is the intended behaviour, not an
+oversight: buying out of per-edit prompts is not buying out of being told a file
+is about to be destroyed. Under `yolo` nothing is raised at all, so deletions
+are not prompted there either — that mode's contract is unchanged.
+`destructiveChangeTool()` in `src/codex-app-server.ts` throws at import if one
+of these names is ever added to `EDIT_TOOLS`.
+
+### A malformed approval response fails closed — measured, do not re-derive
+
+Answering an approval with something app-server cannot deserialize does **not**
+hang the turn. Measured on 0.155.1: the server logs
+`failed to deserialize …: unknown variant`, the item goes to `status:"declined"`
+and `turn/completed` still arrives.
+
+This matters for the v1 `ReviewDecision` denial, whose spelling changed between
+the two binaries on this machine (`codex app-server generate-ts`):
+
+```
+0.135.0   … | "denied"                            | "timed_out" | "abort"
+0.155.1   … | { "denied": { rejection: string } } | "timed_out" | "abort"
+```
+
+Neither spelling is right for both, so `CodexAppServerClient` now keeps
+`InitializeResponse.userAgent` (`"gitbot/0.155.1 (Mac OS …)"`) and picks from
+the server's own version. The cutover version inside the unmeasured 0.136–0.154
+band is a guess — and it is a cheap one precisely because a wrong spelling on a
+*denial* still produces a denial and still lets the turn finish.
 
 ### Why not `on-request` — this was measured, do not revert it
 
@@ -64,10 +120,11 @@ and it has a maintained model-facing prompt template
 binary rejects it at `thread/start`, degrade to `on-request` + `read-only` and
 stop advertising per-tool approval — detect this in CDX-2's probe.
 
-### Why `yolo` is `on-request` + auto-accept, not `never`
+### Why `yolo` is `never` — decided, do not "fix" this
 
-`never` is **strictly less capable**. Dangerous commands become
-`Decision::Forbidden` with no approval path (`exec_policy.rs:797-803`). Live,
+`never` also **hard-blocks destructive commands**, and that is the reason it was
+chosen. Under it, dangerous commands become `Decision::Forbidden` with no
+approval path at all (`exec_policy.rs:797-803`). Live,
 `danger-full-access` + `never`:
 
 ```
@@ -75,15 +132,28 @@ exec_command failed: Rejected("`rm -rf junk` rejected: rm -f style commands are
 not permitted. Use a safer approach")   -- 0 server requests, junk/ survived
 ```
 
-The identical command under `on-request` + `danger-full-access` prompts, accepts
-and succeeds. So a "yolo" session on `never` would refuse destructive work that
-`allow-all-edits` performs happily.
+The identical command under `on-request` + `danger-full-access` prompts, is
+accepted and succeeds.
 
-**Trade-off to state explicitly in review:** this means yolo *does* raise
-approval requests which we auto-resolve, rather than never raising any. The
-audit trail differs. If an untampered "nothing was ever requested" record
-matters more than being able to `rm -rf`, use `never` and document the
-destructive-command block instead.
+So the choice was: `on-request` + blanket auto-accept, which genuinely runs
+everything including `rm -rf`; or `never`, which refuses a small set of
+destructive commands outright. **`never` was chosen deliberately.** Two reasons:
+
+- It is the only mode where GitBot raises no approval request at all, so "yolo"
+  means what it says — nothing was asked, nothing was auto-answered on the
+  user's behalf. The audit trail is honest.
+- A yolo session is the one place with no human in the loop. Keeping codex's own
+  guardrail against `rm -rf` is worth losing the ability to run it.
+
+Consequence to surface, not to paper over: yolo is **not** strictly more
+permissive than `allow-all-edits`. A destructive command that `allow-all-edits`
+would let the user approve is refused outright in yolo. That is surprising
+enough that the UI copy must say it — `chat.tsx`'s "Every tool runs without
+asking" is not the whole truth. Something closer to: *"Nothing is asked. Codex
+still refuses a few commands it considers destructive."*
+
+Do not silently switch this to `on-request` + auto-accept to make `rm -rf` work.
+If it ever needs revisiting, it is a product decision, not a bug.
 
 ### Rejected alternatives
 
@@ -148,7 +218,10 @@ and opencode branches; add codex:
 1. `ask-permissions` on codex now prompts per command, in a read-only sandbox —
    it no longer silently becomes `allow-all-edits`. This is the headline fix.
 2. `allow-all-edits` runs edits without asking; a shell command still asks.
-3. `yolo` asks nothing and can write outside the workspace.
+3. `yolo` asks nothing — **zero** approval requests reach GitBot, not "requests
+   we auto-answer" — and can write outside the workspace. A destructive command
+   (`rm -rf` on a scratch dir) is refused by codex itself, and the UI copy says
+   so rather than promising that everything runs.
 4. Plan mode stays read-only and cannot edit.
 5. Switching `ask-permissions` → `yolo` with a card on screen resolves that
    pending card immediately, same as claude-code.

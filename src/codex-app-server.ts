@@ -8,6 +8,7 @@ import {
   scheduleCleanup,
   notifyPermissionsChanged,
   shouldAutoApprove,
+  EDIT_TOOLS,
   type SessionStore,
 } from "./server-common";
 import { bindSession, updateThread } from "./bot-store";
@@ -262,17 +263,88 @@ export interface CodexAppServerOptions {
 }
 
 /**
+ * `execCommandApproval` and `applyPatchApproval` are the v1 approvals, and they
+ * speak `ReviewDecision` — a different enum from the v2 `accept`/`decline` one.
+ * Sending a v2 word on a v1 method (or the reverse) fails to deserialize and the
+ * item is marked declined, so the two vocabularies never share a code path here:
+ * every card carries its own decision mapper.
+ *
+ * `approved` is a unit variant on both binaries on this machine, so the approval
+ * word needs no version check. `denied` does: `codex app-server generate-ts`
+ * emits
+ *
+ *   0.135.0   … | "denied"                            | "timed_out" | "abort"
+ *   0.155.1   … | { "denied": { rejection: string } } | "timed_out" | "abort"
+ *
+ * — mutually incompatible spellings, so neither one is universally right and
+ * the choice has to come from the server itself (`v1DenyFor`).
+ */
+const V1_APPROVE = "approved";
+
+/**
+ * The newest codex whose `ReviewDecision::Denied` was measured as a *unit*
+ * variant. Versions above this get the struct spelling.
+ *
+ * Only 0.135.0 and 0.155.1 were available to measure, so the real cutover is
+ * somewhere in the unmeasured 0.136–0.154 band and this boundary is a guess for
+ * anything inside it. The guess is cheap: a response app-server cannot
+ * deserialize fails *closed* — measured on 0.155.1, it logs
+ * `failed to deserialize …: unknown variant`, marks the item `status:"declined"`
+ * and still sends `turn/completed`. So a mis-spelled denial is still a denial
+ * and still lets the turn finish; it is noisy, not dangerous. (That was measured
+ * on a v2 approval; the v1 pair deserializes through the same serde path, but
+ * no binary here could be made to raise a v1 request to confirm it directly.)
+ */
+const LAST_UNIT_DENIED_VERSION: readonly [number, number, number] = [0, 135, 0];
+
+/**
+ * `InitializeResponse.userAgent` is `"<clientName>/<codexVersion> (os; arch) …"`.
+ * Measured with `clientInfo.name = "probe"`:
+ *   0.155.1 → `probe/0.155.1 (Mac OS 26.6.2; arm64) ghostty/1.3.1 (probe; 0.0.0)`
+ *   0.135.0 → `probe/0.135.0 (Mac OS 26.6.2; arm64) ghostty/1.3.1 (probe; 0.0.0)`
+ */
+function parseServerVersion(userAgent: unknown): [number, number, number] | null {
+  if (typeof userAgent !== "string") return null;
+  const m = /^[^/\s]+\/(\d+)\.(\d+)\.(\d+)/.exec(userAgent);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+/** The struct spelling carries a reason; the agent reports it back to the user. */
+const V1_REJECTION = "The GitBot user declined this request.";
+
+/**
+ * The `ReviewDecision` denial this server understands. An unparseable version
+ * gets the struct form: it is what the binary this repo pins speaks, and it is
+ * what every version newer than the pin will speak.
+ */
+function v1DenyFor(version: readonly [number, number, number] | null): unknown {
+  if (version) {
+    for (let i = 0; i < 3; i++) {
+      if (version[i] < LAST_UNIT_DENIED_VERSION[i]) return "denied";
+      if (version[i] > LAST_UNIT_DENIED_VERSION[i]) return { denied: { rejection: V1_REJECTION } };
+    }
+    return "denied";
+  }
+  return { denied: { rejection: V1_REJECTION } };
+}
+
+/**
  * A ServerRequest we do not service still has to be answered or the turn waits
  * on it forever. Where the protocol has a "no" that type-checks, say no in its
  * own words; everything else gets a JSON-RPC error, which app-server treats as a
  * refusal (that is how `codex exec` itself declines approvals).
  */
-function refusalResult(method: string): unknown | undefined {
+function refusalResult(method: string, serverVersion: readonly [number, number, number] | null): unknown | undefined {
   switch (method) {
-    // v2 approvals. Proper handling of file changes is CDX-4.
     case "item/commandExecution/requestApproval":
     case "item/fileChange/requestApproval":
       return { decision: "decline" };
+    // Not `{decision}`: `PermissionsRequestApprovalResponse` is
+    // `{permissions, scope}`. Both members of `GrantedPermissionProfile` are
+    // optional, so `{}` is a well-formed "granted nothing" — a real refusal,
+    // which is why this no longer falls through to a JSON-RPC error.
+    case "item/permissions/requestApproval":
+      return { permissions: {}, scope: "turn" };
     case "mcpServer/elicitation/request":
       return { action: "decline", content: null, _meta: null };
     case "item/tool/requestUserInput":
@@ -282,12 +354,10 @@ function refusalResult(method: string): unknown | undefined {
     // Cheap and answerable truthfully.
     case "currentTime/read":
       return { currentTimeAt: Math.floor(Date.now() / 1000) };
-    // Legacy v1 approvals speak ReviewDecision, not the v2 decision enum.
     case "execCommandApproval":
     case "applyPatchApproval":
-      return { decision: { denied: { rejection: "GitBot declined this request." } } };
+      return { decision: v1DenyFor(serverVersion) };
     default:
-      // Includes item/permissions/requestApproval (no refusal shape exists),
       // attestation/generate and account/chatgptAuthTokens/refresh.
       return undefined;
   }
@@ -304,8 +374,20 @@ export class CodexAppServerClient {
   private stderrTail: string[] = [];
   private exited = false;
   private exitReason: string | null = null;
+  private serverUserAgent: string | null = null;
+  private serverVersion: [number, number, number] | null = null;
 
   constructor(private opts: CodexAppServerOptions) {}
+
+  /** What `initialize` said this server is, or null before the handshake. */
+  get userAgent(): string | null {
+    return this.serverUserAgent;
+  }
+
+  /** The `ReviewDecision` denial spelling this server understands. */
+  get v1Deny(): unknown {
+    return v1DenyFor(this.serverVersion);
+  }
 
   /** Spawns the child and completes the handshake. */
   async start(): Promise<void> {
@@ -349,10 +431,21 @@ export class CodexAppServerClient {
       );
     });
 
-    await this.request("initialize", {
+    // Keep the result. `InitializeResponse.userAgent` names the server's own
+    // version, and that is the only thing on the wire that says which
+    // `ReviewDecision` denial spelling it can deserialize — see `v1DenyFor`.
+    // Discarding it would leave the v1 answer a guess forever.
+    const init = await this.request("initialize", {
       clientInfo: { name: "gitbot", title: "GitBot", version: PKG_VERSION },
       capabilities: { experimentalApi: true, requestAttestation: false },
     });
+    this.serverUserAgent = typeof init?.userAgent === "string" ? init.userAgent : null;
+    this.serverVersion = parseServerVersion(this.serverUserAgent);
+    console.log(
+      `[codex-app-server] userAgent=${JSON.stringify(this.serverUserAgent)} ` +
+        `version=${this.serverVersion ? this.serverVersion.join(".") : "unparsed"} ` +
+        `v1Deny=${JSON.stringify(this.v1Deny)}`,
+    );
     this.notify("initialized", {});
   }
 
@@ -551,7 +644,7 @@ export class CodexAppServerClient {
     const refuse = (reason: string): void => {
       if (settled) return;
       settled = true;
-      const fallback = refusalResult(method);
+      const fallback = refusalResult(method, this.serverVersion);
       console.log(`[codex-app-server] default-answering ${method} (id=${id}): ${reason}`);
       if (fallback === undefined) {
         this.write({
@@ -661,6 +754,72 @@ function sandboxFor(store: SessionStore): CodexSandbox {
 }
 
 /**
+ * Tool names `codexAutoApprove` must never answer without a human, whatever the
+ * mode says.
+ *
+ * Two reasons land a name here. Either the request widens what codex is allowed
+ * to do rather than doing one thing (`grantRoot`, and
+ * `item/permissions/requestApproval`'s network reach and extra paths), or GitBot
+ * cannot describe what the request would do, which is the one case where an
+ * automatic "yes" is guaranteed to be uninformed.
+ *
+ * This matters beyond the per-request check: `codexAutoApprove` is also what
+ * `PATCH /sessions/:id` uses to clear cards already on screen when the mode
+ * changes (`server.ts:459`). Without it, switching a thread to `yolo` while one
+ * of these cards is up would answer it as a side effect of a button labelled
+ * "Allow all" — an answer the user never read the card to give.
+ */
+const NEVER_AUTO_APPROVE = new Set<string>();
+
+/**
+ * Registers `name` as never-auto-approvable and returns it, so the security key
+ * and the card headline are one expression. A tool name is both: `chat.tsx:1520`
+ * renders `Allow {toolName}?` from the same string this set is keyed on. Split
+ * across two statements, rewording the copy (CDX-8 owns the card) silently
+ * unregisters the guard and the card becomes auto-approvable.
+ */
+function neverAutoApprove(name: string): string {
+  NEVER_AUTO_APPROVE.add(name);
+  return name;
+}
+
+const GRANT_ROOT_TOOL = neverAutoApprove("write access outside the workspace");
+const EXTRA_PERMISSIONS_TOOL = neverAutoApprove("extra sandbox permissions");
+/** A file change GitBot could not describe — see `describeFileChange`. */
+const OPAQUE_CHANGE_TOOL = neverAutoApprove("a file change GitBot cannot show you");
+
+/**
+ * Asserts `name` is not an `EDIT_TOOLS` member and returns it, for the card
+ * headlines that remove files.
+ *
+ * `EDIT_TOOLS` is in another module and shared with claude-code and opencode.
+ * If one of these names were ever added there, `allow-all-edits` — the mode
+ * `botPermissionToSession` gives every codex bot — would start deleting
+ * workspace files with no card at all, silently and by default. That is the
+ * defect this naming exists to close, so it fails at import rather than in
+ * production.
+ */
+function destructiveChangeTool(name: string): string {
+  if (EDIT_TOOLS.has(name)) {
+    throw new Error(`[codex] card name "${name}" is in EDIT_TOOLS; allow-all-edits would auto-approve file deletions`);
+  }
+  return name;
+}
+
+const DELETE_TOOL = destructiveChangeTool("Delete");
+const EDIT_AND_DELETE_TOOL = destructiveChangeTool("Edit and delete");
+
+/**
+ * Put on every never-auto-approve card. The UI offers "Allow all" on any card
+ * that is not an edit tool (`chat.tsx:1536-1544`); pressing it PATCHes the mode
+ * to `yolo`, `codexAutoApprove` correctly refuses to resolve this card from it,
+ * and the card just sits there with the mode silently changed underneath. Until
+ * CDX-8 fixes the buttons, say so on the card.
+ */
+const ONLY_ANSWERABLE_HERE =
+  "\"Allow all\" cannot answer this card — it only changes the mode for later requests. Choose Allow or Deny here.";
+
+/**
  * Whether an approval may be answered without a human.
  *
  * The sandbox decides, not `permissionMode` on its own. Under `untrusted` an
@@ -677,7 +836,349 @@ function sandboxFor(store: SessionStore): CodexSandbox {
  */
 export function codexAutoApprove(store: SessionStore, toolName: string): boolean {
   if (sandboxFor(store) === "read-only") return false;
+  if (NEVER_AUTO_APPROVE.has(toolName)) return false;
   return shouldAutoApprove(store.agent, toolName, store.permissionMode);
+}
+
+// --- Approval cards ---
+
+/** One entry of a `fileChange` item's `changes[]`, as the wire spells it. */
+interface FileUpdateChange {
+  path?: string;
+  kind?: { type?: string; move_path?: string | null } | string;
+  diff?: string;
+}
+
+/** One `fileChange` item still in flight, and the cards it has raised. */
+interface FileChangeEntry {
+  /** Replaced wholesale by `item/fileChange/patchUpdated`. */
+  changes: FileUpdateChange[];
+  /** `toolUseID`s of the approval cards raised for this item. */
+  cards: Set<string>;
+}
+
+/**
+ * The `fileChange` items still in flight, by item id.
+ *
+ * `FileChangeRequestApprovalParams` is `{threadId, turnId, itemId, startedAtMs,
+ * reason?, grantRoot?}` — no path, no diff, nothing to show a human. The detail
+ * lives on the `fileChange` *item*, and `itemId` is the only thing joining them.
+ *
+ * Ordering measured on 0.155.1 and 0.135.0: `item/started` for the item lands
+ * ~1ms *before* the approval request, on the same stdout stream, so the entry is
+ * always here by the time the request is dispatched. The reverse order is still
+ * handled — `describeFileChange` says on the card that the detail is missing
+ * rather than rendering a blank one — because that ordering is not promised
+ * anywhere in the protocol.
+ *
+ * The server may also *revise* a patch between `item/started` and
+ * `item/completed`, via `item/fileChange/patchUpdated`. `cards` exists for that:
+ * a card already on the wire shows the old patch, and accepting it would apply
+ * the new one. See `handleFileChangePatchUpdated`.
+ *
+ * Entries are removed on `item/completed`, which is measured to arrive *after*
+ * the approval is answered, so this holds one item in the normal case and is
+ * dropped wholesale when the turn ends.
+ */
+const fileChangeItems = new Map<SessionStore, Map<string, FileChangeEntry>>();
+
+/**
+ * A card is the one place a human is the security boundary, and it renders as
+ * `JSON.stringify(input)` inside a fixed-height box. Push the Allow button off
+ * the screen and the only thing left to do is scroll past it.
+ *
+ * Both caps are needed. One `apply_patch` touching several files is ONE item,
+ * ONE approval and N changes (measured), so a per-string cap bounds nothing:
+ * a 30-file patch would be 30 whole files on one card. `MAX_CARD_TEXT_CHARS` is
+ * the budget across *every* change on the card; `MAX_CARD_FILES` bounds the list
+ * of paths, which is short per entry but unbounded in count. Whatever does not
+ * fit is counted, never silently dropped.
+ */
+const MAX_CARD_TEXT_CHARS = 4000;
+const MAX_CARD_FILES = 20;
+
+/** Characters left for diff bodies on the card being built. */
+interface CardBudget {
+  left: number;
+}
+
+function clip(text: string, budget: CardBudget): string {
+  if (text.length <= budget.left) {
+    budget.left -= text.length;
+    return text;
+  }
+  const head = text.slice(0, Math.max(0, budget.left));
+  budget.left = 0;
+  return `${head}\n… (${text.length - head.length} more characters not shown)`;
+}
+
+/** The operation a change performs, as the card must name it. */
+type ChangeKind = "add" | "delete" | "update" | "unrecognised";
+
+function changeKind(change: FileUpdateChange): { kind: ChangeKind; raw: string } {
+  const raw = typeof change.kind === "string" ? change.kind : change.kind?.type;
+  if (raw === "add" || raw === "delete" || raw === "update") return { kind: raw, raw };
+  return { kind: "unrecognised", raw: typeof raw === "string" ? raw : JSON.stringify(change.kind ?? null) };
+}
+
+/**
+ * What each operation does, in the user's words. `PatchChangeKind` is
+ * `{type:"add"} | {type:"delete"} | {type:"update", move_path}`, and the three
+ * are not variations on one theme: a `delete` removes the file. Rendered as
+ * `{old_string: <content>, new_string: ""}` with no label it reads as "blank the
+ * file" — recoverable, in place — when it is `rm`.
+ */
+const OPERATION_COPY: Record<ChangeKind, string> = {
+  add: "CREATE this file",
+  delete: "DELETE this file — it is removed from disk. `old_string` is what is lost.",
+  update: "EDIT this file in place",
+  unrecognised: "",
+};
+
+/**
+ * One change as the edit card the UI already knows how to read — the shape
+ * opencode builds at `start-opencode.ts:461-477`, `{file_path, old_string,
+ * new_string}`, so a codex edit renders as a diff rather than as a bare path,
+ * plus an `operation` naming what is about to happen to the file.
+ *
+ * TRAP: `diff` is only a unified diff when `kind` is `update`. For `add` and
+ * `delete` codex puts the file's *raw content* there with no `+`/`-` prefixes
+ * (measured: `{"kind":{"type":"add"},"diff":"alpha\nbeta\n"}`), so running the
+ * unified-diff splitter over it drops every line and produces the empty card
+ * this is meant to avoid.
+ */
+function changeToEditInput(change: FileUpdateChange, budget: CardBudget): Record<string, unknown> {
+  const { kind, raw } = changeKind(change);
+  const body = typeof change.diff === "string" ? change.diff : "";
+  const movePath = typeof change.kind === "object" ? change.kind?.move_path : null;
+
+  const file_path = change.path ?? "(codex did not say which file)";
+
+  if (kind === "unrecognised") {
+    // The honesty check has to be per change, not per item: a single change with
+    // a `kind` of null or something newer than this code would otherwise render
+    // `{old_string:"", new_string:""}` — indistinguishable from a no-op, under a
+    // headline that calls it an edit.
+    return {
+      operation: `Codex called this change "${raw}", which GitBot does not recognise. What it does to this file is UNKNOWN — the text below may not be what happens.`,
+      file_path,
+      raw_change: clip(body, budget),
+    };
+  }
+
+  let old_string = "";
+  let new_string = "";
+  if (kind === "add") {
+    new_string = body;
+  } else if (kind === "delete") {
+    old_string = body;
+  } else {
+    const lines = body.split("\n");
+    // A unified diff's `---`/`+++` file header is the first two lines and
+    // nowhere else. Screening every line for it (as the opencode splitter does)
+    // silently eats a removed line whose content is `---` — YAML front matter, a
+    // markdown rule — because removing it yields `----`. That is asymmetric, too:
+    // an *added* `---` survives. Measured, codex `update` diffs start at `@@`
+    // with no header at all, so this branch is for v1 `unified_diff` bodies.
+    const start = lines[0]?.startsWith("--- ") && lines[1]?.startsWith("+++ ") ? 2 : 0;
+    const removed: string[] = [];
+    const added: string[] = [];
+    for (let i = start; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.startsWith("-")) removed.push(line.slice(1));
+      else if (line.startsWith("+")) added.push(line.slice(1));
+    }
+    old_string = removed.join("\n");
+    new_string = added.join("\n");
+  }
+
+  return {
+    operation: OPERATION_COPY[kind],
+    file_path,
+    old_string: clip(old_string, budget),
+    new_string: clip(new_string, budget),
+    ...(movePath ? { moved_to: movePath } : {}),
+  };
+}
+
+/**
+ * The card body for a file-change approval, and the tool name that heads it.
+ *
+ * The name is not cosmetic. It is the card headline (`Allow {toolName}?`), it is
+ * what `EDIT_TOOLS` matches — so it decides whether `allow-all-edits` answers
+ * this request with no card at all — and it is what the UI keys "Allow all
+ * edits" on (`chat.tsx:1527`).
+ *
+ * Hence four names, not two:
+ *
+ * - `Write`           every change creates a file. In `EDIT_TOOLS`.
+ * - `Edit`            no change removes a file. In `EDIT_TOOLS`.
+ * - `Delete`          every change removes a file.
+ * - `Edit and delete` some changes remove a file and some do not.
+ *
+ * The last two are deliberately NOT in `EDIT_TOOLS`, so `allow-all-edits` —
+ * which `botPermissionToSession` hands every codex bot — cannot destroy a
+ * workspace file without asking. Buying out of per-edit prompts is not buying
+ * out of being told a file is about to be removed.
+ *
+ * `Edit and delete` has to be its own name rather than folding into `Edit`:
+ * one `apply_patch` is ONE item with N changes (measured), and a rename is a
+ * delete plus an add. Calling a mixed item an edit puts every deletion that
+ * travels alongside one straight back on the auto-approve path, where the
+ * per-change `operation` lines are never read because no card is ever raised.
+ *
+ * A change whose `kind` is unrecognised, and an approval with no changes at all,
+ * both get `OPAQUE_CHANGE_TOOL`, which is never auto-approved in any mode:
+ * having just said it does not know what this does, the code must not then
+ * answer for the user.
+ */
+function describeFileChange(changes: FileUpdateChange[] | undefined, itemId: string): {
+  toolName: string;
+  input: Record<string, unknown>;
+} {
+  if (!changes || changes.length === 0) {
+    // Honest rather than empty: the request genuinely carries no detail and the
+    // item that would have carried it never arrived.
+    return {
+      toolName: OPAQUE_CHANGE_TOOL,
+      input: {
+        file_path: "(unknown)",
+        note: "Codex asked to change a file but has not said which file or what the change is — the approval request carries neither, and the matching item has not arrived. Allowing this approves a change GitBot cannot show you.",
+        itemId,
+      },
+    };
+  }
+
+  const kinds = changes.map((c) => changeKind(c).kind);
+  const toolName = kinds.some((k) => k === "unrecognised")
+    ? OPAQUE_CHANGE_TOOL
+    : kinds.every((k) => k === "delete")
+      ? DELETE_TOOL
+      : kinds.some((k) => k === "delete")
+        ? EDIT_AND_DELETE_TOOL
+        : kinds.every((k) => k === "add")
+          ? "Write"
+          : "Edit";
+
+  const budget: CardBudget = { left: MAX_CARD_TEXT_CHARS };
+  const rendered: Record<string, unknown>[] = [];
+  for (const change of changes) {
+    // Always render the first change, however long it is: a card with nothing on
+    // it is worse than a clipped one.
+    if (rendered.length > 0 && (rendered.length >= MAX_CARD_FILES || budget.left <= 0)) break;
+    rendered.push(changeToEditInput(change, budget));
+  }
+  const hidden = changes.length - rendered.length;
+
+  if (changes.length === 1) return { toolName, input: rendered[0] };
+  return {
+    toolName,
+    input: {
+      files: changes.slice(0, MAX_CARD_FILES).map((c) => c.path ?? "(unknown)"),
+      ...(changes.length > MAX_CARD_FILES
+        ? { more_files: `… and ${changes.length - MAX_CARD_FILES} more paths not listed` }
+        : {}),
+      changes: rendered,
+      ...(hidden > 0
+        ? {
+            not_shown: `${hidden} of the ${changes.length} file changes in this patch are not shown above — the card was truncated, not the patch. Allowing applies all ${changes.length}.`,
+          }
+        : {}),
+    },
+  };
+}
+
+/**
+ * Raises a card and resolves once the browser answers. `decide` turns that
+ * yes/no into the answer *this* method expects, which is what keeps the v1 and
+ * v2 decision enums from ever meeting.
+ *
+ * `availableDecisions` rides on the event, not in `input`: `input` is what the
+ * card renders, and the list is for CDX-8 to build buttons from later.
+ */
+function askUser(
+  store: SessionStore,
+  id: JsonRpcId,
+  toolName: string,
+  input: Record<string, unknown>,
+  decide: (approved: boolean) => unknown,
+  availableDecisions?: unknown[],
+): Promise<unknown> {
+  // One itemId can raise several approvals, so the JSON-RPC id is the only
+  // identifier that is unique per request. Note codex numbers ids from 0, so the
+  // first toolUseID is the string "0": truthy as a string, which is what
+  // `server.ts`'s `if (!toolUseID)` and `chat.tsx`'s `if (!d.toolUseID)` need.
+  // Passing the id through as a number would make both reject the first card.
+  const toolUseID = String(id);
+  // Added here rather than at each call site so it cannot be forgotten on a new
+  // never-auto-approve card: the set is the single source for both facts.
+  if (NEVER_AUTO_APPROVE.has(toolName)) input.answer_here = ONLY_ANSWERABLE_HERE;
+  return new Promise<unknown>((resolve) => {
+    store.pendingPermissions.set(toolUseID, {
+      resolve: (approved: unknown) => resolve(decide(approved === true)),
+      input,
+      toolName,
+      toolUseID,
+    });
+    notifyPermissionsChanged();
+    emitEvent(store, "permission_request", {
+      toolUseID,
+      toolName,
+      input,
+      ...(availableDecisions ? { availableDecisions } : {}),
+    });
+  });
+}
+
+/**
+ * The decisions worth offering, in the server's own order.
+ *
+ * An allow-list, not a deny-list. `CommandExecutionApprovalDecision` is
+ * `"accept" | "acceptForSession" | {acceptWithExecpolicyAmendment} |
+ * {applyNetworkPolicyAmendment} | "decline" | "cancel"` — and the two amendments
+ * are the ones that must never become buttons. Accepting
+ * `acceptWithExecpolicyAmendment` appends a permanent
+ * `prefix_rule(…, decision="allow")` to the user's `~/.codex/rules/default.rules`
+ * (`execpolicy/src/amend.rs:65-81`), silencing that command prefix in every
+ * future Codex session including their own terminal.
+ * `applyNetworkPolicyAmendment` is the same class of standing policy edit rather
+ * than a one-off yes — where it is persisted was not traced here, which is
+ * itself a reason not to offer it.
+ *
+ * Screening by shape does not hold them off: `ReviewDecision` already has a bare
+ * string amendment (`"approved_mcp_policy_amendment"`, added between 0.135.0 and
+ * 0.155.1), so "every plain string is safe" is false today and a future
+ * `"acceptWithSomethingPermanent"` would sail through a deny-list unnoticed. The
+ * allow-list fails the other way: a decision this code has never seen is simply
+ * not offered.
+ */
+const OFFERABLE_DECISIONS = new Set(["accept", "acceptForSession", "decline", "cancel"]);
+
+function offerableDecisions(available: unknown): unknown[] | undefined {
+  if (!Array.isArray(available)) return undefined;
+  const kept = available.filter((d) => typeof d === "string" && OFFERABLE_DECISIONS.has(d));
+  return kept.length > 0 ? kept : undefined;
+}
+
+/**
+ * Tells the user about a request GitBot answered on their behalf.
+ *
+ * `assistant`, not `agent_error`. `agent_error` is React state, not transcript.
+ * `chat.tsx:1013` early-returns on rejoin and otherwise only calls
+ * `setTurnError`, which `aborted` and `done` clear again (`chat.tsx:1022`,
+ * `:1028`) — and both follow within milliseconds of a decline like this one. It
+ * also renders as `chat-error` with a Retry button, dressing a deliberate
+ * refusal up as a retryable failure. `assistant` is appended to `msgs` and stays
+ * there for the rest of the turn.
+ *
+ * Still not durable: this is GitBot's own line, so it is not in codex's rollout
+ * and `loadTranscript` cannot bring it back on reload. Visible while it matters
+ * beats invisible, and the alternative — a silent decline — is exactly what a
+ * stalled agent looks like.
+ */
+function reportUnserviceable(store: SessionStore, message: string): void {
+  console.log(`[codex-app-server] ${message}`);
+  emitEvent(store, "assistant", { content: `**GitBot:** ${message}` });
 }
 
 export async function runAppServerTurn(store: SessionStore): Promise<void> {
@@ -728,6 +1229,8 @@ export async function runAppServerTurn(store: SessionStore): Promise<void> {
 
   let receivedCompletion = false;
   let client: CodexAppServerClient | null = null;
+  /** This turn's correlation map, so the teardown can tell it from a later one. */
+  let turnFileChanges: Map<string, FileChangeEntry> | null = null;
 
   const bindThread = (threadId: string) => {
     if (!threadId || store.sdkSessionId === threadId) return;
@@ -781,6 +1284,8 @@ export async function runAppServerTurn(store: SessionStore): Promise<void> {
       },
     });
     activeClients.set(store, client);
+    turnFileChanges = new Map();
+    fileChangeItems.set(store, turnFileChanges);
 
     const activeClient = client;
     const onAbort = () => {
@@ -859,12 +1364,25 @@ export async function runAppServerTurn(store: SessionStore): Promise<void> {
       store.status = "error";
     }
   } finally {
-    activeClients.delete(store);
-    denyAllPending(store);
+    // Delete only what this turn owns. `onAbort` sets `store.status = "done"`
+    // immediately but defers `finishTurn` by `ABORT_GRACE_MS`, and this block
+    // runs later still — while `/chat`'s only guard is
+    // `if (store.status === "running")` (server.ts:317). A re-send inside that
+    // window starts turn 2 on the same store, and an unconditional teardown here
+    // would delete turn 2's correlation map and its live client entry: every
+    // approval it raises would then have no path back to the child, and
+    // `respondPermission` would 409 the lot.
+    const superseded = activeClients.get(store) !== client;
+    if (!superseded) {
+      activeClients.delete(store);
+      denyAllPending(store);
+      store.abortController = null;
+      store.pendingPermissions.clear();
+      notifyPermissionsChanged();
+    }
+    if (turnFileChanges && fileChangeItems.get(store) === turnFileChanges) fileChangeItems.delete(store);
+    // Unconditional: this turn's child must die whoever owns the store now.
     client?.dispose();
-    store.abortController = null;
-    store.pendingPermissions.clear();
-    notifyPermissionsChanged();
   }
 
   if (store.status === "error") {
@@ -957,11 +1475,57 @@ function handleNotification(
     case "item/completed":
       handleItem(store, method, params?.item);
       return;
+    case "item/fileChange/patchUpdated":
+      handleFileChangePatchUpdated(store, params);
+      return;
     default:
       // CDX-3 maps the rest.
       console.log(`[codex-app-server] ignoring notification ${method}`);
       return;
   }
+}
+
+/**
+ * `FileChangePatchUpdatedNotification` — `{threadId, turnId, itemId, changes}`.
+ * The server has revised a patch it already announced. (Live on 0.155.1: its
+ * sibling `item/fileChange/outputDelta` is marked deprecated in the generated
+ * types, this one is not.)
+ *
+ * Two things have to happen, and they are not the same thing.
+ *
+ * The correlation entry is replaced, so a card raised *after* this point shows
+ * the patch that would actually be applied.
+ *
+ * A card already on the wire is auto-declined. It was built from the
+ * `item/started` snapshot, and the UI refuses to update a `toolUseID` it has
+ * already rendered (`chat.tsx:1003` returns `prev` unchanged), so there is no
+ * way to correct it in place before CDX-8. Leaving it up would mean the user
+ * reads diff A and `{decision:"accept"}` applies diff B — the exact
+ * misrepresentation this whole issue exists to prevent. Declining costs a
+ * re-ask; accepting silently costs the user's trust in every card.
+ */
+function handleFileChangePatchUpdated(store: SessionStore, params: any): void {
+  const itemId = typeof params?.itemId === "string" ? params.itemId : "";
+  const entry = itemId ? fileChangeItems.get(store)?.get(itemId) : undefined;
+  const changes: FileUpdateChange[] = Array.isArray(params?.changes) ? params.changes : [];
+  if (!entry) {
+    // No card and no snapshot: record it so a later approval has the detail.
+    if (itemId) fileChangeItems.get(store)?.set(itemId, { changes, cards: new Set() });
+    return;
+  }
+  entry.changes = changes;
+
+  const open = [...entry.cards].filter((toolUseID) => store.pendingPermissions.has(toolUseID));
+  entry.cards = new Set(open);
+  if (open.length === 0) return;
+
+  console.log(`[codex-app-server] patch for item ${itemId} changed under ${open.length} open card(s); declining them`);
+  for (const toolUseID of open) respondPermission(store, toolUseID, false);
+  entry.cards.clear();
+  reportUnserviceable(
+    store,
+    "Codex changed this patch after asking about it, so the approval you were shown no longer describes what would be applied. It was declined. If Codex asks again, the card will show the new patch.",
+  );
 }
 
 function handleItem(store: SessionStore, method: string, item: any): void {
@@ -991,17 +1555,34 @@ function handleItem(store: SessionStore, method: string, item: any): void {
       }
       return;
     case "fileChange":
-      // Same events the SDK path emits (`start-codex.ts` handleItem): one
-      // tool_use per file, `Write` for a new file and `Edit` for the rest.
-      // Without it an auto-approved edit changes a file and the transcript says
-      // nothing happened.
-      if (method === "item/completed") {
+      if (method === "item/started") {
+        // The only carrier of the path and the diff that this item's approval
+        // request will not have. See `fileChangeItems`.
+        if (Array.isArray(item.changes) && typeof item.id === "string") {
+          const items = fileChangeItems.get(store);
+          const existing = items?.get(item.id);
+          // Keep any cards already registered against this id rather than
+          // replacing the entry: `item/fileChange/patchUpdated` needs them.
+          if (existing) existing.changes = item.changes;
+          else items?.set(item.id, { changes: item.changes, cards: new Set() });
+        }
+      } else if (method === "item/completed") {
+        // Explicitly `item/completed`, not `else`. The two are identical today
+        // only because `handleNotification` forwards nothing else here; CDX-3
+        // adds `item/updated` next, and on an `else` that would drop the
+        // correlation entry while the card is still open and emit a second
+        // `tool_use` for the same item.
+        fileChangeItems.get(store)?.delete(item.id);
+        // Same events the SDK path emits (`start-codex.ts` handleItem): one
+        // tool_use per file. Without it an auto-approved edit changes a file and
+        // the transcript says nothing happened. The names match the approval
+        // card's, so a deletion is not filed in the transcript as an edit either.
         for (const change of item.changes ?? []) {
           // v2 spells the kind as a tagged object; the SDK's ThreadItem had a
-          // bare string. Read either.
-          const kind = typeof change?.kind === "string" ? change.kind : change?.kind?.type;
+          // bare string. `changeKind` reads either and names anything else.
+          const { kind } = changeKind(change ?? {});
           emitEvent(store, "tool_use", {
-            tool_name: kind === "add" ? "Write" : "Edit",
+            tool_name: kind === "add" ? "Write" : kind === "delete" ? DELETE_TOOL : "Edit",
             tool_input: change?.path ?? "",
             tool_use_id: item.id,
           });
@@ -1015,9 +1596,13 @@ function handleItem(store: SessionStore, method: string, item: any): void {
 }
 
 /**
- * Returns the JSON-RPC result, or `undefined` to let the client refuse. Command
- * approvals return a promise that settles when the browser answers — the read
+ * Returns the JSON-RPC result, or `undefined` to let the client refuse. An
+ * approval returns a promise that settles when the browser answers — the read
  * loop is not waiting on it.
+ *
+ * Every arm answers in its own method's vocabulary. The v2 approvals say
+ * `accept`/`decline`, `item/permissions/requestApproval` answers with a granted
+ * profile and no decision at all, and the v1 pair speaks `ReviewDecision`.
  */
 function handleServerRequest(
   store: SessionStore,
@@ -1025,33 +1610,19 @@ function handleServerRequest(
   params: any,
   id: JsonRpcId,
 ): unknown | Promise<unknown> | undefined {
-  if (method === "item/fileChange/requestApproval") {
-    // `untrusted` gates edits as well as commands, so this request — which
-    // `on-request` left almost entirely to the model — now arrives on every
-    // edit. `FileChangeRequestApprovalParams` carries no paths and no diff, so
-    // there is nothing here to inspect except `grantRoot`.
-    //
-    // `grantRoot` is not an edit. It asks to write under a root "for the
-    // remainder of the session" — a standing escalation out of the workspace,
-    // which `allow-all-edits` never granted and which every codex bot would get
-    // by default (`botPermissionToSession` puts them all in that mode). Decline
-    // it and leave a line in the log: CDX-4 turns it into a card.
-    if (params?.grantRoot != null) {
-      console.log(`[codex-app-server] declining item/fileChange/requestApproval (id=${id}): asks for session-wide write access under ${JSON.stringify(params.grantRoot)}${params?.reason ? ` — ${params.reason}` : ""}`);
-      return { decision: "decline" };
-    }
-    // An ordinary edit. Honour the mode that already says edits need no asking
-    // (CDX-5's table: "auto-accept fileChange when grantRoot == null"), or a
-    // bot in `allow-all-edits` could not edit at all. `codexAutoApprove` is what
-    // keeps plan mode — nominally `yolo` — from accepting here. The edit itself
-    // is reported by the `fileChange` item, so an accepted one is not silent.
-    const autoApprove = codexAutoApprove(store, "Edit");
-    console.log(`[codex-app-server] fileChange approval id=${id} mode="${store.permissionMode}"${store.mode === "plan" ? " (plan)" : ""} autoApprove=${autoApprove}`);
-    return autoApprove ? { decision: "accept" } : undefined;
+  switch (method) {
+    case "item/commandExecution/requestApproval": return commandApproval(store, params, id);
+    case "item/fileChange/requestApproval": return fileChangeApproval(store, params, id);
+    case "item/permissions/requestApproval": return permissionsApproval(store, params, id);
+    case "item/tool/requestUserInput": return declineUserInput(store, params);
+    case "mcpServer/elicitation/request": return declineElicitation(store, params);
+    case "execCommandApproval": return v1CommandApproval(store, params, id);
+    case "applyPatchApproval": return v1PatchApproval(store, params, id);
+    default: return undefined;
   }
+}
 
-  if (method !== "item/commandExecution/requestApproval") return undefined;
-
+function commandApproval(store: SessionStore, params: any, id: JsonRpcId): unknown | Promise<unknown> {
   // `CommandExecutionApprovalKind` is "command" | "writeStdin"; older servers
   // omit it and mean "command". `writeStdin` is not a command to run, it is text
   // injected into a terminal that is already running, and `command` is null for
@@ -1082,37 +1653,242 @@ function handleServerRequest(
   // { network, fileSystem } — sandbox escapes this command is asking for.
   if (params?.additionalPermissions) input.additionalPermissions = params.additionalPermissions;
 
-  // `availableDecisions` is deliberately not surfaced. Besides accept/decline it
-  // offers `acceptWithExecpolicyAmendment`, which permanently appends an `allow`
-  // rule to the user's ~/.codex/rules/default.rules — a global change affecting
-  // their own terminal, far beyond "allow this once".
-
-  // One itemId can raise several approvals, so the JSON-RPC id is the only
-  // identifier that is unique per request. Note codex numbers ids from 0, so the
-  // first toolUseID is the string "0": truthy as a string, which is what
-  // `server.ts`'s `if (!toolUseID)` and `chat.tsx`'s `if (!d.toolUseID)` need.
-  // Passing the id through as a number would make both reject the first card.
-  const toolUseID = String(id);
-
   const autoApprove = codexAutoApprove(store, toolName);
-  console.log(`[codex-app-server] approval id=${toolUseID} tool="${toolName}" mode="${store.permissionMode}"${store.mode === "plan" ? " (plan)" : ""} autoApprove=${autoApprove}`);
+  console.log(`[codex-app-server] approval id=${id} tool="${toolName}" mode="${store.permissionMode}"${store.mode === "plan" ? " (plan)" : ""} autoApprove=${autoApprove}`);
   if (autoApprove) return { decision: "accept" };
 
-  // A denial is always "decline", even though 0.155.1 omits it from
-  // `availableDecisions` (that list is a hint for which buttons to draw, not a
-  // whitelist — "decline" is accepted regardless). "cancel" is not a synonym:
-  // measured on 0.155.1, it ends the turn as `interrupted` and the agent never
-  // gets to say it was refused, where "decline" completes the turn normally.
-  return new Promise<unknown>((resolve) => {
-    store.pendingPermissions.set(toolUseID, {
-      resolve: (approved: unknown) => resolve({ decision: approved === true ? "accept" : "decline" }),
-      input,
-      toolName,
-      toolUseID,
-    });
-    notifyPermissionsChanged();
-    emitEvent(store, "permission_request", { toolUseID, toolName, input });
-  });
+  return askUser(store, id, toolName, input, v2Decision, offerableDecisions(params?.availableDecisions));
+}
+
+/**
+ * A denial is always "decline", even though 0.155.1 leaves it out of
+ * `availableDecisions` (that list is a hint for which buttons to draw, not a
+ * whitelist — "decline" is accepted regardless, measured). "cancel" is not a
+ * synonym: it ends the turn as `interrupted` with no closing word from the
+ * agent, where "decline" completes the turn and the agent explains the refusal.
+ */
+function v2Decision(approved: boolean): unknown {
+  return { decision: approved ? "accept" : "decline" };
+}
+
+/**
+ * Copy for a `grantRoot` card. Shared by the v2 and v1 patch approvals so the
+ * two cannot drift apart.
+ *
+ * `hasEdit` gates the "wider than the change below" line: with no correlated
+ * item there is no change below, and the card would be pointing at nothing.
+ *
+ * The protocol's own doc for `grantRoot` says "[UNSTABLE] … (unclear if this is
+ * honored today)". The copy still states the session scope as fact, on purpose:
+ * over-warning about a grant that turns out to be inert costs the user a click,
+ * under-warning about one that is honoured costs them the sandbox.
+ */
+function grantRootInput(grantRoot: unknown, reason: string | null, hasEdit: boolean): Record<string, unknown> {
+  return {
+    action: "Give Codex permission to write anywhere under this directory",
+    directory: grantRoot,
+    lasts: "The rest of this session — every later file change under that directory, not just this one.",
+    // `FileChangeApprovalDecision` is one field. There is no way to take the
+    // file change and refuse the standing grant, so say that rather than let the
+    // user believe Allow only covers what the card shows.
+    both_or_neither: hasEdit
+      ? "One answer covers both: Allow approves the change below AND the standing grant; Deny refuses both. The protocol has no way to split them."
+      : "Allow grants this standing permission. Deny refuses it.",
+    ...(hasEdit
+      ? { warning: "This is wider than the change below: it lets Codex write outside the folder it was confined to." }
+      : { warning: "This lets Codex write outside the folder it was confined to." }),
+    ...(reason ? { reason } : {}),
+  };
+}
+
+function fileChangeApproval(store: SessionStore, params: any, id: JsonRpcId): unknown | Promise<unknown> {
+  const itemId = typeof params?.itemId === "string" ? params.itemId : "";
+  const items = fileChangeItems.get(store);
+  let entry = itemId ? items?.get(itemId) : undefined;
+  const changes = entry?.changes;
+  const hasDetail = !!changes && changes.length > 0;
+  const reason = typeof params?.reason === "string" && params.reason.trim() ? params.reason : null;
+  // Remember which cards this item raised, so `item/fileChange/patchUpdated` can
+  // find the ones it has just invalidated. The entry is created when it is
+  // missing — the approval can in principle outrun its `item/started`, and a
+  // card that is not registered here is one `patchUpdated` cannot retract.
+  const remember = () => {
+    if (!itemId || !items) return;
+    if (!entry) {
+      entry = { changes: [], cards: new Set() };
+      items.set(itemId, entry);
+    }
+    entry.cards.add(String(id));
+  };
+
+  // `grantRoot` is not an edit. It asks to write under a root "for the
+  // remainder of the session" — a standing escalation out of the workspace that
+  // no permission mode ever promised. It is never auto-answered, not even under
+  // `yolo`: `allow-all-edits` (which `botPermissionToSession` gives every codex
+  // bot) bought the user out of per-edit prompts, not out of being told the
+  // sandbox is about to be widened for good.
+  if (params?.grantRoot != null) {
+    console.log(`[codex-app-server] fileChange approval id=${id} asks for session-wide write access under ${JSON.stringify(params.grantRoot)}`);
+    const input: Record<string, unknown> = {
+      ...grantRootInput(params.grantRoot, reason, hasDetail),
+      ...describeFileChange(changes, itemId).input,
+    };
+    // `GRANT_ROOT_TOOL` is registered never-auto-approvable, so neither
+    // `allow-all-edits` nor the UI's "Allow all" can answer this.
+    remember();
+    return askUser(store, id, GRANT_ROOT_TOOL, input, v2Decision);
+  }
+
+  const { toolName, input } = describeFileChange(changes, itemId);
+  // Honour the mode that already says edits need no asking (CDX-5's table:
+  // "auto-accept fileChange when grantRoot == null"), or a bot in
+  // `allow-all-edits` could not edit at all. `codexAutoApprove` is what keeps
+  // plan mode — nominally `yolo` — from accepting here, what keeps
+  // `allow-all-edits` off a `Delete`, and what keeps every mode off a change
+  // `describeFileChange` could not read.
+  const autoApprove = codexAutoApprove(store, toolName);
+  console.log(`[codex-app-server] fileChange approval id=${id} tool="${toolName}" item=${itemId} detail=${hasDetail ? "yes" : "no"} mode="${store.permissionMode}"${store.mode === "plan" ? " (plan)" : ""} autoApprove=${autoApprove}`);
+  if (autoApprove) return { decision: "accept" };
+
+  if (reason) input.reason = reason;
+  // `FileChangeRequestApprovalParams` has no `availableDecisions` — the server
+  // offers none for this method, on either binary measured.
+  remember();
+  return askUser(store, id, toolName, input, v2Decision);
+}
+
+/**
+ * Codex asking to step outside its sandbox for this turn — extra network reach
+ * or extra readable/writable paths.
+ *
+ * The answer is `{permissions, scope}`, not `{decision}`: the client says what
+ * it *grants*, and granting nothing is the refusal. Always a card, for the same
+ * reason `grantRoot` is: an auto-answer here would hand over the sandbox escape
+ * that the approval exists to ask about.
+ */
+function permissionsApproval(store: SessionStore, params: any, id: JsonRpcId): unknown | Promise<unknown> {
+  const requested = params?.permissions ?? {};
+  const input: Record<string, unknown> = {
+    action: "Let Codex step outside its sandbox for this turn",
+    ...(requested.network ? { network: requested.network } : {}),
+    ...(requested.fileSystem ? { fileSystem: requested.fileSystem } : {}),
+    cwd: params?.cwd ?? store.repoPath,
+    ...(typeof params?.reason === "string" && params.reason.trim() ? { reason: params.reason } : {}),
+  };
+  console.log(`[codex-app-server] permissions approval id=${id} requested=${JSON.stringify(requested)}`);
+
+  return askUser(store, id, EXTRA_PERMISSIONS_TOOL, input, (approved) => ({
+    // `RequestPermissionProfile` and `GrantedPermissionProfile` carry the same
+    // two members; the request spells absence as null and the grant by omission.
+    permissions: approved
+      ? {
+          ...(requested.network ? { network: requested.network } : {}),
+          ...(requested.fileSystem ? { fileSystem: requested.fileSystem } : {}),
+        }
+      : {},
+    // Never "session". A single click must not outlive the turn it was given
+    // for; `PermissionGrantScope` is the only place that choice is made.
+    scope: "turn",
+  }));
+}
+
+/**
+ * `item/tool/requestUserInput` is a question, not an approval — free text or a
+ * choice from `options`, which an Allow/Deny card cannot express. Declining is
+ * the only honest answer today, so say so in the transcript with the question
+ * attached: a silent `{answers:{}}` is indistinguishable from the agent stalling
+ * and then quietly changing its mind.
+ */
+function declineUserInput(store: SessionStore, params: any): unknown {
+  const questions: any[] = Array.isArray(params?.questions) ? params.questions : [];
+  const asked = questions
+    .map((q) => {
+      // `isSecret` marks a question whose *answer* is a secret (an API key, a
+      // password). The question text is the prompt, never the answer, and GitBot
+      // never collects one — so echoing it back to the user who would have typed
+      // the secret leaks nothing, and hiding it would leave them unable to tell
+      // what codex is stuck on. Deliberate, not an oversight.
+      const text = [q?.header, q?.question].filter((s) => typeof s === "string" && s.trim()).join(" — ");
+      const options: string[] = Array.isArray(q?.options)
+        ? q.options.map((o: any) => o?.label).filter((l: any) => typeof l === "string")
+        : [];
+      return options.length > 0 ? `${text} (${options.join(" / ")})` : text;
+    })
+    .filter(Boolean);
+  reportUnserviceable(
+    store,
+    `Codex asked you a question, and GitBot has no way to pass an answer back yet, so it was left unanswered${asked.length > 0 ? `:\n\n${asked.map((q) => `- ${q}`).join("\n")}` : "."}`,
+  );
+  return { answers: {} };
+}
+
+/**
+ * An MCP server asking the user for something directly. Declined on purpose:
+ * the three modes are a `form` (a JSON-schema form GitBot has no renderer for),
+ * a `url` (sending the user off to an external page mid-turn) and
+ * `openai/userVerification` (a challenge that must be read by a human) — none
+ * survives being reduced to Allow/Deny, and guessing an answer on the user's
+ * behalf is worse than saying no. Visible, so the turn does not look stuck.
+ */
+function declineElicitation(store: SessionStore, params: any): unknown {
+  const server = typeof params?.serverName === "string" ? params.serverName : "an MCP server";
+  const message = typeof params?.message === "string" && params.message.trim() ? ` It asked: ${params.message}` : "";
+  reportUnserviceable(store, `Declined a request from ${server} for input GitBot cannot collect (${params?.mode ?? "unknown"} mode).${message}`);
+  return { action: "decline", content: null, _meta: null };
+}
+
+/** v1 `ExecCommandApprovalParams`: `command` is argv, not a string. */
+function v1CommandApproval(store: SessionStore, params: any, id: JsonRpcId): unknown | Promise<unknown> {
+  const argv: string[] = Array.isArray(params?.command) ? params.command.map((a: any) => String(a)) : [];
+  const input: Record<string, unknown> = {
+    command: argv.join(" ") || "(codex did not say which command it wants to run)",
+    cwd: params?.cwd ?? store.repoPath,
+    ...(typeof params?.reason === "string" && params.reason.trim() ? { reason: params.reason } : {}),
+  };
+  const autoApprove = codexAutoApprove(store, "Bash");
+  console.log(`[codex-app-server] v1 execCommandApproval id=${id} autoApprove=${autoApprove}`);
+  if (autoApprove) return { decision: V1_APPROVE };
+  return askUser(store, id, "Bash", input, v1Decision(store));
+}
+
+/**
+ * v1 `ApplyPatchApprovalParams`. Unlike its v2 replacement it carries the patch
+ * inline — `fileChanges` is a path-keyed map of `{type:"add"|"delete",content}`
+ * or `{type:"update",unified_diff,move_path}` — so nothing has to be correlated.
+ */
+function v1PatchApproval(store: SessionStore, params: any, id: JsonRpcId): unknown | Promise<unknown> {
+  const changes: FileUpdateChange[] = Object.entries(params?.fileChanges ?? {}).map(([path, change]: [string, any]) => ({
+    path,
+    kind: { type: change?.type, move_path: change?.move_path ?? null },
+    diff: change?.type === "update" ? change?.unified_diff : change?.content,
+  }));
+  const reason = typeof params?.reason === "string" && params.reason.trim() ? params.reason : null;
+  const { toolName, input } = describeFileChange(changes.length > 0 ? changes : undefined, String(params?.callId ?? ""));
+  if (reason) input.reason = reason;
+
+  if (params?.grantRoot != null) {
+    console.log(`[codex-app-server] v1 applyPatchApproval id=${id} asks for session-wide write access under ${JSON.stringify(params.grantRoot)}`);
+    return askUser(store, id, GRANT_ROOT_TOOL, {
+      ...grantRootInput(params.grantRoot, reason, changes.length > 0),
+      ...input,
+    }, v1Decision(store));
+  }
+
+  const autoApprove = codexAutoApprove(store, toolName);
+  console.log(`[codex-app-server] v1 applyPatchApproval id=${id} tool="${toolName}" autoApprove=${autoApprove}`);
+  if (autoApprove) return { decision: V1_APPROVE };
+  return askUser(store, id, toolName, input, v1Decision(store));
+}
+
+/**
+ * Bound to the client servicing `store`, because the denial spelling is a
+ * property of the server that asked — see `v1DenyFor`. Resolved now rather than
+ * when the user answers: the client is alive at request time and may not be by
+ * the time the browser replies.
+ */
+function v1Decision(store: SessionStore): (approved: boolean) => unknown {
+  const deny = activeClients.get(store)?.v1Deny ?? v1DenyFor(null);
+  return (approved: boolean) => ({ decision: approved ? V1_APPROVE : deny });
 }
 
 /**
