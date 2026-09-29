@@ -13,6 +13,14 @@ import {
 } from "./server-common";
 import { bindSession, updateThread } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcomeFromEvents } from "./bot-prompt";
+// Circular with `start-codex`, which imports `runAppServerTurn` from here. Safe
+// under CommonJS because neither module *calls* the other at load time — both
+// references are resolved when a turn runs — and it is the right way round: the
+// attachment download, the SSRF guard and the manifest format have to be the
+// same code on both paths, because `loadTranscript` reads that manifest back.
+// Verified on the compiled `dist/` build, not just under tsx.
+import { stageAttachments, settleAttachments, type StagedAttachments } from "./start-codex";
+import type { ThreadItem, TokenUsageBreakdown, TurnPlanStep, UserInput } from "./codex-app-server-protocol";
 
 const PKG_VERSION: string = require("../package.json").version;
 
@@ -842,7 +850,17 @@ export function codexAutoApprove(store: SessionStore, toolName: string): boolean
 
 // --- Approval cards ---
 
-/** One entry of a `fileChange` item's `changes[]`, as the wire spells it. */
+/**
+ * One entry of a `fileChange` item's `changes[]`.
+ *
+ * Deliberately looser than the generated `FileUpdateChange`
+ * (`{path: string, kind: PatchChangeKind, diff: string}`, all three required):
+ * `v1PatchApproval` builds values of this shape from v1's path-keyed
+ * `fileChanges` map, whose `kind` is a bare string, and a card has to degrade a
+ * missing field into honest copy rather than render `undefined`. The generated
+ * type is assignable to this one, which is what lets `handleItem` pass its
+ * `WireItem<"fileChange">.changes` straight into `fileChangeItems`.
+ */
 interface FileUpdateChange {
   path?: string;
   kind?: { type?: string; move_path?: string | null } | string;
@@ -1191,17 +1209,27 @@ export async function runAppServerTurn(store: SessionStore): Promise<void> {
   const promptText = (lastUserEvent?.prompt as string) ?? "";
   const attachments = (lastUserEvent?.attachments as Array<{ url: string }> | undefined) ?? [];
 
-  if (!promptText) {
-    emitEvent(store, "error", { message: "prompt is required" });
+  if (!promptText && attachments.length === 0) {
+    emitEvent(store, "error", { message: "prompt or attachments is required" });
     store.status = "error";
     notifyPermissionsChanged();
     scheduleCleanup(store);
     return;
   }
-  if (attachments.length > 0) {
-    emitEvent(store, "agent_error", {
-      message: "Image attachments are not supported on the experimental codex app-server path; the text prompt was sent on its own.",
-    });
+
+  // Same download, same staging directory, same manifest as the SDK path —
+  // `loadTranscript` reads that manifest to put the images back on reload, so
+  // the two paths cannot be allowed to write it differently.
+  let staged: StagedAttachments;
+  try {
+    staged = await stageAttachments(store, attachments);
+  } catch (err: any) {
+    console.error("[codex-app-server] attachment download failed:", err?.message);
+    emitEvent(store, "error", { message: `Attachment download failed: ${err?.message ?? "unknown"}` });
+    store.status = "error";
+    notifyPermissionsChanged();
+    scheduleCleanup(store);
+    return;
   }
 
   const unenforceableTools = [
@@ -1231,6 +1259,7 @@ export async function runAppServerTurn(store: SessionStore): Promise<void> {
   let client: CodexAppServerClient | null = null;
   /** This turn's correlation map, so the teardown can tell it from a later one. */
   let turnFileChanges: Map<string, FileChangeEntry> | null = null;
+  const mapping: TurnMapping = { usage: null, streaming: new Set(), planUpdates: 0 };
 
   const bindThread = (threadId: string) => {
     if (!threadId || store.sdkSessionId === threadId) return;
@@ -1253,7 +1282,7 @@ export async function runAppServerTurn(store: SessionStore): Promise<void> {
           console.log(`[codex-app-server] dropping ${method} after the turn closed`);
           return;
         }
-        handleNotification(store, method, params, bindThread, () => {
+        handleNotification(store, method, params, mapping, bindThread, () => {
           receivedCompletion = true;
           finishTurn();
         });
@@ -1350,9 +1379,16 @@ export async function runAppServerTurn(store: SessionStore): Promise<void> {
     if (threadIdForTurn) bindThread(threadIdForTurn);
 
     if (threadIdForTurn && !abortController.signal.aborted) {
+      // `UserInput` is the generated type, so a renamed or retyped member of
+      // the turn payload is a compile error rather than a silently ignored
+      // field. `localImage` is app-server's spelling of the SDK's
+      // `local_image`; both hand codex a path on disk, not bytes.
+      const input: UserInput[] = [];
+      if (promptText) input.push({ type: "text", text: promptText, text_elements: [] });
+      for (const a of staged.downloaded) input.push({ type: "localImage", path: a.path });
       const turn = await client.request("turn/start", {
         threadId: threadIdForTurn,
-        input: [{ type: "text", text: promptText, text_elements: [] }],
+        input,
       });
       turnId = turn?.turn?.id ?? null;
       await turnDone;
@@ -1364,6 +1400,12 @@ export async function runAppServerTurn(store: SessionStore): Promise<void> {
       store.status = "error";
     }
   } finally {
+    // Unconditional, and before the supersession check: the staging directory
+    // is named after `gitbotId`, so it belongs to the store rather than to this
+    // turn, and `thread/started` has by now given it the id the manifest is
+    // filed under. Leaving it unpromoted loses the images' original URLs, which
+    // is what `loadTranscript` needs to render them again.
+    settleAttachments(store, staged);
     // Delete only what this turn owns. `onAbort` sets `store.status = "done"`
     // immediately but defers `finishTurn` by `ABORT_GRACE_MS`, and this block
     // runs later still — while `/chat`'s only guard is
@@ -1406,10 +1448,148 @@ export async function runAppServerTurn(store: SessionStore): Promise<void> {
   scheduleCleanup(store);
 }
 
+/**
+ * What the mapping has to remember for the length of one turn. Lives in
+ * `runAppServerTurn`'s frame rather than in a module-level map keyed on the
+ * store, so it cannot outlive the turn or be read by the next one.
+ */
+interface TurnMapping {
+  /**
+   * This turn's token usage, accumulated.
+   *
+   * `turn/completed` carries no usage at all — `Turn` is
+   * `{id, items, itemsView, status, error, startedAt, completedAt, durationMs}`
+   * — where the SDK's `turn.completed` carries a `Usage`. The numbers only
+   * arrive on `thread/tokenUsage/updated`, once per model request, and its
+   * `total` is THREAD-cumulative, not turn-scoped: on a resumed thread it
+   * already includes every earlier turn. Its `last` is the request that just
+   * finished, and summing those over the turn reproduces the turn's share
+   * exactly (measured over a 4-request turn: 14773+14890+15010+15105 = 59778,
+   * the reported running total).
+   */
+  usage: Record<string, number> | null;
+  /** Item ids already given a streaming status — see `noteStreaming`. */
+  streaming: Set<string>;
+  /** Counts plan revisions, so each gets its own `tool_use_id`. */
+  planUpdates: number;
+}
+
+/**
+ * A `TurnError` as one line.
+ *
+ * `message` alone loses the cause. Measured on 0.155.1, the same failure that
+ * `codex exec` reports as
+ * `"Reconnecting... 2/5 (stream disconnected before completion: Connection
+ * refused (os error 61))"` arrives here split in two —
+ * `message: "Reconnecting... 2/5"` and
+ * `additionalDetails: "stream disconnected before completion: Connection
+ * refused (os error 61)"` — so joining them is what makes the two paths say the
+ * same thing. `codexErrorInfo` is left out: it is a machine code
+ * (`responseStreamDisconnected`) that adds nothing a user can read.
+ */
+function turnErrorMessage(error: unknown, fallback: string): string {
+  const e = error as { message?: unknown; additionalDetails?: unknown } | null;
+  const message = typeof e?.message === "string" && e.message.trim() ? e.message : fallback;
+  const details = typeof e?.additionalDetails === "string" && e.additionalDetails.trim() ? e.additionalDetails : "";
+  return details ? `${message} (${details})` : message;
+}
+
+/** Adds one `thread/tokenUsage/updated` delta to the turn's running total. */
+function addUsage(mapping: TurnMapping, last: Partial<TokenUsageBreakdown> | undefined): void {
+  if (!last || typeof last !== "object") return;
+  const acc = mapping.usage ?? {
+    input_tokens: 0,
+    cached_input_tokens: 0,
+    cache_write_input_tokens: 0,
+    output_tokens: 0,
+    reasoning_output_tokens: 0,
+  };
+  const add = (key: string, value: unknown) => {
+    if (typeof value === "number" && Number.isFinite(value)) acc[key] += value;
+  };
+  // snake_case on purpose: this is the SDK's `Usage`, which is what the
+  // flag-off path already puts on `result.usage`. One shape, not two.
+  add("input_tokens", last.inputTokens);
+  add("cached_input_tokens", last.cachedInputTokens);
+  add("cache_write_input_tokens", last.cacheWriteInputTokens);
+  add("output_tokens", last.outputTokens);
+  add("reasoning_output_tokens", last.reasoningOutputTokens);
+  mapping.usage = acc;
+}
+
+/**
+ * Says "something is happening" once per streaming item instead of once per
+ * token.
+ *
+ * Measured on one ordinary turn: 107 `item/agentMessage/delta` notifications,
+ * and 316 `item/plan/delta` on a plan-mode turn. The UI has nowhere to put the
+ * tokens — `chat.tsx` fakes streaming from whole `assistant` messages and
+ * explicitly does not want real deltas (`ui/AGENTS.md`) — so forwarding them
+ * would be hundreds of SSE frames carrying a label that never changes. The
+ * label itself is worth having: without it the composer sits on the previous
+ * activity for the several seconds before the message lands.
+ */
+function noteStreaming(store: SessionStore, mapping: TurnMapping, itemId: unknown, summary: string): void {
+  const key = typeof itemId === "string" ? itemId : "";
+  if (!key || mapping.streaming.has(key)) return;
+  mapping.streaming.add(key);
+  // `tool_summary` is the only `status` subtype `chat.tsx` renders free text
+  // for (`chat.tsx:996`); `thinking` and `tool` both have fixed wording.
+  emitEvent(store, "status", { status: "tool_summary", summary });
+}
+
+/**
+ * Notifications this code has read, understood and deliberately drops, so the
+ * `default` branch's log keeps meaning "something new turned up".
+ *
+ * - `thread/status/changed`: `ThreadStatus` is
+ *   `notLoaded | idle | systemError | active{activeFlags}`. The turn lifecycle
+ *   is already reported by `turn/started`/`turn/completed`, and the two flags
+ *   (`waitingOnApproval`, `waitingOnUserInput`) duplicate the
+ *   `permission_request` that raised the card. `systemError` carries no message
+ *   of its own, so there would be nothing to show the user: the reason arrives
+ *   as an `error` notification or as `turn/completed` with `status:"failed"`,
+ *   both handled above.
+ * - `account/rateLimits/updated`, `account/updated`, `turn/moderationMetadata`,
+ *   `remoteControl/status/changed`, `thread/goal/updated`,
+ *   `thread/goal/cleared`, `thread/queue/changed`, `project/changed`,
+ *   `thread/project/updated`, `fs/changed`: account, device-pairing and
+ *   IDE-panel state with no GitBot surface to put it on.
+ * - `turn/diff/updated`: an aggregated `git diff` of the turn. The UI has its
+ *   own diff view served from `GET /diffs`, which runs git against the real
+ *   working tree; a second, staler copy on the event stream is not better.
+ * - `item/commandExecution/outputDelta`: the command's output as it appears.
+ *   `tool_use` has already put "Running Bash…" on screen and `tool_result`
+ *   carries the whole `aggregatedOutput` at the end, so a per-chunk event
+ *   would only be a second copy of text the transcript already gets.
+ * - `item/reasoning/summaryPartAdded`: a boundary marker with no text on it.
+ * - `rawResponseItem/completed`, `rawResponse/completed`: opt-in raw Responses
+ *   API echoes; GitBot never sets `experimentalRawEvents`.
+ */
+const IGNORED_NOTIFICATIONS = new Set([
+  "thread/status/changed",
+  "account/rateLimits/updated",
+  "account/updated",
+  "turn/moderationMetadata",
+  "remoteControl/status/changed",
+  "thread/goal/updated",
+  "thread/goal/cleared",
+  "thread/queue/changed",
+  "project/changed",
+  "thread/project/updated",
+  "fs/changed",
+  "turn/diff/updated",
+  "item/commandExecution/outputDelta",
+  "item/reasoning/summaryPartAdded",
+  "rawResponseItem/completed",
+  "rawResponse/completed",
+]);
+
 function handleNotification(
   store: SessionStore,
   method: string,
   params: any,
+  mapping: TurnMapping,
   bindThread: (threadId: string) => void,
   onTurnEnded: () => void,
 ): void {
@@ -1427,7 +1607,7 @@ function handleNotification(
       // claim work happened that codex abandoned.
       const status = params?.turn?.status;
       if (status === "failed") {
-        emitEvent(store, "error", { message: params?.turn?.error?.message ?? "Codex turn failed" });
+        emitEvent(store, "error", { message: turnErrorMessage(params?.turn?.error, "Codex turn failed") });
         store.status = "error";
       } else if (status === "interrupted") {
         // When the user pressed Stop we already said so and set the status;
@@ -1437,17 +1617,23 @@ function handleNotification(
           store.status = "done";
         }
       } else {
-        emitEvent(store, "result", { subtype: "success" });
+        emitEvent(store, "result", {
+          subtype: "success",
+          ...(mapping.usage ? { usage: mapping.usage } : {}),
+        });
       }
       onTurnEnded();
       return;
     }
+    case "thread/tokenUsage/updated":
+      addUsage(mapping, params?.tokenUsage?.last);
+      return;
     case "error": {
       // `ErrorNotification` carries `willRetry`. codex reports retries and
       // transport fallbacks here and then carries on, so a retryable error must
       // not end the turn — but one it will not retry is the end of the turn, and
       // treating it as noise leaves the session waiting on a child that is done.
-      const message = params?.error?.message ?? "Codex reported an error";
+      const message = turnErrorMessage(params?.error, "Codex reported an error");
       console.log(`[codex-app-server] ${message} (willRetry=${params?.willRetry})`);
       if (params?.willRetry === false) {
         emitEvent(store, "error", { message });
@@ -1478,8 +1664,89 @@ function handleNotification(
     case "item/fileChange/patchUpdated":
       handleFileChangePatchUpdated(store, params);
       return;
+    case "turn/plan/updated": {
+      // The counterpart of the SDK's `todo_list` item — the `update_plan` tool.
+      // NOT the `plan` ITEM, which is a markdown document with no per-step
+      // state (measured: `{"type":"plan","id":"…-plan","text":"# Add Output
+      // Path Flag…"}`); a `[done]/[open]` list cannot be built from that, so
+      // `handleItem` renders it as prose instead.
+      //
+      // SHAPE IS FROM THE GENERATED TYPES, NOT FROM A MEASUREMENT. No model
+      // reachable on this account offers `update_plan` on 0.155.1 — gpt-5.5 and
+      // gpt-6-sol both answered that they have no such tool, with
+      // `tools.update_plan = {state = "enabled"}` set, so the notification
+      // could not be provoked. Kept because the SDK path has the same handler
+      // for `todo_list`, and parity is the point of this issue; written so that
+      // a missing `plan`, a missing `step` or an unknown `status` degrades
+      // rather than throws.
+      const steps: Array<Partial<TurnPlanStep>> = Array.isArray(params?.plan) ? params.plan : [];
+      if (steps.length === 0) return;
+      // `TurnPlanStepStatus` is pending | inProgress | completed, against the
+      // SDK's boolean `completed` — so inProgress reads as open, which is what
+      // the SDK reported for it too.
+      const summary = steps
+        .map((s) => `[${s?.status === "completed" ? "done" : "open"}] ${s?.step ?? "(unnamed step)"}`)
+        .join(", ");
+      emitEvent(store, "tool_use", {
+        tool_name: "TodoWrite",
+        tool_input: summary,
+        // The notification carries no item id, and a revised plan is a new
+        // card in the SDK path (a fresh `todo_list` item each time), so number
+        // them rather than reuse one id for every revision.
+        tool_use_id: `${params?.turnId ?? "turn"}#plan-${++mapping.planUpdates}`,
+      });
+      return;
+    }
+    case "item/agentMessage/delta":
+    case "item/plan/delta":
+      noteStreaming(store, mapping, params?.itemId, "Writing…");
+      return;
+    case "item/reasoning/summaryTextDelta":
+    case "item/reasoning/textDelta":
+      // A `reasoning` item/started already said "Thinking…" (measured: one
+      // fires per reasoning item). This only matters when the summary text
+      // starts arriving without one, which the protocol does not forbid.
+      noteStreaming(store, mapping, params?.itemId, "Thinking…");
+      return;
+    case "mcpServer/startupStatus/updated": {
+      // `McpServerStartupState` is starting | ready | failed | cancelled, and
+      // codex boots three of its own servers per thread (`codex_apps`,
+      // `node_repl`, `cua_repl`) — ~6-9 notifications a turn, all noise except
+      // a failure. A server that did not come up is a set of tools the model
+      // silently no longer has, which is worth one line and is not fatal.
+      if (params?.status !== "failed") return;
+      const name = typeof params?.name === "string" ? params.name : "an MCP server";
+      const detail = typeof params?.error === "string" && params.error.trim() ? `: ${params.error}` : "";
+      emitEvent(store, "agent_error", {
+        message: `Codex could not start the MCP server "${name}"${detail}. Its tools are unavailable for this turn.`,
+      });
+      return;
+    }
+    case "warning":
+    case "guardianWarning": {
+      // Codex's own non-fatal notices about this thread's work. `agent_error`
+      // is where this path already puts everything codex says went wrong but
+      // survived (`ErrorNotification` with `willRetry`), so they share it.
+      //
+      // Only these two. `configWarning` and `deprecationNotice` are a
+      // DIFFERENT SHAPE — `{summary, details}`, not `{message}` — and are about
+      // the config file and the API GitBot itself called, neither of which the
+      // user can act on from a chat. They go to the console below.
+      const message = typeof params?.message === "string" ? params.message : "";
+      if (!message.trim()) return;
+      console.log(`[codex-app-server] ${method}: ${message}`);
+      emitEvent(store, "agent_error", { message });
+      return;
+    }
+    case "configWarning":
+    case "deprecationNotice":
+      console.log(
+        `[codex-app-server] ${method}: ${params?.summary ?? "(no summary)"}` +
+          (params?.details ? ` — ${params.details}` : ""),
+      );
+      return;
     default:
-      // CDX-3 maps the rest.
+      if (IGNORED_NOTIFICATIONS.has(method)) return;
       console.log(`[codex-app-server] ignoring notification ${method}`);
       return;
   }
@@ -1528,71 +1795,202 @@ function handleFileChangePatchUpdated(store: SessionStore, params: any): void {
   );
 }
 
+/**
+ * One arm of the generated `ThreadItem` union, as it is safe to read off the
+ * wire.
+ *
+ * The generated type says what the *pinned* 0.155.1 binary promises. Nothing
+ * here validates the JSON against it, and `resolveCodexBinary()` deliberately
+ * falls back to whatever `codex` is on PATH — so only the discriminant, which
+ * `handleItem` has just tested, is assumed to be there. `Partial` is what makes
+ * the difference load-bearing: every field NAME and TYPE below is still checked
+ * against the real protocol (a renamed `aggregatedOutput` fails to compile),
+ * while every read still has to cope with the field being absent.
+ */
+type WireItem<T extends ThreadItem["type"]> = Partial<Extract<ThreadItem, { type: T }>> & { type: T };
+
+/**
+ * `item/started` and `item/completed` are the only two item notifications v2
+ * has — there is no `item/updated` in `ServerNotification` on 0.155.1, so the
+ * "an update arrives after completion" case cannot happen and nothing here
+ * guards against it. Every arm still tests `method` explicitly rather than
+ * using `else`, so adding a third forwarded method later cannot silently
+ * double-emit.
+ */
 function handleItem(store: SessionStore, method: string, item: any): void {
   if (!item || typeof item.type !== "string") return;
-  switch (item.type) {
-    case "agentMessage":
-      if (method === "item/completed") emitEvent(store, "assistant", { content: item.text ?? "" });
+  const started = method === "item/started";
+  const completed = method === "item/completed";
+  switch (item.type as ThreadItem["type"]) {
+    case "agentMessage": {
+      const it = item as WireItem<"agentMessage">;
+      // Every phase, not just `final_answer`: `commentary` messages are the
+      // agent narrating as it works, and the SDK path showed them too.
+      if (completed) emitEvent(store, "assistant", { content: it.text ?? "" });
       return;
+    }
+    case "plan": {
+      const it = item as WireItem<"plan">;
+      // A markdown plan document, NOT a checklist — measured on 0.155.1:
+      // `{"type":"plan","id":"…-plan","text":"# Add Output Path Flag…"}`. So it
+      // is prose, and `assistant` is the only event that renders prose as
+      // markdown. `turn/plan/updated` is the checklist, and that is what
+      // becomes `TodoWrite`.
+      //
+      // Reachable only under `collaborationMode: {mode:"plan"}`, which this
+      // path does not request yet (CDX-5 owns modes); mapped anyway because
+      // dropping a whole plan on the floor is the worse failure.
+      if (completed && typeof it.text === "string" && it.text.trim()) {
+        emitEvent(store, "assistant", { content: it.text });
+      }
+      return;
+    }
     case "reasoning":
-      if (method === "item/started") emitEvent(store, "status", { status: "thinking" });
+      // A status, not content: `summary` and `content` arrived as empty arrays
+      // on every reasoning item measured here, at `item/started` and at
+      // `item/completed` alike, so there is nothing to render but the fact that
+      // it is thinking — which is exactly what the SDK path emitted.
+      if (started) emitEvent(store, "status", { status: "thinking" });
       return;
-    case "commandExecution":
-      if (method === "item/started") {
+    case "commandExecution": {
+      const it = item as WireItem<"commandExecution">;
+      if (started) {
         emitEvent(store, "tool_use", {
           tool_name: "Bash",
-          tool_input: item.command ?? "",
-          tool_use_id: item.id,
+          tool_input: it.command ?? "",
+          tool_use_id: it.id,
         });
-      } else {
+      } else if (completed) {
         emitEvent(store, "tool_result", {
-          tool_use_id: item.id,
+          tool_use_id: it.id,
           tool_name: "Bash",
-          output: item.aggregatedOutput ?? "",
-          exit_code: item.exitCode ?? null,
-          status: item.status ?? "completed",
+          output: it.aggregatedOutput ?? "",
+          exit_code: it.exitCode ?? null,
+          status: it.status ?? "completed",
         });
       }
       return;
-    case "fileChange":
-      if (method === "item/started") {
+    }
+    case "fileChange": {
+      const it = item as WireItem<"fileChange">;
+      if (started) {
         // The only carrier of the path and the diff that this item's approval
         // request will not have. See `fileChangeItems`.
-        if (Array.isArray(item.changes) && typeof item.id === "string") {
+        if (Array.isArray(it.changes) && typeof it.id === "string") {
           const items = fileChangeItems.get(store);
-          const existing = items?.get(item.id);
+          const existing = items?.get(it.id);
           // Keep any cards already registered against this id rather than
           // replacing the entry: `item/fileChange/patchUpdated` needs them.
-          if (existing) existing.changes = item.changes;
-          else items?.set(item.id, { changes: item.changes, cards: new Set() });
+          if (existing) existing.changes = it.changes;
+          else items?.set(it.id, { changes: it.changes, cards: new Set() });
         }
-      } else if (method === "item/completed") {
-        // Explicitly `item/completed`, not `else`. The two are identical today
-        // only because `handleNotification` forwards nothing else here; CDX-3
-        // adds `item/updated` next, and on an `else` that would drop the
-        // correlation entry while the card is still open and emit a second
-        // `tool_use` for the same item.
-        fileChangeItems.get(store)?.delete(item.id);
+      } else if (completed) {
+        if (typeof it.id === "string") fileChangeItems.get(store)?.delete(it.id);
         // Same events the SDK path emits (`start-codex.ts` handleItem): one
         // tool_use per file. Without it an auto-approved edit changes a file and
         // the transcript says nothing happened. The names match the approval
         // card's, so a deletion is not filed in the transcript as an edit either.
-        for (const change of item.changes ?? []) {
+        for (const change of it.changes ?? []) {
           // v2 spells the kind as a tagged object; the SDK's ThreadItem had a
           // bare string. `changeKind` reads either and names anything else.
           const { kind } = changeKind(change ?? {});
           emitEvent(store, "tool_use", {
             tool_name: kind === "add" ? "Write" : kind === "delete" ? DELETE_TOOL : "Edit",
             tool_input: change?.path ?? "",
-            tool_use_id: item.id,
+            tool_use_id: it.id,
           });
         }
       }
       return;
+    }
+    case "webSearch": {
+      const it = item as WireItem<"webSearch">;
+      // `item/completed` only: at `item/started` the query is the empty string
+      // and `action` is `{"type":"other"}` (measured), so an early card would
+      // say "WebSearch" with nothing in it. The SDK path also emitted on
+      // completion.
+      if (!completed) return;
+      emitEvent(store, "tool_use", {
+        tool_name: "WebSearch",
+        tool_input: it.query?.trim() ? it.query : describeSearchAction(it.action),
+        tool_use_id: it.id,
+      });
+      return;
+    }
+    case "mcpToolCall": {
+      const it = item as WireItem<"mcpToolCall">;
+      // `mcp__<server>__<tool>` is the claude-code spelling the UI and
+      // `shouldAutoApprove` already understand, and what the SDK path built
+      // from `item.server`/`item.tool`. Measured: `server:"node_repl"`,
+      // `tool:"js"` → `mcp__node_repl__js`.
+      const toolName = `mcp__${it.server ?? "unknown"}__${it.tool ?? "unknown"}`;
+      if (started) {
+        emitEvent(store, "tool_use", {
+          tool_name: toolName,
+          tool_input: JSON.stringify(it.arguments ?? {}),
+          tool_use_id: it.id,
+        });
+      } else if (completed) {
+        // More than the SDK path had: it emitted one `tool_use` on completion
+        // and nothing else, so a failed MCP call read exactly like a successful
+        // one. `status` is inProgress | completed | failed and `error` is
+        // `{message}`; both belong in the transcript.
+        emitEvent(store, "tool_result", {
+          tool_use_id: it.id,
+          tool_name: toolName,
+          output: it.error?.message ?? mcpResultText(it.result),
+          status: it.status ?? "completed",
+        });
+      }
+      return;
+    }
+    case "userMessage":
+      // GitBot's own prompt, echoed back as the first item of every turn
+      // (measured: `content` is the exact `{type:"text"}` sent to `turn/start`).
+      // The browser already rendered it before the request went out, so
+      // emitting anything here would show the user their own message twice.
+      return;
     default:
+      // `ThreadItem` has 19 arms; the rest are hooks, sub-agents, dynamic
+      // tools, review mode, image generation and compaction, none of which
+      // GitBot enables. Logged rather than listed, because unlike the
+      // notification list this one is quiet — at most a handful a turn.
       console.log(`[codex-app-server] ignoring ${method} for item type ${item.type}`);
       return;
   }
+}
+
+/**
+ * What a `webSearch` item was doing when its `query` is empty.
+ *
+ * `query` was measured empty at `item/started` and filled at `item/completed`
+ * for a plain search, so this is not the normal path. It exists because
+ * `WebSearchAction` is `search{query,queries} | openPage{url} |
+ * findInPage{url,pattern} | other`, and only the first of those has a query to
+ * put there at all — a card reading `WebSearch: ""` says less than nothing.
+ */
+function describeSearchAction(action: unknown): string {
+  const a = action as { type?: string; url?: string | null; pattern?: string | null; queries?: string[] | null } | null;
+  switch (a?.type) {
+    case "search": return a.queries?.filter((q) => typeof q === "string").join(", ") || "(no query)";
+    case "openPage": return a.url ?? "(opened a page)";
+    case "findInPage": return [a.pattern, a.url].filter(Boolean).join(" in ") || "(searched within a page)";
+    default: return "(codex did not say what it searched for)";
+  }
+}
+
+/**
+ * The text of an `McpToolCallResult`. `content` is `Array<JsonValue>` —
+ * deliberately opaque at the app-server boundary so new MCP content types pass
+ * through — so the text blocks are pulled out and anything else is named by its
+ * type rather than dumped as JSON into the transcript.
+ */
+function mcpResultText(result: unknown): string {
+  const content = (result as { content?: unknown } | null)?.content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block: any) => (typeof block?.text === "string" ? block.text : `(${block?.type ?? "unknown"} content)`))
+    .join("\n");
 }
 
 /**
