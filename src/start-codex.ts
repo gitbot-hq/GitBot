@@ -24,6 +24,7 @@ import {
 } from "./server-common";
 import { bindSession, dataDir } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcomeFromEvents } from "./bot-prompt";
+import { appServerEnabled, runAppServerTurn } from "./codex-app-server";
 
 let CodexCtor: typeof CodexClass | null = null;
 
@@ -107,6 +108,11 @@ function permissionToCodex(mode: PermissionMode): ThreadOptions["sandboxMode"] {
 }
 
 export async function runAgent(store: SessionStore): Promise<void> {
+  // GITBOT_CODEX_APP_SERVER=1 swaps the SDK for a JSON-RPC client over
+  // `codex app-server`, the only transport that can ask the user anything.
+  // Everything below is the untouched SDK path the flag opts out of.
+  if (appServerEnabled()) return runAppServerTurn(store);
+
   const lastUserEvent = [...store.events].reverse().find(e => e.type === "user_prompt");
   const promptText = (lastUserEvent?.prompt as string) ?? "";
   const attachments = (lastUserEvent?.attachments as Array<{ url: string }> | undefined) ?? [];

@@ -28,6 +28,7 @@ import {
 import { initAgent as initClaudeCode, runAgent as runClaudeCode, listSessions as listClaudeSessions, loadTranscript } from "./start-claude-code";
 import { initAgent as initOpencode, stopAgent as stopOpencode, runAgent as runOpencode, listSessions as listOpencodeSessions, getSessionHistory, abortSession as opencodeAbort, respondPermission as opencodePermission } from "./start-opencode";
 import { initAgent as initCodex, runAgent as runCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
+import { respondPermission as respondCodexPermission, codexAutoApprove, reapCodexAppServers } from "./codex-app-server";
 import { handleBotRoutes } from "./bot-routes";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
 import { getBot, getThread, touchThread, updateThread, botNeedsSetup, DEFAULT_BOT_AGENT } from "./bot-store";
@@ -212,6 +213,15 @@ export async function handleRequest(
             ? { behavior: "allow", updatedInput: updatedInput ?? pending.input }
             : { behavior: "deny", message: "User denied" }
           );
+        }
+      } else if (store.agent === "codex") {
+        // The stored resolve writes the JSON-RPC response back to app-server.
+        // A false return means the answer reached nothing — an unknown card, or
+        // one whose app-server is gone. Saying "ok" there would show the user
+        // "Allowed Bash" for a command that was never run.
+        if (!respondCodexPermission(store, toolUseID, approved === true)) {
+          jsonError(res, 409, "This approval is no longer waiting for an answer");
+          return;
         }
       } else if (store.agent === "opencode" && store.sdkSessionId) {
         const pending = store.pendingPermissions.get(toolUseID);
@@ -440,7 +450,24 @@ export async function handleRequest(
           }
           notifyPermissionsChanged();
         } else if (store.agent === "codex") {
-          // codex applies approvalPolicy at thread start — mode change takes effect next turn
+          // The approval policy is fixed for the thread, but the auto-approve
+          // check runs per request against store.permissionMode, so the new mode
+          // covers everything codex asks from here on. The cards already waiting
+          // have to be resolved by hand, or "Allow all" leaves the turn blocked
+          // on the very approval it was pressed to clear.
+          for (const [id, perm] of store.pendingPermissions) {
+            // `codexAutoApprove` folds in the sandbox: plan mode arrives here as
+            // `yolo` and must not be talked out of being read-only by a mode
+            // switch mid-turn.
+            if (codexAutoApprove(store, perm.toolName)) {
+              // Answer through the same path as POST /permission. Resolving by
+              // hand skips its liveness check: with no app-server left the
+              // stored resolve writes into a closed stdin, the card disappears
+              // and the UI marks it allowed for a command that never ran.
+              respondCodexPermission(store, id, true);
+            }
+          }
+          notifyPermissionsChanged();
         } else if (store.agent === "opencode" && store.sdkSessionId) {
           for (const [id, perm] of store.pendingPermissions) {
             if (shouldAutoApprove(store.agent, perm.toolName, store.permissionMode)) {
@@ -504,6 +531,9 @@ export async function start(network: string = "local", portOverride?: number, ca
   process.on("exit", stopOpencode);
   setupShutdown(() => {
     stopOpencode();
+    // Detached process groups do not get the terminal's signal, so codex
+    // app-server and everything it approved have to be taken down by hand.
+    reapCodexAppServers();
     server.close(() => process.exit(0));
   }, caffeinatePid);
 }

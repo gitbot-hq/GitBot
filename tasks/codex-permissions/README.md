@@ -82,12 +82,31 @@ the current adapter depends on was re-verified on this transport: `thread/resume
 by id, streamed items, `localImage` input, `cwd`, `developerInstructions`,
 `turn/interrupt`.
 
-Two decisive details:
+Three decisive details:
 
 - Set **`approvalsReviewer: "user"`**. The default routes approvals to an LLM
   subagent (`auto_review`), not to a human.
-- The server supplies **`availableDecisions`** per request — the UI should render
-  buttons from it rather than hardcoding a decision set.
+- Use **`approvalPolicy: "untrusted"`**, and only ever as a *param* on
+  `thread/start` / `thread/resume` / `turn/start` / `thread/settings/update`.
+  `on-request` is not a per-tool gate — under it, whether the user is asked at
+  all is the model's discretion (`echo hello` runs unprompted; only a
+  model-initiated escalation asks). `untrusted` is the harness deciding: always
+  ask, for every command and every file edit, independent of sandbox.
+  **The landmine:** the same value passed via `config.toml` or `-c` makes the
+  server refuse to start — it never answers `initialize`. Only the config path
+  was retired upstream, not the policy. Full evidence and the mode table are in
+  [CDX-5](CDX-5-permission-modes.md).
+- The server supplies **`availableDecisions`** per request. Render buttons from
+  it — but **suppress `acceptWithExecpolicyAmendment`**: accepting it appends a
+  permanent `allow` rule to the user's `~/.codex/rules/default.rules`, silencing
+  that command prefix globally, including in their own terminal outside GitBot.
+
+Both existing web UIs over this protocol get this wrong, which is worth knowing:
+`cattails-lgao/codex-mobile` labels `on-request` + read-only as "editing files or
+running commands requires approval" (it does not — harmless reads run silently),
+and `friuns2/codexui` defaults to `danger-full-access` + `never` with no approval
+UI at all, and offers `untrusted` through `-c`, the one path that kills the
+server. Neither is a model to follow.
 
 ### What does not change
 
@@ -123,6 +142,11 @@ Tracer-bullet order — each slice is end-to-end and leaves `main` working.
 | [CDX-5](CDX-5-permission-modes.md) | Permission modes → policy/sandbox/reviewer, mid-turn switching | CDX-1, CDX-4 |
 | [CDX-6](CDX-6-tool-fencing.md) | Enforce bot allowedTools / disallowedTools | CDX-4 |
 | [CDX-7](CDX-7-cutover.md) | Delete the SDK path, drop the flag, update UI copy and docs | all |
+| [CDX-8](CDX-8-approval-card-ui.md) | Approval card: expiry, legibility, honest verdicts | CDX-1 |
+
+CDX-8 came out of browser-testing CDX-1. Its defects are in the **shared** card
+component, so they affect claude-code and opencode too — codex only made them
+visible by raising far more approvals than anything did before.
 
 ## Ground rules for every issue
 

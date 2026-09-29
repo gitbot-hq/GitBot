@@ -55,6 +55,21 @@ Map, with the existing emitted event names preserved so the UI needs no change:
   optional here but note what was left out.
 - `turn/interrupt` for abort, replacing the current `AbortController` path.
 
+`fileChange` was already ported in CDX-1 (`Write` for `kind === "add"`, else
+`Edit`) because auto-approving edits while rendering nothing was indefensible.
+Note the trap it hit: v2 spells the kind as a tagged object
+(`{"type":"add"}`), where the SDK used a bare string — a literal port labels
+every new file `Edit`.
+
+## Turn input — no other issue owns this
+
+Image attachments are currently **dropped** on the app-server path, with an
+`agent_error` saying so (`src/codex-app-server.ts`). The SDK path downloads them
+and sends `local_image`. app-server takes `{type:"localImage", path}` in
+`turn/start.input` — verified — so this is a small port of the existing
+download/manifest code, which stays as-is. Do it here; CDX-4 is approvals and
+CDX-5 is modes, so neither would pick it up.
+
 ## Acceptance criteria
 
 Physically compare app-server rendering against the SDK path for the same
