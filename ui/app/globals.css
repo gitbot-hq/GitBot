@@ -1808,6 +1808,16 @@ pre {
 .agent-create-intro { margin: -4px 0 0; color: var(--muted); font-size: 15px; line-height: 1.55; }
 .modal .agent-create-prompt textarea { height: 240px; min-height: 240px; }
 .import-content { display: grid; gap: var(--space-6); }
+.import-content .share-code-field > label { background: var(--surface-2); }
+.import-preview { display: grid; gap: var(--space-3); min-width: 0; font-size: var(--text-sm); overflow-wrap: anywhere; }
+.import-preview dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-2) var(--space-4); margin: 0; }
+.import-preview dt { color: var(--muted); }
+.import-preview dd, .import-preview p { margin: 0; }
+.import-preview details { padding: var(--space-3); background: var(--surface-2); border-radius: var(--radius-md); }
+.import-preview summary { cursor: pointer; font-weight: 600; }
+.import-preview summary:focus-visible { outline: 2px solid var(--text); outline-offset: 4px; }
+.import-preview pre { margin: var(--space-3) 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.import-warning { padding: var(--space-3); border: 1px solid var(--brand-honey); border-radius: var(--radius-md); }
 .import-content .share-code-field, .import-content > .share-bot-summary, .import-content > .share-copy-actions, .import-content > .chat-error { margin: 0; }
 .share-copy-button { display: grid; flex: none; }
 .share-copy-button > span { grid-area: 1 / 1; display: flex; align-items: center; justify-content: center; gap: var(--space-2); transition: opacity 180ms ease, transform 180ms ease; }

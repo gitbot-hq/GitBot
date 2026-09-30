@@ -8,7 +8,7 @@ import { getThreads } from "../lib/api";
 import type { Bot, ThreadFull } from "../lib/gitbot";
 import type { AvatarPref } from "../lib/avatar-prefs";
 
-const AGENT_LABELS: Record<string, string> = {
+export const AGENT_LABELS: Record<string, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
   opencode: "OpenCode",
@@ -27,7 +27,7 @@ const CODEX_PERMISSION_LABELS: Record<string, string> = {
   plan: "Plan only",
 };
 
-function permissionLabel(mode: string | undefined, agent: string | undefined): string {
+export function permissionLabel(mode: string | undefined, agent: string | undefined): string {
   if (!mode) return "—";
   const labels = agent === "codex" ? CODEX_PERMISSION_LABELS : PERMISSION_LABELS;
   return labels[mode] ?? mode;

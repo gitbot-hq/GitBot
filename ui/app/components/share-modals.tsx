@@ -3,6 +3,7 @@
 import AnimatedActionIcon from "./animated-action-icon";
 import BotFace from "./bot-face";
 import BotName from "./bot-name";
+import { AGENT_LABELS, permissionLabel } from "./bot-profile";
 import { botTile } from "./bot-avatar";
 import { defaultMascotFor, getAvatarPref, resolveAvatar } from "../lib/avatar-prefs";
 import { ArrowRightIcon } from "@animateicons/react/lucide/arrow-right-icon";
@@ -55,7 +56,7 @@ function Shell({
     }
     if (event.key !== "Tab") return;
     const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), a[href], textarea:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      'button:not(:disabled), a[href], textarea:not(:disabled), input:not(:disabled), summary, [tabindex]:not([tabindex="-1"])',
     ) ?? []);
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
@@ -328,7 +329,7 @@ export function ShareModal({
   );
 }
 
-// Import bot. Copy verbatim from the original.
+// Preview the same validated settings that will be passed to onAdd.
 export function ImportModal({
   onClose,
   onAdd,
@@ -344,6 +345,8 @@ export function ImportModal({
   const codeRef = useRef<HTMLTextAreaElement>(null);
   const scrollEdge = useScrollEdge(codeRef);
   const parsed = text.trim() ? parseShare(text) : null;
+  const agent = String(parsed?.agent ?? "claude-code");
+  const mode = String(parsed?.permissionMode ?? "ask-permissions");
   const bad = text.trim() !== "" && !parsed;
   return (
     <Shell title="Import bot" onClose={onClose} inactive={inactive} headerContent={
@@ -378,13 +381,36 @@ export function ImportModal({
         <div className="share-bot-summary" aria-live="polite">
           <span className="share-method-icon" aria-hidden="true"><AnimatedActionIcon icon={CodeIcon} size={24} /></span>
           <div>
-            <h3>{String(parsed.name)}</h3>
+            <h3>{typeof parsed.emoji === "string" && parsed.emoji} {String(parsed.name)}</h3>
             {typeof parsed.description === "string" && parsed.description.trim() && <p>{parsed.description}</p>}
             {typeof parsed.setupInstructions === "string" && parsed.setupInstructions.trim() !== "" && (
               <p>Needs setup on this machine — a setup thread starts when you add it.</p>
             )}
           </div>
         </div>
+      )}
+      {parsed && (
+        <section className="import-preview" aria-label="Bot settings to import">
+          <dl>
+            <dt>Agent</dt><dd>{AGENT_LABELS[agent]}</dd>
+            <dt>Permissions</dt><dd>{permissionLabel(mode, agent)}</dd>
+            <dt>Model</dt><dd>{String(parsed.model || "Agent default")}</dd>
+            <dt>Allowed tools</dt><dd>{Array.isArray(parsed.allowedTools) ? parsed.allowedTools.join(", ") : "All tools"}</dd>
+            <dt>Disallowed tools</dt><dd>{Array.isArray(parsed.disallowedTools) ? parsed.disallowedTools.join(", ") : "None"}</dd>
+          </dl>
+          {agent === "codex" && !!(parsed.allowedTools || parsed.disallowedTools) && <p>Codex does not enforce tool lists.</p>}
+          {mode === "auto-approve" && (
+            <p className="import-warning" role="alert"><strong>Auto-approve is enabled.</strong> This bot can run commands and change files without asking. If it has setup steps, they start as soon as you import it.</p>
+          )}
+          <details>
+            <summary>Setup steps</summary>
+            <pre>{String(parsed.setupInstructions || "No setup steps.")}</pre>
+          </details>
+          <details>
+            <summary>Full instructions</summary>
+            <pre>{String(parsed.instructions || "No instructions.")}</pre>
+          </details>
+        </section>
       )}
       <div className="share-copy-actions">
         <div className="share-copy-privacy">

@@ -121,7 +121,7 @@ Browser  ->  GitBot on your machine  ->  Claude Code, Codex, or OpenCode
 
 ## Share a bot, or submit one to Marketplace
 
-**Share with code** copies the bot's settings and instructions so someone else can import it. It does not include chat history or local files. Check the instructions for private details before sharing.
+**Share with code** copies the bot's settings and instructions so someone else can import it. It does not include chat history or local files. Check the instructions for private details before sharing. Before importing, the preview shows the agent, permission mode, model, and tool lists, with expandable sections for complete setup steps and instructions. Auto-approve carries a visible warning; setup can start immediately after import.
 
 **Publish to Marketplace** shows a prompt you can review and copy into a conversation with the bot. The bot can draft a public listing and prepare a pull request, but it must show you the listing and final diff and wait for your approval. Copying the prompt does not publish anything.
 

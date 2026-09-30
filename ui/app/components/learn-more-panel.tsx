@@ -49,7 +49,7 @@ const content = {
     sections: [
       { title: "What the code can set", text: "It may include the bot’s instructions, setup steps, model, permission mode, and tool settings. These settings affect what the imported bot is asked to do." },
       { title: "What does not come with it", text: "The sender’s conversations, local files, workspace path, and completed setup status do not transfer. The bot will use your workspace when you run it." },
-      { title: "Review before you add it", text: "The current preview shows basic details, not every setting inside the code. Import only from someone you trust. If the bot needs setup, that process may start as soon as you add it." },
+      { title: "Review before you add it", text: "The preview shows the agent, permissions, model, and tool lists. Expand Setup steps and Full instructions to read the complete text before importing. Auto-approve lets the bot act without asking, and setup may start as soon as you import it." },
     ],
     back: "Back to import",
   },
