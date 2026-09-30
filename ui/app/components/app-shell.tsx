@@ -35,6 +35,7 @@ import { chatMascotActivity } from "../lib/chat-mascot-activity";
 import BotName from "./bot-name";
 import { botTile } from "./bot-avatar";
 import TopBar from "./top-bar";
+import UpdateNotice from "./update-notice";
 
 import {
   botSetupAction,
@@ -791,6 +792,7 @@ export default function V2() {
           userPhoto={user.photo}
           onProfile={toggleUserProfile}
         />
+        <UpdateNotice />
         <div className="page-body">
           <OnboardingFlow onDone={loadBots} active={!userOpen} />
           <ProfilePanelOverlay open={userOpen}>
@@ -825,6 +827,7 @@ export default function V2() {
         userPhoto={user.photo}
         onProfile={toggleUserProfile}
       />
+      <UpdateNotice />
       <div className="page-body">
         <aside
           ref={sideRef}

@@ -37,6 +37,17 @@ export function getAgents() {
   return req<{ agents: string[] }>("/agents");
 }
 
+export type UpdateStatus = {
+  currentVersion: string;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  installCommand: string;
+};
+
+export function getUpdateStatus() {
+  return req<UpdateStatus>("/updates");
+}
+
 export function getBots() {
   return req<{ bots: import("./gitbot").Bot[] }>("/bots");
 }

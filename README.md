@@ -168,6 +168,8 @@ gitbot start --caffeinate    # keep a Mac awake during long jobs
 
 The folder where you run `gitbot start` becomes the workspace shown first in the folder picker. A thread can still run in another folder you can read.
 
+When npm has a newer stable version, the workspace shows its version number and `npm i -g @gitbot-hq/gitbot`. Run the command in your terminal, then restart GitBot. The check runs when the workspace opens and hourly while it remains open; results are cached by the server for an hour. On the latest version, or when npm cannot be reached, no notice appears. No update is installed automatically.
+
 <br><br><br>
 
 ## Need help?

@@ -6,6 +6,7 @@ import { EventEmitter } from "events";
 import qrcode from "qrcode-terminal";
 import { serveUiFile, uiAvailable, uiFileFor } from "./static-ui";
 import { listRepos, cloneRepo, createFolder, listDir, readFile, getRepoDetails, browseDirs } from "./workspace";
+import { checkForUpdate } from "./updates";
 
 // --- Transport abstractions ---
 // These interfaces cover the exact surface area that route handlers use.
@@ -528,6 +529,11 @@ export async function handleWorkspaceRoutes(
 
   if (method === "GET" && path === "/agents") {
     jsonOk(res, { agents: availableAgents });
+    return true;
+  }
+
+  if (method === "GET" && path === "/updates") {
+    jsonOk(res, await checkForUpdate());
     return true;
   }
 
