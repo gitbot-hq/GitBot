@@ -24,9 +24,13 @@ import type { ThreadItem, TokenUsageBreakdown, TurnPlanStep, UserInput } from ".
 
 const PKG_VERSION: string = require("../package.json").version;
 
-/** `codex app-server` is opt-in until CDX-7 retires the SDK path. */
+/**
+ * `codex app-server` is the default: it is the only transport on which Codex
+ * can ask the user anything. `GITBOT_CODEX_APP_SERVER=0` opts back into the SDK
+ * path (sandbox only, no approvals) until CDX-7 retires it.
+ */
 export function appServerEnabled(): boolean {
-  return process.env.GITBOT_CODEX_APP_SERVER === "1";
+  return process.env.GITBOT_CODEX_APP_SERVER !== "0";
 }
 
 // --- Binary resolution (CDX-2 replaces this with the real thing) ---

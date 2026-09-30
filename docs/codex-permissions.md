@@ -231,8 +231,9 @@ Tracked as issues on the repo:
   unprompted), so a user driven off the bundled binary silently gets less than
   the UI promises.
 - Bot `allowedTools` / `disallowedTools` are still unenforced on Codex.
-- The app-server path is behind `GITBOT_CODEX_APP_SERVER=1`; the SDK path is
-  still the default.
+- The app-server path is the default; `GITBOT_CODEX_APP_SERVER=0` opts back
+  into the SDK path, on which `ask-permissions` is a read-only sandbox that
+  never prompts.
 - Approval-card defects in the **shared** component, so claude-code and opencode
   are affected too: an aborted turn leaves a dead card with working-looking
   buttons, and a long command is clipped so the part that matters scrolls off.

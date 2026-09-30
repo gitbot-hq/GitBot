@@ -182,9 +182,9 @@ function permissionToCodex(mode: PermissionMode): ThreadOptions["sandboxMode"] {
 }
 
 export async function runAgent(store: SessionStore): Promise<void> {
-  // GITBOT_CODEX_APP_SERVER=1 swaps the SDK for a JSON-RPC client over
-  // `codex app-server`, the only transport that can ask the user anything.
-  // Everything below is the untouched SDK path the flag opts out of.
+  // By default a JSON-RPC client over `codex app-server` runs the turn: it is
+  // the only transport that can ask the user anything. Everything below is the
+  // SDK path, kept for GITBOT_CODEX_APP_SERVER=0.
   if (appServerEnabled()) return runAppServerTurn(store);
 
   const lastUserEvent = [...store.events].reverse().find(e => e.type === "user_prompt");
