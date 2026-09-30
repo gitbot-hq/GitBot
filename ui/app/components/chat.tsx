@@ -6,6 +6,7 @@ import { ArrowDownIcon } from "@animateicons/react/lucide/arrow-down-icon";
 import { ArrowUpIcon } from "@animateicons/react/lucide/arrow-up-icon";
 import { CheckIcon } from "@animateicons/react/lucide/check-icon";
 import { CopyIcon } from "@animateicons/react/lucide/copy-icon";
+import { DownloadIcon } from "@animateicons/react/lucide/download-icon";
 import { CircleStopIcon } from "@animateicons/react/lucide/circle-stop-icon";
 import { EllipsisIcon } from "@animateicons/react/lucide/ellipsis-icon";
 import { MessageSquarePlusIcon } from "@animateicons/react/lucide/message-square-plus-icon";
@@ -45,6 +46,7 @@ import { useStatusFavicon } from "../lib/status-favicon";
 import { groupTools, type ToolChip } from "../lib/tool-ui";
 import { parseMarketplaceListing, type MarketplaceListing } from "../lib/marketplace-publish";
 import { presentSetupText, readSetupNeedsInput } from "../lib/setup";
+import { threadMarkdown, threadMarkdownFilename } from "../lib/thread-markdown";
 import RunSummary, { ActionRow } from "./run-summary";
 import QueueTray from "./queue-tray";
 
@@ -1277,10 +1279,29 @@ export default function Chat({
     enabled: !!botId && !setup && (!thread || showThreadEmpty),
   });
 
-  const toolbar = (onShare || onOpenBot || onNewThread) && (
+  function downloadMarkdown() {
+    if (!thread) return;
+    setActiveMenu(null);
+    moreButtonRef.current?.focus();
+    try {
+      const text = threadMarkdown(thread.title, msgs.map((message) => ({ role: message.role, text: msgText(message) })));
+      const url = URL.createObjectURL(new Blob([text], { type: "text/markdown;charset=utf-8" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = threadMarkdownFilename(thread.title);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (error) {
+      setTurnError(`Could not export conversation: ${errText(error)}`);
+    }
+  }
+
+  const toolbar = (onShare || onOpenBot || onNewThread || thread) && (
     <div className="chat-toolbar" aria-label="Chat actions">
       {onShare && <ShareDropdown open={activeMenu === "share"} onOpenChange={setShareOpen} onShare={onShare} />}
-      {(onOpenBot || onNewThread) && (
+      {(onOpenBot || onNewThread || thread) && (
         <div className="chat-toolbar-action">
           <button
             ref={moreButtonRef}
@@ -1307,6 +1328,14 @@ export default function Chat({
                 <button type="button" role="menuitem" onClick={() => { setActiveMenu(null); onNewThread(); }}>
                   <AnimatedActionIcon icon={MessageSquarePlusIcon} size={15} aria-hidden="true" />
                   <span className="chat-menu-label">New conversation</span>
+                </button>
+              )}
+              {thread && (
+                <button type="button" role="menuitem" onClick={downloadMarkdown}
+                  disabled={loading || streaming || !!live || !!historyError || !msgs.some((message) => msgText(message).trim())}
+                  title={streaming || live ? "Available when the current reply finishes" : undefined}>
+                  <AnimatedActionIcon icon={DownloadIcon} size={15} aria-hidden="true" />
+                  <span className="chat-menu-label">Download as Markdown</span>
                 </button>
               )}
             </div>

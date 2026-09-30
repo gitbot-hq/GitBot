@@ -100,6 +100,8 @@ With Claude Code or OpenCode, GitBot shows an approval card when a tool requires
 
 ![A GitBot working through a task in a conversation](assets/screenshots/gitbot-working.webp)
 
+To share a conversation in a PR, open the chat panel's three-dot menu and choose **Download as Markdown**. The `.md` file includes the thread title and user/assistant messages in order, preserving Markdown formatting and leaving out tool calls. Download is available after the current reply finishes.
+
 <br><br><br>
 
 ## How GitBot works
