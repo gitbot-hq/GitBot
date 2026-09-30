@@ -1178,6 +1178,10 @@ export default function V2() {
                 onAutoSent={() => setAutoSend(null)}
                 onActivityChange={setBotActivity}
                 onTurnDone={refreshAfterTurn}
+                onInstructionsSaved={(updated) => {
+                  setBots((prev) => prev.map((candidate) => candidate.id === updated.id ? updated : candidate));
+                  toast(`Saved to ${updated.name}’s instructions`);
+                }}
                 onShare={bot ? (view) => setModal({ kind: "share", bot, view }) : undefined}
                 onLearnMorePermissions={() => openLearnMore("permissions")}
                 onOpenBot={bot ? () => openBotProfile(bot.id) : undefined}

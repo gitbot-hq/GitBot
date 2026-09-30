@@ -96,6 +96,8 @@ You can also choose **Create with an agent** and give an installed agent the gui
 
 Choose a repo when you start a thread. The bot runs its agent in that folder and streams the conversation back to GitBot. You can close the browser tab and return to a running turn.
 
+To keep a decision for future conversations, choose **Save to instructions** beside **Copy reply** on a bot response. Review or edit the text, then save it. GitBot appends it to the bot's existing instructions; new threads start with the updated instructions.
+
 With Claude Code or OpenCode, GitBot shows an approval card when a tool requires permission. Codex has no per-action approval channel, so its selected permission mode chooses a sandbox instead.
 
 ![A GitBot working through a task in a conversation](assets/screenshots/gitbot-working.webp)

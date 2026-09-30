@@ -162,6 +162,13 @@ export function deleteBot(id: string) {
   });
 }
 
+export function appendBotInstructions(id: string, text: string) {
+  return req<{ bot: import("./gitbot").Bot }>(
+    `/bots/${encodeURIComponent(id)}/instructions`,
+    { method: "POST", body: JSON.stringify({ text }) },
+  );
+}
+
 export function deleteThread(id: string) {
   return req<{ deleted: boolean }>(`/threads/${encodeURIComponent(id)}`, {
     method: "DELETE",

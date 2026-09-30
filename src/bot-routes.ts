@@ -92,6 +92,21 @@ export async function handleBotRoutes(
     return true;
   }
 
+  // Append against the latest stored instructions, not a stale preview in a tab.
+  const instructionsBotId = matchId(path, "/bots/", "/instructions");
+  if (instructionsBotId && method === "POST") {
+    const body = await readBody(req);
+    if (typeof body?.text !== "string" || !body.text.trim()) {
+      jsonError(res, 400, "Instruction text is required");
+      return true;
+    }
+    const bot = getBot(instructionsBotId);
+    if (!bot) { jsonError(res, 404, "Bot not found"); return true; }
+    const instructions = [bot.instructions, body.text.trim()].filter(Boolean).join("\n\n");
+    jsonOk(res, { bot: updateBot(bot.id, { instructions }) });
+    return true;
+  }
+
   const botId = matchId(path, "/bots/");
   if (botId) {
     if (method === "GET") {

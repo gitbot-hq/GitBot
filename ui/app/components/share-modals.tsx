@@ -21,7 +21,7 @@ import botAuthorPromptLines from "../lib/bot-author-prompt.json";
 import { useScrollEdge } from "../lib/use-scroll-edge";
 import type { Bot } from "../lib/gitbot";
 
-function Shell({
+export function Shell({
   title,
   onClose,
   onBack,

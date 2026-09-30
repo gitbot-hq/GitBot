@@ -1,6 +1,7 @@
 "use client";
 
 import ShareDropdown, { moveMenuFocus } from "./share-dropdown";
+import { Shell as ModalShell } from "./share-modals";
 import AnimatedActionIcon from "./animated-action-icon";
 import { ArrowDownIcon } from "@animateicons/react/lucide/arrow-down-icon";
 import { ArrowUpIcon } from "@animateicons/react/lucide/arrow-up-icon";
@@ -26,6 +27,7 @@ import BotFace from "./bot-face";
 import BotName from "./bot-name";
 import {
   ApiError,
+  appendBotInstructions,
   getMessages,
   getPendingPermissions,
   getSessionConfig,
@@ -37,7 +39,7 @@ import {
   streamUrl,
   type ChatPermissionMode,
 } from "../lib/api";
-import { EDIT_TOOLS, type HistoryMsg, type PermRequest, type ThreadFull } from "../lib/gitbot";
+import { EDIT_TOOLS, type Bot, type HistoryMsg, type PermRequest, type ThreadFull } from "../lib/gitbot";
 import type { AvatarPref } from "../lib/avatar-prefs";
 import { useMascotPointerFollow } from "../lib/use-mascot-pointer-follow";
 import { useScrollEdge } from "../lib/use-scroll-edge";
@@ -371,6 +373,7 @@ export default function Chat({
   autoSend,
   onAutoSent,
   onTurnDone,
+  onInstructionsSaved,
   onWorkingChange,
   onActivityChange,
   onShare,
@@ -389,6 +392,7 @@ export default function Chat({
   autoSend: string | null;
   onAutoSent: () => void;
   onTurnDone: () => void;
+  onInstructionsSaved?: (bot: Bot) => void;
   onWorkingChange?: (working: boolean) => void;
   /** Live activity sentence ("Thinking…", "Running Bash…", null when idle).
    *  Lets the shell show what the bot is doing outside the chat. */
@@ -424,6 +428,9 @@ export default function Chat({
   // const pendingSteer = useRef<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [copyErrorId, setCopyErrorId] = useState<string | null>(null);
+  const [instructionDraft, setInstructionDraft] = useState<string | null>(null);
+  const [instructionError, setInstructionError] = useState<string | null>(null);
+  const [savingInstruction, setSavingInstruction] = useState(false);
   const [draft, setDraft] = useState("");
   const [escapeStopArmed, setEscapeStopArmed] = useState(false);
   const [activeMenu, setActiveMenu] = useState<"share" | "more" | "permissions" | null>(null);
@@ -507,10 +514,12 @@ export default function Chat({
 
   useEffect(() => {
     setActiveMenu(null);
-  }, [thread?.id]);
+    setInstructionDraft(null);
+    setInstructionError(null);
+  }, [botId, thread?.id]);
 
   useEffect(() => {
-    if (!streaming || activeMenu || setup) {
+    if (!streaming || activeMenu || setup || instructionDraft !== null) {
       escapeStopArmedRef.current = false;
       setEscapeStopArmed(false);
       if (escapeStopTimer.current) window.clearTimeout(escapeStopTimer.current);
@@ -536,7 +545,7 @@ export default function Chat({
       document.removeEventListener("keydown", confirmStop);
       if (escapeStopTimer.current) window.clearTimeout(escapeStopTimer.current);
     };
-  }, [streaming, activeMenu, setup]);
+  }, [streaming, activeMenu, setup, instructionDraft]);
 
   useEffect(() => {
     if (activeMenu !== "more") return;
@@ -1204,6 +1213,21 @@ export default function Chat({
     }, 1500);
   }
 
+  async function saveInstruction() {
+    if (!botId || !instructionDraft?.trim() || savingInstruction) return;
+    setSavingInstruction(true);
+    setInstructionError(null);
+    try {
+      const { bot } = await appendBotInstructions(botId, instructionDraft);
+      onInstructionsSaved?.(bot);
+      setInstructionDraft(null);
+    } catch (error) {
+      setInstructionError(errText(error));
+    } finally {
+      setSavingInstruction(false);
+    }
+  }
+
   function answerPerm(p: PermRequest, approved: boolean) {
     const sid = sessionRef.current;
     if (!sid) return;
@@ -1455,6 +1479,21 @@ export default function Chat({
                     )}
                   </button>
                   {copyErrorId === m.id && <span className="copy-reply-error" role="status">Copy failed. Select the reply to copy it.</span>}
+                  {botId && msgText(m).trim() && (
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      aria-label="Save to instructions"
+                      data-tip="Save to instructions"
+                      disabled={savingInstruction}
+                      onClick={() => {
+                        setInstructionError(null);
+                        setInstructionDraft(setup ? presentSetupText(msgText(m)) : msgText(m));
+                      }}
+                    >
+                      <AnimatedActionIcon icon={FileTextIcon} size={15} aria-hidden="true" />
+                    </button>
+                  )}
                   {m.retryPrompt && (
                     <button
                       type="button"
@@ -1737,6 +1776,31 @@ export default function Chat({
             )}
           </div>
         </form>
+      )}
+      {instructionDraft !== null && (
+        <ModalShell title="Save to instructions" onClose={() => { if (!savingInstruction) setInstructionDraft(null); }}>
+          <p className="guard-text">Review the text to add to {botName}’s instructions. Future conversations will start with it.</p>
+          <form onSubmit={(event) => { event.preventDefault(); void saveInstruction(); }}>
+            <div className="field">
+              <label htmlFor="saved-instruction">Instruction to keep</label>
+              <textarea
+                id="saved-instruction"
+                data-initial-focus
+                rows={8}
+                value={instructionDraft}
+                disabled={savingInstruction}
+                onChange={(event) => setInstructionDraft(event.target.value)}
+              />
+              <span className="hint">Added after the bot’s existing instructions. Edit it down to the decision you want to keep.</span>
+            </div>
+            {instructionError && <p className="chat-error" role="alert">{instructionError}</p>}
+            <div className="acts">
+              <span className="spacer" />
+              <button type="button" className="btn-secondary" disabled={savingInstruction} onClick={() => setInstructionDraft(null)}>Cancel</button>
+              <button type="submit" className="btn-primary" disabled={savingInstruction || !instructionDraft.trim()}>{savingInstruction ? "Saving…" : "Save to instructions"}</button>
+            </div>
+          </form>
+        </ModalShell>
       )}
     </main>
   );
