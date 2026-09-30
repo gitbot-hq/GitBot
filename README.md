@@ -90,6 +90,8 @@ The instructions give the bot its job. Your message gives it today's task. A thr
 
 You can also choose **Create with an agent** and give an installed agent the guided authoring prompt, or **Import bot** if someone has shared a code with you. In both cases, review the bot's instructions and permissions before you let it work.
 
+To make a variation, open a bot's profile and choose **Duplicate** beside **Edit**. It creates **Copy of …** with the same settings and appearance, and opens the copy for editing. Chats and completed setup state stay with the original; duplicating does not run setup.
+
 <br><br><br>
 
 ## See a bot at work

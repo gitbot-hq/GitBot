@@ -72,6 +72,17 @@ export async function handleBotRoutes(
     }
   }
 
+  const duplicateBotId = matchId(path, "/bots/", "/duplicate");
+  if (duplicateBotId && method === "POST") {
+    const source = getBot(duplicateBotId);
+    if (!source) { jsonError(res, 404, "Bot not found"); return true; }
+    // createBot copies only configuration, assigns a fresh id and resets setup.
+    // Leave setup dormant until the user selects the copy to run it.
+    const bot = createBot({ ...source, name: `Copy of ${source.name}` });
+    jsonOk(res, { bot });
+    return true;
+  }
+
   // POST /bots/:id/setup — the manual controls beside the automatic run.
   const setupBotId = matchId(path, "/bots/", "/setup");
   if (setupBotId && method === "POST") {

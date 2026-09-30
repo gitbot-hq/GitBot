@@ -99,6 +99,7 @@ export default function BotProfile({
   pref,
   onBack,
   onEdit,
+  onDuplicate,
   onShare,
   active = true,
 }: {
@@ -106,10 +107,25 @@ export default function BotProfile({
   pref: AvatarPref;
   onBack: () => void;
   onEdit: () => void;
+  onDuplicate: () => Promise<void>;
   onShare: (view: "code" | "publish") => void;
   active?: boolean;
 }) {
   const [shareOpen, setShareOpen] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
+
+  async function duplicate() {
+    setDuplicating(true);
+    setDuplicateError(null);
+    try {
+      await onDuplicate();
+    } catch (error) {
+      setDuplicateError(error instanceof Error ? error.message : "Could not duplicate bot");
+    } finally {
+      setDuplicating(false);
+    }
+  }
   useEffect(() => { if (!active) setShareOpen(false); }, [active]);
   const [threads, setThreads] = useState<ThreadFull[] | null>(null);
 
@@ -184,8 +200,12 @@ export default function BotProfile({
           <button type="button" className="btn-secondary" onClick={onEdit}>
             Edit
           </button>
+          <button type="button" className="btn-secondary" disabled={duplicating} onClick={duplicate}>
+            {duplicating ? "Duplicating…" : "Duplicate"}
+          </button>
         </div>
       </div>
+      {duplicateError && <p className="chat-error" role="alert">{duplicateError}</p>}
       {threads == null ? (
         <div className="skel profile-loading" aria-label="Loading activity">
           <i style={{ width: "70%" }} />

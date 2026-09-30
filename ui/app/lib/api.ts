@@ -162,6 +162,12 @@ export function deleteBot(id: string) {
   });
 }
 
+export function duplicateBot(id: string) {
+  return req<{ bot: import("./gitbot").Bot }>(`/bots/${encodeURIComponent(id)}/duplicate`, {
+    method: "POST",
+  });
+}
+
 export function deleteThread(id: string) {
   return req<{ deleted: boolean }>(`/threads/${encodeURIComponent(id)}`, {
     method: "DELETE",

@@ -39,6 +39,7 @@ import TopBar from "./top-bar";
 import {
   botSetupAction,
   createBot,
+  duplicateBot,
   deleteThread,
   getBots,
   getSessionStatus,
@@ -560,6 +561,16 @@ export default function V2() {
     setThreadPanel(false);
     setUserOpen(false);
     setEditing(target);
+  }
+
+  async function duplicateProfileBot(source: Bot) {
+    const { bot: copy } = await duplicateBot(source.id);
+    setAvatarPref(copy.id, avatarFor(source.id));
+    setBots((prev) => [...prev, copy].sort((a, b) => a.name.localeCompare(b.name)));
+    // Keep the running bot selected so copying setup cannot start an agent.
+    setProfileId(copy.id);
+    openBotEditor(copy);
+    toast(`Created ${copy.name}`);
   }
 
   function newThread() {
@@ -1221,6 +1232,7 @@ export default function V2() {
                 active={!editing && !modal && !userOpen && !learnMore}
                 onBack={() => setProfileId(null)}
                 onEdit={() => openBotEditor(profileBot)}
+                onDuplicate={() => duplicateProfileBot(profileBot)}
                 onShare={(view) => setModal({ kind: "share", bot: profileBot, view })}
               />
             )}
