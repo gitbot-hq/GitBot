@@ -362,6 +362,14 @@ export function emitEvent(store: SessionStore, type: string, data: Record<string
 
 // --- HTTP Server ---
 
+export function openWorkspaceBrowser(url: string): void {
+  const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd.exe" : "xdg-open";
+  const args = process.platform === "win32" ? ["/d", "/s", "/c", "start", '""', url] : [url];
+  execFile(command, args, { timeout: 5000, windowsHide: true }, (error) => {
+    if (error) console.warn(`  browser: could not open automatically. Open ${url} manually.`);
+  });
+}
+
 export async function createHttpServer(opts: {
   portOverride?: number;
   caffeinate: boolean;

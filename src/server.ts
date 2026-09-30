@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import http from "node:http";
 import {
   createHttpServer,
+  openWorkspaceBrowser,
   setupShutdown,
   handleWorkspaceRoutes,
   createSession,
@@ -466,7 +467,7 @@ export async function handleRequest(
   }
 }
 
-export async function start(network: string = "local", portOverride?: number, caffeinate: boolean = false) {
+export async function start(network: string = "local", portOverride?: number, caffeinate: boolean = false, openBrowser: boolean = true) {
   const workspaceCwd = process.cwd();
   console.log(`gitbot — starting workspace server in ${workspaceCwd}`);
 
@@ -488,7 +489,7 @@ export async function start(network: string = "local", portOverride?: number, ca
   ];
   console.log(`  available agents: ${availableAgents.join(", ") || "none"}`);
 
-  const { server, caffeinatePid } = await createHttpServer({
+  const { server, PORT, caffeinatePid } = await createHttpServer({
     portOverride,
     caffeinate,
     network,
@@ -506,4 +507,12 @@ export async function start(network: string = "local", portOverride?: number, ca
     stopOpencode();
     server.close(() => process.exit(0));
   }, caffeinatePid);
+
+  const workspaceUrl = `http://localhost:${PORT}`;
+  if (openBrowser) {
+    console.log(`  browser: opening ${workspaceUrl}`);
+    openWorkspaceBrowser(workspaceUrl);
+  } else {
+    console.log(`  browser: skipped (--no-open). Open ${workspaceUrl} manually.`);
+  }
 }

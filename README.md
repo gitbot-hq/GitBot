@@ -50,7 +50,7 @@ cd /path/to/your/projects
 gitbot start
 ```
 
-Open **http://localhost:3000** on your computer. GitBot prints a network address and QR code if you want to connect from another device on the same trusted network. The workspace works best on desktop.
+GitBot opens **http://localhost:3000** in your default browser once the server is ready. Use `gitbot start --no-open` to skip opening a tab. GitBot also prints a network address and QR code if you want to connect from another device on the same trusted network. The workspace works best on desktop.
 
 > **Before connecting another device:** GitBot has no authentication. Anyone who can reach its port can use the agents running on your machine. Keep it on a trusted network and never expose the port to the public internet. [Read the security notes](#security-and-privacy).
 
@@ -161,12 +161,15 @@ GitBot has no account, telemetry, or hosted database. Bots and thread records li
 ## Useful commands
 
 ```bash
-gitbot start                 # use port 3000
-gitbot start -p 4000         # choose another port
+gitbot start                 # use port 3000 and open the browser
+gitbot start -p 4000         # use and open port 4000
+gitbot start --no-open       # serve the workspace without opening a tab
 gitbot start --caffeinate    # keep a Mac awake during long jobs
 ```
 
 The folder where you run `gitbot start` becomes the workspace shown first in the folder picker. A thread can still run in another folder you can read.
+
+If a browser cannot be opened (for example, on a headless server), GitBot keeps running and prints the URL to open manually.
 
 <br><br><br>
 
