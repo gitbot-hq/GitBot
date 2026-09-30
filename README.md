@@ -50,7 +50,7 @@ cd /path/to/your/projects
 gitbot start
 ```
 
-Open **http://localhost:3000** on your computer. GitBot prints a network address and QR code if you want to connect from another device on the same trusted network. The workspace works best on desktop.
+Open **http://127.0.0.1:3000** on your computer. GitBot binds to localhost by default, so other devices cannot connect. For access from another device on a trusted network, run `gitbot start --host 0.0.0.0`; GitBot then prints a LAN address and QR code. The workspace works best on desktop.
 
 > **Before connecting another device:** GitBot has no authentication. Anyone who can reach its port can use the agents running on your machine. Keep it on a trusted network and never expose the port to the public internet. [Read the security notes](#security-and-privacy).
 
@@ -150,11 +150,11 @@ An **Allowed tools** list limits which tools a bot can use; its permission mode 
 
 ## Security and privacy
 
-> **Important:** GitBot has no authentication and listens on all network interfaces. Anyone who can reach its port can run agents using your machine's access. Use a trusted network, do not expose the port to the internet, and stop GitBot when you are not using it.
+> **Important:** GitBot has no authentication. It binds to `127.0.0.1` by default. Using `--host 0.0.0.0` enables access on all IPv4 network interfaces, and anyone who can reach its port can run agents using your machine's access. Enable LAN access only on a trusted network, never expose the port to the internet, and stop GitBot when you are not using it.
 
 Bots act with your user account's file and shell access. Auto-approval removes a chance to inspect individual tool calls. Imported bots may include setup instructions that run when imported, so read them and their permission mode first.
 
-GitBot has no account, telemetry, or hosted database. Bots and thread records live under `~/.gitbot` by default. Your chosen agent sends prompts and code according to its provider configuration. GitBot also looks up your public IP at startup to print its network address.
+GitBot has no account, telemetry, or hosted database. Bots and thread records live under `~/.gitbot` by default. Your chosen agent sends prompts and code according to its provider configuration. GitBot uses local network interfaces to print its LAN address without looking up your public IP.
 
 <br><br><br>
 
@@ -164,9 +164,12 @@ GitBot has no account, telemetry, or hosted database. Bots and thread records li
 gitbot start                 # use port 3000
 gitbot start -p 4000         # choose another port
 gitbot start --caffeinate    # keep a Mac awake during long jobs
+gitbot start --host 0.0.0.0  # opt in to LAN access on a trusted network
 ```
 
 The folder where you run `gitbot start` becomes the workspace shown first in the folder picker. A thread can still run in another folder you can read.
+
+`--host` accepts an IPv4 or IPv6 address. The default is `127.0.0.1`; use `::1` for IPv6 loopback or a specific interface address to limit where GitBot listens. The legacy `--local` flag remains accepted for compatibility.
 
 <br><br><br>
 

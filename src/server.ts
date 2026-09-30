@@ -466,7 +466,7 @@ export async function handleRequest(
   }
 }
 
-export async function start(network: string = "local", portOverride?: number, caffeinate: boolean = false) {
+export async function start(host: string = "127.0.0.1", portOverride?: number, caffeinate: boolean = false) {
   const workspaceCwd = process.cwd();
   console.log(`gitbot — starting workspace server in ${workspaceCwd}`);
 
@@ -491,7 +491,7 @@ export async function start(network: string = "local", portOverride?: number, ca
   const { server, caffeinatePid } = await createHttpServer({
     portOverride,
     caffeinate,
-    network,
+    host,
     label: "gitbot server",
   });
 
