@@ -31,6 +31,7 @@ let sdkLoaded: any = null;
 
 // Where the SDK's createOpencode starts its server.
 const OPENCODE_URL = "http://127.0.0.1:4096";
+const permissionConfiguredDirs = new Set<string>();
 
 // The server createOpencode spawned. It is not detached, but it outlives gitbot
 // whenever gitbot exits without passing on a signal, and every later start then
@@ -125,16 +126,6 @@ async function getClientForDir(directory: string): Promise<any> {
   const client = createOpencodeClient({ baseUrl: OPENCODE_URL, directory });
   clientsByDir.set(directory, client);
 
-  try {
-    const configResult = await client.config.get();
-    const currentConfig = (configResult.data ?? {}) as Record<string, any>;
-    await client.config.update({
-      body: { ...currentConfig, permission: permissionConfig },
-    });
-  } catch (err: any) {
-    console.warn("  permissions: could not set permission config:", err?.message);
-  }
-
   startEventStream(client, directory).catch((err) => {
     console.error("[gitbot] startEventStream crashed:", err);
   });
@@ -153,6 +144,18 @@ export async function runAgent(store: SessionStore): Promise<void> {
     // fail, and a throw here used to escape runAgent entirely, leaving the
     // session pinned to "running" — 409 on every later message, stream never closed.
     const client = await getClientForDir(store.repoPath);
+    // OpenCode persists config.update in the repository. Reading history or
+    // running an analysis must not create a config.json as a side effect.
+    if (!store.botPreset?.analysis && !permissionConfiguredDirs.has(store.repoPath)) {
+      try {
+        const configResult = await client.config.get();
+        const currentConfig = (configResult.data ?? {}) as Record<string, any>;
+        await client.config.update({ body: { ...currentConfig, permission: permissionConfig } });
+        permissionConfiguredDirs.add(store.repoPath);
+      } catch (err: any) {
+        console.warn("  permissions: could not set permission config:", err?.message);
+      }
+    }
 
     if (!store.sdkSessionId) {
       const repoName = basename(store.repoPath);

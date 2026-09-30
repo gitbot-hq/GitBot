@@ -38,11 +38,22 @@ export type ThreadFull = Thread & {
   kind: string;
   sdkSessionId: string | null;
   titleIsAuto: boolean;
+  runSessionId?: string;
+  analysis?: { branch: string; commit: string; status: "running" | "done" | "error" | "aborted"; error?: string };
   repoPath: string;
   preview: string;
   messageCount: number;
   createdAt: string;
   updatedAt: string;
+};
+
+export type AnalysisInput = { repoPath: string; branch: string; prompt: string; time: string; enabled: boolean };
+export type AnalysisSchedule = AnalysisInput & {
+  botId: string;
+  nextRunAt: string | null;
+  lastRunAt?: string;
+  lastThreadId?: string;
+  lastError?: string;
 };
 
 export type HistoryBlock = {

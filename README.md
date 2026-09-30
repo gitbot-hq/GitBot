@@ -119,6 +119,18 @@ Browser  ->  GitBot on your machine  ->  Claude Code, Codex, or OpenCode
 
 <br><br><br>
 
+## Run a daily analysis
+
+Open a bot's profile to find **Analysis**. Choose a local repository folder, a branch or Git ref, and the task to review. **Run analysis now** starts a check immediately. To repeat it daily, enable **Run daily**, choose a time, and click **Save schedule**. The time uses the computer running GitBot, whose timezone is shown beside the field.
+
+Each analysis runs in **Plan only** mode and saves its results in a new thread, with the reviewed commit recorded. Claude Code and OpenCode are limited to Read, Glob, and Grep tools; Codex uses its native read-only sandbox. Analysis reports findings and suggested verification steps; it does not execute tests, edit files, run setup, or automatically begin follow-up work. To act on a finding, review the result and explicitly send a follow-up message with the permissions you intend, or start a separate thread.
+
+GitBot must stay running and the computer awake. The browser can be closed. Missed daily runs are skipped, and analyses for the same bot do not overlap. Disabling **Run daily** and saving pauses future runs. Schedules are machine-local (`analysis.json`) and are not included in bot share codes. Run one GitBot server per data directory.
+
+GitBot reviews the ref already available locally; it does not fetch or check out branches. A commit snapshot is included with the task, with a visible truncation note for large snapshots; local working files may differ. Branch-change triggers, automated test execution, and a dedicated Approve/Decline workflow are not included in this first version.
+
+<br><br><br>
+
 ## Share a bot, or submit one to Marketplace
 
 **Share with code** copies the bot's settings and instructions so someone else can import it. It does not include chat history or local files. Check the instructions for private details before sharing.

@@ -254,6 +254,8 @@ export interface BotPreset {
   setupInstructions?: string;
   /** True while this run is the machine-preparation run rather than the bot's job. */
   setup?: boolean;
+  /** Analysis runs report findings and leave all follow-up work to the user. */
+  analysis?: boolean;
 }
 
 export const sessions = new Map<string, SessionStore>();

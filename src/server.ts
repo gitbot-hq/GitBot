@@ -25,14 +25,16 @@ import {
   type PermissionMode,
   type BotPreset,
 } from "./server-common";
-import { initAgent as initClaudeCode, runAgent as runClaudeCode, listSessions as listClaudeSessions, loadTranscript } from "./start-claude-code";
-import { initAgent as initOpencode, stopAgent as stopOpencode, runAgent as runOpencode, listSessions as listOpencodeSessions, getSessionHistory, abortSession as opencodeAbort, respondPermission as opencodePermission } from "./start-opencode";
-import { initAgent as initCodex, runAgent as runCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
+import { initAgent as initClaudeCode, listSessions as listClaudeSessions, loadTranscript } from "./start-claude-code";
+import { initAgent as initOpencode, stopAgent as stopOpencode, listSessions as listOpencodeSessions, getSessionHistory, abortSession as opencodeAbort, respondPermission as opencodePermission } from "./start-opencode";
+import { initAgent as initCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
 import { handleBotRoutes } from "./bot-routes";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
 import { getBot, getThread, touchThread, updateThread, botNeedsSetup, DEFAULT_BOT_AGENT } from "./bot-store";
 import { botPermissionToSession } from "./server-common";
 import { uiFileFor } from "./static-ui";
+import { launchAgent } from "./run-agent";
+import { handleAnalysisRoutes, startAnalysisScheduler } from "./analysis";
 
 export async function handleRequest(
   req: IRequest,
@@ -67,6 +69,7 @@ export async function handleRequest(
     if (await handleWorkspaceRoutes(req, res, workspaceCwd, availableAgents)) return;
 
     // Bot hub: /bots and /threads
+    if (await handleAnalysisRoutes(req, res, availableAgents, workspaceCwd)) return;
     if (await handleBotRoutes(req, res, workspaceCwd)) return;
 
     // GET /sessions
@@ -243,6 +246,9 @@ export async function handleRequest(
       if (threadId) {
         const thread = getThread(threadId);
         if (!thread) { jsonError(res, 404, "Thread not found"); return; }
+        if ([...sessions.values()].some(s => s.threadId === threadId && s.status === "running")) {
+          jsonError(res, 409, "Session is already running"); return;
+        }
         const bot = getBot(thread.botId);
         if (!bot) { jsonError(res, 404, "Bot not found"); return; }
         repoPath = thread.repoPath;
@@ -328,31 +334,12 @@ export async function handleRequest(
       }
 
       const s = store;
-      if (threadId) touchThread(threadId, prompt ?? '');
-
-      // Anything thrown past runAgent's own handling would otherwise leave the
-      // session pinned to "running": every later message on the thread answers
-      // 409 for as long as the server lives, and the event stream — which only
-      // closes on done/error/aborted — hangs the client that is watching it.
-      // Each runAgent already reports its own failures and lands on "error"
-      // before returning, so the status check makes this a no-op on every path
-      // that handled itself.
-      const onRunRejected = (err: any) => {
-        console.error("[runAgent] unhandled:", err);
-        if (s.status === "running") {
-          emitEvent(s, "error", { message: err?.message ?? `${agent} failed to start` });
-          s.status = "error";
-          notifyPermissionsChanged();
-        }
-      };
-
-      if (agent === "claude-code") {
-        runClaudeCode(s).catch(onRunRejected);
-      } else if (agent === "codex") {
-        runCodex(s).catch(onRunRejected);
-      } else {
-        runOpencode(s).catch(onRunRejected);
+      if (threadId) {
+        updateThread(threadId, { runSessionId: s.gitbotId });
+        touchThread(threadId, prompt ?? '');
       }
+
+      launchAgent(s);
 
       jsonOk(res, { sessionId: s.gitbotId });
       return;
@@ -501,8 +488,10 @@ export async function start(network: string = "local", portOverride?: number, ca
     handleRequest(req as unknown as IRequest, res as unknown as IResponse, availableAgents, workspaceCwd);
   });
 
+  const stopScheduler = startAnalysisScheduler(availableAgents, workspaceCwd);
   process.on("exit", stopOpencode);
   setupShutdown(() => {
+    stopScheduler();
     stopOpencode();
     server.close(() => process.exit(0));
   }, caffeinatePid);

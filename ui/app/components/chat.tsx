@@ -719,8 +719,8 @@ export default function Chat({
     if (!thread) return;
     loadHistory(thread.id, true);
     // Rejoin a turn still running server-side (e.g. after a reload).
-    if (thread.sdkSessionId) {
-      const sid = thread.sdkSessionId;
+    if (thread.runSessionId || thread.sdkSessionId) {
+      const sid = thread.runSessionId || thread.sdkSessionId!;
       const tid = thread.id;
       getSessionStatus(sid)
         .then(({ streaming }) => {

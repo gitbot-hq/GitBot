@@ -1171,7 +1171,7 @@ export default function V2() {
                 thread={activeThread}
                 botId={bot?.id}
                 botName={bot?.name ?? "bot"}
-                botPermissionMode={bot?.permissionMode}
+                botPermissionMode={activeThread?.analysis ? "plan" : bot?.permissionMode}
                 botAgent={bot?.agent}
                 botAvatar={bot ? avatarFor(bot.id) : undefined}
                 autoSend={autoSend && autoSend.botId === bot?.id ? autoSend.prompt : null}
@@ -1222,6 +1222,12 @@ export default function V2() {
                 onBack={() => setProfileId(null)}
                 onEdit={() => openBotEditor(profileBot)}
                 onShare={(view) => setModal({ kind: "share", bot: profileBot, view })}
+                onOpenThread={(thread) => {
+                  setSelectedId(thread.botId);
+                  setThreads(current => [thread, ...current.filter(t => t.id !== thread.id)]);
+                  setThreadByBot(current => ({ ...current, [thread.botId]: thread.id }));
+                  setProfileId(null);
+                }}
               />
             )}
           </div>

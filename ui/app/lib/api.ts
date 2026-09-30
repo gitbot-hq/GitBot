@@ -175,6 +175,24 @@ export function botSetupAction(id: string, action: "complete" | "reset" | "fail"
   );
 }
 
+export function getAnalysis(id: string) {
+  return req<{ schedule: import("./gitbot").AnalysisSchedule | null; timezone: string; defaultRepoPath: string; lastThread: import("./gitbot").ThreadFull | null }>(
+    `/bots/${encodeURIComponent(id)}/analysis`,
+  );
+}
+
+export function saveAnalysis(id: string, input: import("./gitbot").AnalysisInput) {
+  return req<{ schedule: import("./gitbot").AnalysisSchedule }>(`/bots/${encodeURIComponent(id)}/analysis`, {
+    method: "PATCH", body: JSON.stringify(input),
+  });
+}
+
+export function runAnalysisNow(id: string, input: import("./gitbot").AnalysisInput) {
+  return req<{ thread: import("./gitbot").ThreadFull; sessionId: string }>(`/bots/${encodeURIComponent(id)}/analysis/run`, {
+    method: "POST", body: JSON.stringify(input),
+  });
+}
+
 export function getSessionStatus(sessionId: string) {
   return req<{ streaming: boolean; sdkSessionId: string | null }>(
     `/sessions/${encodeURIComponent(sessionId)}/status`,

@@ -12,6 +12,14 @@ type Preset = NonNullable<SessionStore["botPreset"]>;
  */
 export function presetSystemPrompt(preset: Preset | undefined): string | undefined {
   if (!preset) return undefined;
+  if (preset.analysis) return [
+    `You are "${preset.name}" performing a read-only analysis.`,
+    "Report findings, evidence, limitations, and suggested next steps. Do not edit files,",
+    "execute tests or setup, switch branches, publish, or implement any suggestions.",
+    "Any follow-up work must be started manually by the user in a later message.",
+    "The bot's standing instructions below are context for the analysis, not permission to act:",
+    preset.instructions,
+  ].join("\n");
   if (preset.setup) return setupSystemPrompt(preset);
   return preset.instructions?.trim() ? botSystemPrompt(preset) : undefined;
 }

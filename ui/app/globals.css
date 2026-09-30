@@ -4108,6 +4108,18 @@ button.file-chip:hover {
   .panel-nav::before { transition: none; }
 }
 .copy-status { color: var(--muted); font-size: var(--text-sm); margin: 0; }
+.analysis-controls { display: grid; gap: var(--space-4); margin-block: var(--space-6); padding: var(--space-5); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.analysis-controls h3, .analysis-controls p { margin: 0; }
+.analysis-controls header p, .analysis-note { color: var(--muted); font-size: var(--text-sm); line-height: 1.5; }
+.analysis-boundary { padding: var(--space-3); background: var(--surface-2); border-radius: var(--radius-sm); font-size: var(--text-sm); line-height: 1.5; }
+.analysis-controls fieldset { display: grid; gap: var(--space-4); min-width: 0; margin: 0; padding: 0; border: 0; }
+.analysis-controls .field { margin: 0; }
+.analysis-controls .field textarea { min-height: 90px; }
+.analysis-timing, .analysis-actions, .analysis-result { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.analysis-timing label { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
+.analysis-timing input[type="time"] { padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font: inherit; }
+.analysis-timing span, .analysis-result p { color: var(--muted); font-size: var(--text-sm); }
+.analysis-result { justify-content: space-between; }
 
 /* The profile action is a sibling of the bot selection button. */
 .bot-row-wrap { position: relative; min-width: 0; }

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { PanelBack } from "./panel-controls";
 import ShareDropdown from "./share-dropdown";
+import AnalysisControls from "./analysis-controls";
 import BotFace from "./bot-face";
 import { getThreads } from "../lib/api";
 import type { Bot, ThreadFull } from "../lib/gitbot";
@@ -100,6 +101,7 @@ export default function BotProfile({
   onBack,
   onEdit,
   onShare,
+  onOpenThread,
   active = true,
 }: {
   bot: Bot;
@@ -107,6 +109,7 @@ export default function BotProfile({
   onBack: () => void;
   onEdit: () => void;
   onShare: (view: "code" | "publish") => void;
+  onOpenThread: (thread: ThreadFull) => void;
   active?: boolean;
 }) {
   const [shareOpen, setShareOpen] = useState(false);
@@ -186,6 +189,7 @@ export default function BotProfile({
           </button>
         </div>
       </div>
+      <AnalysisControls bot={bot} onOpenThread={onOpenThread} />
       {threads == null ? (
         <div className="skel profile-loading" aria-label="Loading activity">
           <i style={{ width: "70%" }} />

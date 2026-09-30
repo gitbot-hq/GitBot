@@ -65,6 +65,14 @@ export interface Thread {
   title: string;
   /** True while the title is still auto-derived, so a later turn may improve it. */
   titleIsAuto?: boolean;
+  /** GitBot's run id is available before the agent issues its transcript id. */
+  runSessionId?: string;
+  analysis?: {
+    branch: string;
+    commit: string;
+    status: "running" | "done" | "error" | "aborted";
+    error?: string;
+  };
   repoPath: string;
   preview: string;
   messageCount: number;
@@ -98,7 +106,7 @@ export function dataDir(): string {
 const BOTS_FILE = join(DATA_DIR, "bots.json");
 const THREADS_FILE = join(DATA_DIR, "threads.json");
 
-function readCollection<T>(file: string): T[] {
+export function readCollection<T>(file: string): T[] {
   if (!existsSync(file)) return [];
   try {
     const parsed = JSON.parse(readFileSync(file, "utf-8"));
@@ -109,7 +117,7 @@ function readCollection<T>(file: string): T[] {
   }
 }
 
-function writeCollection<T>(file: string, items: T[]): void {
+export function writeCollection<T>(file: string, items: T[]): void {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(items, null, 2), "utf-8");
