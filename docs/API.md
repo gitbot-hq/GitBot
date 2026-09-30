@@ -38,7 +38,7 @@ A bot is a named, reusable agent preset.
 | `POST` | `/bots` | Create a bot. Returns `{ bot, setupThread? }` |
 | `GET` | `/bots/:id` | `{ bot }` |
 | `PATCH` | `/bots/:id` | Update any bot field. Returns `{ bot, setupThread? }` |
-| `DELETE` | `/bots/:id` | Delete a bot and its threads |
+| `DELETE` | `/bots/:id` | Delete a bot, its threads and its run records |
 | `POST` | `/bots/:id/setup` | Set this machine's setup state. Body: `{ action: "complete" \| "reset" \| "fail" }` |
 
 **Bot fields**
@@ -55,6 +55,7 @@ A bot is a named, reusable agent preset.
 | `permissionMode` | `ask-permissions` \| `auto-approve` \| `plan` | Default `ask-permissions` |
 | `allowedTools` | string[] | The only tools the bot may use. Blank means all. Not applied to setup runs. Not supported on Codex |
 | `disallowedTools` | string[] | Tools the bot may never use. Not supported on Codex |
+| `trackRuns` | boolean | Keep a run record. See [Runs](#runs) |
 
 Read-only fields the server maintains: `id`, `setupStatus` (`pending` \| `complete` \| `failed`), `setupThreadId`, `createdAt`, `updatedAt`.
 
@@ -74,6 +75,16 @@ A thread is one conversation between a bot and a folder.
 A thread records `agent` and `sdkSessionId` on its first turn and keeps them: a session id only means something to the agent that issued it. Other fields: `kind` (`chat` \| `setup`), `title`, `repoPath`, `preview`, `messageCount`, `createdAt`, `updatedAt`.
 
 Messages are `{ role: "user" | "assistant", content: Block[] }`, where a block is `{ type: "text", text }`, `{ type: "tool_use", tool_name, tool_input }` or `{ type: "image_url", url }`.
+
+## Runs
+
+A bot with `trackRuns` on is asked to end each run with a fenced `gitbot-run` block of JSON: `{ summary, changedFiles, findings: [{ key, title, file?, line?, severity? }] }`. When the turn finishes, gitbot saves it to `~/.gitbot/runs.json` and compares it with the bot's previous run in the same folder (and branch, when there is one). The previous run's findings go into the next run's prompt so the bot reuses their keys.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/runs?botId=<id>&repoPath=<path>` | `{ runs: RunRecord[] }`, newest first. Both filters are optional |
+
+A run record has `botId`, `threadId`, `repoPath`, `branch`, `head` (the commit the run saw), `summary`, `changedFiles`, `findings` (each marked `status: "new" | "recurring"`), `resolved` (findings of the previous run that are gone), `previousRunId` and `createdAt`. If the bot lists no changed files, gitbot fills them in from git: commits since the previous run plus uncommitted changes. Deleting a thread keeps its runs.
 
 ## Chat
 

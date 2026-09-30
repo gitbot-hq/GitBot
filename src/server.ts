@@ -29,6 +29,7 @@ import { initAgent as initClaudeCode, runAgent as runClaudeCode, listSessions as
 import { initAgent as initOpencode, stopAgent as stopOpencode, runAgent as runOpencode, listSessions as listOpencodeSessions, getSessionHistory, abortSession as opencodeAbort, respondPermission as opencodePermission } from "./start-opencode";
 import { initAgent as initCodex, runAgent as runCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
 import { handleBotRoutes } from "./bot-routes";
+import { previousRun } from "./run-log";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
 import { getBot, getThread, touchThread, updateThread, botNeedsSetup, DEFAULT_BOT_AGENT } from "./bot-store";
 import { botPermissionToSession } from "./server-common";
@@ -282,6 +283,9 @@ export async function handleRequest(
           allowedTools: isSetup ? undefined : bot.allowedTools,
           disallowedTools: bot.disallowedTools,
           ...(isSetup ? { setup: true, setupInstructions: bot.setupInstructions } : {}),
+          ...(bot.trackRuns && !isSetup
+            ? { trackRuns: true, previousRun: previousRun(bot.id, thread.repoPath) }
+            : {}),
         };
       }
 

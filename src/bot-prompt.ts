@@ -1,4 +1,5 @@
 import { setSetupStatus } from "./bot-store";
+import { runRecordPrompt } from "./run-log";
 import type { SessionStore } from "./server-common";
 
 // How a bot's preset is put to an agent. Shared by every harness, so a bot
@@ -33,6 +34,7 @@ export function botSystemPrompt(preset: NonNullable<SessionStore["botPreset"]>):
     "Do not ask what to work on and do not wait for a restatement of the job; the",
     "job above is the request. Afterwards, follow the user's messages as usual,",
     "keeping the job's constraints in force for the rest of the conversation.",
+    ...(preset.trackRuns ? ["", runRecordPrompt(preset.previousRun)] : []),
   ].join("\n");
 }
 

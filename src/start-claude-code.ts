@@ -15,6 +15,7 @@ import {
 } from "./server-common";
 import { bindSession } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcome } from "./bot-prompt";
+import { recordRunFromEvents } from "./run-log";
 
 export async function initAgent(): Promise<boolean> {
   try {
@@ -173,6 +174,8 @@ export async function runAgent(store: SessionStore): Promise<void> {
       scheduleCleanup(store);
       return;
     }
+
+    recordRunFromEvents(store);
   } catch (err: any) {
     console.log("[query] outer error:", err?.message, err?.stack);
     const detail = stderrTail.join("").trim();

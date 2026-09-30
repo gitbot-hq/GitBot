@@ -254,6 +254,10 @@ export interface BotPreset {
   setupInstructions?: string;
   /** True while this run is the machine-preparation run rather than the bot's job. */
   setup?: boolean;
+  /** The bot keeps a run record: ask for the report and save it when the turn ends. */
+  trackRuns?: boolean;
+  /** The run this one is compared with, shown to the agent so it can reuse finding keys. */
+  previousRun?: import("./bot-store").RunRecord;
 }
 
 export const sessions = new Map<string, SessionStore>();

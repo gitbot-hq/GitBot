@@ -24,6 +24,7 @@ import {
 } from "./server-common";
 import { bindSession, dataDir } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcomeFromEvents } from "./bot-prompt";
+import { recordRunFromEvents } from "./run-log";
 
 let CodexCtor: typeof CodexClass | null = null;
 
@@ -277,6 +278,7 @@ export async function runAgent(store: SessionStore): Promise<void> {
   }
 
   recordSetupOutcomeFromEvents(store);
+  recordRunFromEvents(store);
   store.status = "done";
   notifyPermissionsChanged();
   emitEvent(store, "done", {});

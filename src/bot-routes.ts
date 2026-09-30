@@ -21,6 +21,7 @@ import {
   ensureSetupThread,
   setSetupStatus,
   isBotAgent,
+  listRuns,
   BOT_AGENTS,
   type Bot,
 } from "./bot-store";
@@ -118,6 +119,14 @@ export async function handleBotRoutes(
       jsonOk(res, { deleted: true });
       return true;
     }
+  }
+
+  // --- Runs ---
+
+  // GET /runs?botId=&repoPath= — a tracked bot's run records, newest first.
+  if (path === "/runs" && method === "GET") {
+    jsonOk(res, { runs: listRuns({ botId: query.botId, repoPath: query.repoPath }) });
+    return true;
   }
 
   // --- Threads ---

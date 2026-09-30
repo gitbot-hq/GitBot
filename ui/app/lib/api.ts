@@ -47,6 +47,12 @@ export function getThreads(botId: string) {
   );
 }
 
+export function getRuns(botId: string) {
+  return req<{ runs: import("./gitbot").RunRecord[] }>(
+    `/runs?botId=${encodeURIComponent(botId)}`,
+  );
+}
+
 export function getMessages(threadId: string) {
   return req<{ messages: import("./gitbot").HistoryMsg[] }>(
     `/threads/${encodeURIComponent(threadId)}/messages`,
@@ -140,6 +146,7 @@ export type BotInput = {
   permissionMode?: string;
   allowedTools?: string[];
   disallowedTools?: string[];
+  trackRuns?: boolean;
 };
 
 export function createBot(body: BotInput) {

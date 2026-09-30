@@ -151,6 +151,38 @@ function MarketplaceListingCard({ listing, color }: { listing: MarketplaceListin
   );
 }
 
+// A tracked bot's end-of-run report reads as a short card, not a JSON dump.
+// The recorded version, compared with the previous run, is on the bot profile.
+function RunReportCard({ raw }: { raw: string }) {
+  let report: { summary?: unknown; changedFiles?: unknown; findings?: unknown };
+  try {
+    report = JSON.parse(raw);
+  } catch {
+    return <pre><code>{raw}</code></pre>;
+  }
+  const findings = (Array.isArray(report.findings) ? report.findings : []).filter(
+    (f): f is { title: string; file?: string; line?: number } => typeof f?.title === "string",
+  );
+  const files = Array.isArray(report.changedFiles) ? report.changedFiles.length : 0;
+  return (
+    <div className="run-report">
+      <span className="run-report-head">
+        Run recorded · {files} changed file{files === 1 ? "" : "s"} · {findings.length} finding{findings.length === 1 ? "" : "s"}
+      </span>
+      {findings.length > 0 && (
+        <ul>
+          {findings.map((f, i) => (
+            <li key={i}>
+              {f.title}
+              {typeof f.file === "string" ? <> <code>{f.file}{Number.isInteger(f.line) ? `:${f.line}` : ""}</code></> : null}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function RichText({ text, botColor }: { text: string; botColor?: string }) {
   return (
     <div className="md">
@@ -162,6 +194,9 @@ function RichText({ text, botColor }: { text: string; botColor?: string }) {
             if (isValidElement<{ className?: string; children?: ReactNode }>(child) && child.props.className === "language-marketplace-listing") {
               const listing = parseMarketplaceListing(String(child.props.children).trim());
               if (listing) return <MarketplaceListingCard listing={listing} color={botColor} />;
+            }
+            if (isValidElement<{ className?: string; children?: ReactNode }>(child) && child.props.className === "language-gitbot-run") {
+              return <RunReportCard raw={String(child.props.children).trim()} />;
             }
             return <pre>{children}</pre>;
           },

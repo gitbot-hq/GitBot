@@ -15,6 +15,7 @@ const SHARE_FIELDS = [
   "permissionMode",
   "allowedTools",
   "disallowedTools",
+  "trackRuns",
 ];
 
 function toB64(str: string) {
@@ -85,6 +86,7 @@ export function parseShare(text: string): Record<string, unknown> | null {
   if (["ask-permissions", "auto-approve", "plan"].indexOf(obj.permissionMode as string) !== -1) {
     bot.permissionMode = obj.permissionMode;
   }
+  if (obj.trackRuns === true) bot.trackRuns = true;
   ["allowedTools", "disallowedTools"].forEach((k) => {
     if (Array.isArray(obj[k])) {
       const tools = (obj[k] as unknown[]).filter(

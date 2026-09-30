@@ -24,6 +24,32 @@ export type Bot = {
   disallowedTools?: string[];
   setupStatus?: string;
   setupThreadId?: string;
+  trackRuns?: boolean;
+};
+
+// A tracked bot's run record, mirroring RunRecord in src/bot-store.ts.
+export type RunFinding = {
+  key: string;
+  title: string;
+  file?: string;
+  line?: number;
+  severity?: string;
+  status?: "new" | "recurring";
+};
+
+export type RunRecord = {
+  id: string;
+  botId: string;
+  threadId: string;
+  repoPath: string;
+  branch?: string;
+  head?: string;
+  summary: string;
+  changedFiles: string[];
+  findings: RunFinding[];
+  resolved: RunFinding[];
+  previousRunId?: string;
+  createdAt: string;
 };
 
 export type Thread = {

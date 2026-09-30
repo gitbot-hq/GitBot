@@ -112,6 +112,7 @@ export default function BotForm({
   const [allowedTools, setAllowedTools] = useState(
     bot && bot.allowedTools ? bot.allowedTools.join(", ") : "",
   );
+  const [trackRuns, setTrackRuns] = useState(!!bot?.trackRuns);
   const [mascot, setMascot] = useState<AvatarMascot>(
     () => (bot ? resolveAvatar(getAvatarPref(bot.id), fallbackPref(bot.id)).mascot : "ghost"),
   );
@@ -128,7 +129,7 @@ export default function BotForm({
   // compares live field state against this.
   const initial = useRef({
     emoji, name, description, agent, instructions, setupInstructions,
-    repoPath, model, permissionMode, allowedTools, mascot, color,
+    repoPath, model, permissionMode, allowedTools, trackRuns, mascot, color,
   });
 
   useEffect(() => {
@@ -162,6 +163,7 @@ export default function BotForm({
       model !== s.model ||
       permissionMode !== s.permissionMode ||
       allowedTools !== s.allowedTools ||
+      trackRuns !== s.trackRuns ||
       mascot !== s.mascot ||
       color !== s.color
     );
@@ -201,6 +203,7 @@ export default function BotForm({
       model: model.trim() || undefined,
       permissionMode,
       allowedTools: tools.length ? tools : undefined,
+      trackRuns,
     };
   }
 
@@ -481,6 +484,19 @@ export default function BotForm({
                 OpenCode enforce it.
               </small>
             )}
+          </Field>
+          <Field label="Run record" tip="for bots that repeat the same check, like a branch review">
+            <label className="field-check">
+              <input
+                type="checkbox"
+                checked={trackRuns}
+                onChange={(e) => setTrackRuns(e.target.checked)}
+              />
+              <span>
+                Keep a record of each run and compare it with the last one: changed files, new,
+                recurring and resolved findings.
+              </span>
+            </label>
           </Field>
           {error && <p className="chat-error">{error}</p>}
           <div className="acts">

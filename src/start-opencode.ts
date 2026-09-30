@@ -2,6 +2,7 @@ import { execSync } from "child_process";
 import { basename } from "path";
 import { bindSession } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcomeFromEvents } from "./bot-prompt";
+import { recordRunFromEvents } from "./run-log";
 import {
   emitEvent,
   scheduleCleanup,
@@ -524,6 +525,7 @@ async function startEventStream(client: any, directory: string) {
       if (type === "session.idle" || (type === "session.status" && props?.status?.type === "idle")) {
         if (store.status === "done") continue;
         recordSetupOutcomeFromEvents(store);
+        recordRunFromEvents(store);
         store.status = "done";
         store.pendingPermissions.clear();
         notifyPermissionsChanged();

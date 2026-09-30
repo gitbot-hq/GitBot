@@ -266,6 +266,14 @@ export default function V2() {
   // The profile stays mounted under the studio: opening edit slides the
   // studio over it, closing slides back to it.
   const showProfile = profileBot != null;
+  // The tray clips its overflow, but focus still scrolls it: a control deep
+  // in a long profile pulls it down, one focused mid slide-in pulls it
+  // sideways. Put it back when the profile closes, or threads and chat
+  // come back shifted.
+  const trayRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!showProfile && trayRef.current) trayRef.current.scrollTo(0, 0);
+  }, [showProfile]);
 
   // Live rail status: the chat's activity sentence shortened to one word.
   // Anything unrecognized is honestly just "Working".
@@ -1019,7 +1027,7 @@ export default function V2() {
             aria-hidden="true"
           />
         </aside>
-        <div className={`tray${editing ? " open" : ""}${showProfile ? " profile-open" : ""}`}>
+        <div ref={trayRef} className={`tray${editing ? " open" : ""}${showProfile ? " profile-open" : ""}`}>
           <div className="tray-main">
             <aside
               ref={threadsAsideRef}
@@ -1222,6 +1230,11 @@ export default function V2() {
                 onBack={() => setProfileId(null)}
                 onEdit={() => openBotEditor(profileBot)}
                 onShare={(view) => setModal({ kind: "share", bot: profileBot, view })}
+                onOpenThread={(threadId) => {
+                  setThreadByBot((prev) => ({ ...prev, [profileBot.id]: threadId }));
+                  setSelectedId(profileBot.id);
+                  setProfileId(null);
+                }}
               />
             )}
           </div>
@@ -1291,6 +1304,7 @@ export default function V2() {
                 ? (parsed.disallowedTools as string[])
                 : undefined,
               agent: typeof parsed.agent === "string" ? parsed.agent : undefined,
+              trackRuns: parsed.trackRuns === true ? true : undefined,
             }).then(
               ({ bot: added }) => afterBotAdded(added, { mascot: "ghost", color: "var(--brand-sun)" }),
               (e) => toast(e instanceof Error ? e.message : String(e)),

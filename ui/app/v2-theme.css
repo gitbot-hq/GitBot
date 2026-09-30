@@ -1158,3 +1158,234 @@
   border: 1px dashed var(--faint);
   border-radius: var(--radius-sm);
 }
+
+/* Run record: the bot studio switch, and the profile's run history. */
+.modal .field .field-check {
+  align-items: flex-start;
+  gap: var(--space-3);
+  font-weight: 400;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.modal .field .field-check input {
+  flex: none;
+  width: auto;
+  margin: 3px 0 0;
+  padding: 0;
+  accent-color: var(--text);
+}
+
+.v2 .profile-runs {
+  margin-top: var(--space-6);
+}
+
+.v2 .profile-runs h3 {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.v2 .profile-runs h3 span {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 400;
+}
+
+.v2 .run-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.v2 .run-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.v2 .run-row {
+  display: grid;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  background: transparent;
+  border: 0;
+  border-radius: inherit;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.v2 .run-row:hover {
+  background: var(--surface-2);
+}
+
+.v2 .run-row-top {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.v2 .run-when {
+  font-weight: 600;
+}
+
+.v2 .run-where {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2 .run-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.v2 .run-counts .new { color: var(--brand-sky); }
+.v2 .run-counts .recurring { color: var(--pending); }
+.v2 .run-counts .resolved { color: var(--ok); }
+.v2 .run-counts .first { color: var(--faint); }
+
+.v2 .run-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.v2 .run-item.open .run-summary {
+  display: block;
+}
+
+.v2 .run-detail {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4) var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.v2 .run-detail h4 {
+  margin: var(--space-2) 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.v2 .run-files,
+.v2 .run-findings {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.v2 .run-files code,
+.v2 .run-loc,
+.v2 .run-head-sha {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2 .run-finding {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.v2 .run-finding-body {
+  display: grid;
+  min-width: 0;
+}
+
+.v2 .run-sev {
+  color: var(--faint);
+}
+
+.v2 .run-pill {
+  flex: none;
+  min-width: 74px;
+  padding: 1px var(--space-2);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.v2 .run-finding.new .run-pill { color: var(--brand-sky); }
+.v2 .run-finding.recurring .run-pill { color: var(--pending); }
+.v2 .run-finding.resolved .run-pill { color: var(--ok); }
+.v2 .run-finding.resolved .run-finding-title {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.v2 .run-acts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.v2 .run-none,
+.v2 .run-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.v2 .run-more {
+  width: 100%;
+}
+
+/* The same report inline in chat, in place of its raw JSON. */
+.run-report {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}
+
+.run-report-head {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.run-report ul {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.run-report code {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}

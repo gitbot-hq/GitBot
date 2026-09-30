@@ -4,8 +4,9 @@ import { useEffect, useState } from "react";
 import { PanelBack } from "./panel-controls";
 import ShareDropdown from "./share-dropdown";
 import BotFace from "./bot-face";
-import { getThreads } from "../lib/api";
-import type { Bot, ThreadFull } from "../lib/gitbot";
+import RunHistory from "./run-history";
+import { getRuns, getThreads } from "../lib/api";
+import type { Bot, RunRecord, ThreadFull } from "../lib/gitbot";
 import type { AvatarPref } from "../lib/avatar-prefs";
 
 const AGENT_LABELS: Record<string, string> = {
@@ -100,6 +101,7 @@ export default function BotProfile({
   onBack,
   onEdit,
   onShare,
+  onOpenThread,
   active = true,
 }: {
   bot: Bot;
@@ -107,11 +109,13 @@ export default function BotProfile({
   onBack: () => void;
   onEdit: () => void;
   onShare: (view: "code" | "publish") => void;
+  onOpenThread?: (threadId: string) => void;
   active?: boolean;
 }) {
   const [shareOpen, setShareOpen] = useState(false);
   useEffect(() => { if (!active) setShareOpen(false); }, [active]);
   const [threads, setThreads] = useState<ThreadFull[] | null>(null);
+  const [runs, setRuns] = useState<RunRecord[] | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -121,6 +125,14 @@ export default function BotProfile({
       },
       () => {
         if (live) setThreads([]);
+      },
+    );
+    getRuns(bot.id).then(
+      ({ runs }) => {
+        if (live) setRuns(runs);
+      },
+      () => {
+        if (live) setRuns([]);
       },
     );
     return () => {
@@ -238,6 +250,19 @@ export default function BotProfile({
           </p>
         </>
       )}
+      {runs != null && threads != null && (bot.trackRuns || runs.length > 0) && (
+        <section className="profile-runs" aria-label="Run history">
+          <h3>
+            Run history
+            {runs.length ? <span>{runs.length}</span> : null}
+          </h3>
+          <RunHistory
+            runs={runs}
+            threadIds={new Set(threads.map((t) => t.id))}
+            onOpenThread={onOpenThread}
+          />
+        </section>
+      )}
       <dl className="profile-meta">
         <div>
           <dt>Agent</dt>
@@ -250,6 +275,10 @@ export default function BotProfile({
         <div>
           <dt>Permissions</dt>
           <dd>{permissionLabel(bot.permissionMode, bot.agent)}</dd>
+        </div>
+        <div>
+          <dt>Run record</dt>
+          <dd>{bot.trackRuns ? "On" : "Off"}</dd>
         </div>
         <div>
           <dt>Tools</dt>

@@ -45,6 +45,13 @@ export interface Bot {
   permissionMode: "ask-permissions" | "auto-approve" | "plan";
   allowedTools?: string[];
   disallowedTools?: string[];
+  /**
+   * Keep a run record: each run ends with a structured report that gitbot saves
+   * and compares with the bot's previous run in the same folder. Meant for bots
+   * that repeat the same check — reviews, audits — so their history can be read
+   * without opening every thread.
+   */
+  trackRuns?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -74,6 +81,36 @@ export interface Thread {
 
 export type NewBot = Partial<Bot> & Pick<Bot, "name">;
 
+/** One thing a tracked run reported. `key` names the issue, stable across runs. */
+export interface RunFinding {
+  key: string;
+  title: string;
+  file?: string;
+  line?: number;
+  severity?: string;
+  /** Against the previous run: first seen now, or seen before and still there. */
+  status?: "new" | "recurring";
+}
+
+/** A tracked bot's run: what it looked at, what it found, what went away. */
+export interface RunRecord {
+  id: string;
+  botId: string;
+  threadId: string;
+  repoPath: string;
+  branch?: string;
+  /** The commit the run saw, so the next run can tell what changed since. */
+  head?: string;
+  summary: string;
+  changedFiles: string[];
+  findings: RunFinding[];
+  /** Findings of the previous run that this run no longer reports. */
+  resolved: RunFinding[];
+  /** The run this one was compared with, if there was one. */
+  previousRunId?: string;
+  createdAt: string;
+}
+
 // --- Storage ---
 // Two JSON files under ~/.gitbot. Small collections, read fully and written atomically.
 // All access goes through this module so the backing store can be swapped later.
@@ -97,6 +134,7 @@ export function dataDir(): string {
 }
 const BOTS_FILE = join(DATA_DIR, "bots.json");
 const THREADS_FILE = join(DATA_DIR, "threads.json");
+const RUNS_FILE = join(DATA_DIR, "runs.json");
 
 function readCollection<T>(file: string): T[] {
   if (!existsSync(file)) return [];
@@ -145,6 +183,7 @@ export function createBot(input: NewBot): Bot {
     permissionMode: input.permissionMode ?? "ask-permissions",
     allowedTools: input.allowedTools,
     disallowedTools: input.disallowedTools,
+    trackRuns: input.trackRuns || undefined,
     createdAt: ts,
     updatedAt: ts,
   };
@@ -186,6 +225,8 @@ export function deleteBot(id: string): boolean {
   writeCollection(BOTS_FILE, remaining);
   const threads = readCollection<Thread>(THREADS_FILE);
   writeCollection(THREADS_FILE, threads.filter((t) => t.botId !== id));
+  const runs = readCollection<RunRecord>(RUNS_FILE);
+  if (runs.some((r) => r.botId === id)) writeCollection(RUNS_FILE, runs.filter((r) => r.botId !== id));
   return true;
 }
 
@@ -220,6 +261,25 @@ export function setSetupStatus(botId: string, status: SetupStatus): Bot | undefi
   const bot = getBot(botId);
   if (!bot || !bot.setupInstructions?.trim()) return bot;
   return updateBot(botId, { setupStatus: status });
+}
+
+// --- Runs ---
+// A run outlives its thread: deleting a thread keeps the audit trail, and the
+// hub shows the link as gone. Deleting the bot takes its runs with it.
+
+/** Newest first. */
+export function listRuns(filter: { botId?: string; repoPath?: string } = {}): RunRecord[] {
+  return readCollection<RunRecord>(RUNS_FILE)
+    .filter((r) => (!filter.botId || r.botId === filter.botId) && (!filter.repoPath || r.repoPath === filter.repoPath))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export function addRun(input: Omit<RunRecord, "id" | "createdAt">): RunRecord {
+  const runs = readCollection<RunRecord>(RUNS_FILE);
+  const run: RunRecord = { id: randomUUID(), ...input, createdAt: now() };
+  runs.push(run);
+  writeCollection(RUNS_FILE, runs);
+  return run;
 }
 
 // --- Threads ---
