@@ -28,7 +28,7 @@ npm install -g @gitbot-hq/gitbot
 
 <br><br>
 
-![GitBot workspace with bots, threads, and a conversation](assets/screenshots/hub.webp)
+<picture><source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/hub.webp"><source media="(prefers-color-scheme: light)" srcset="assets/screenshots/hub-light.webp"><img src="assets/screenshots/hub-light.webp" alt="GitBot workspace with bots, threads, and a conversation"></picture>
 
 <br><br><br>
 
@@ -86,7 +86,7 @@ The instructions give the bot its job. Your message gives it today's task. A thr
 
 | Choose how to create | Define the bot | Start a thread |
 | --- | --- | --- |
-| ![Create, generate, or import a bot from the Bots panel](assets/screenshots/create-menu.webp) | ![Create a bot with its name, agent, instructions, permissions, and mascot](assets/screenshots/create-bot-form.webp) | ![Choose a workspace and agent for a new thread](assets/screenshots/create-thread.webp) |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/create-menu.webp"><source media="(prefers-color-scheme: light)" srcset="assets/screenshots/create-menu-light.webp"><img src="assets/screenshots/create-menu-light.webp" alt="Create, generate, or import a bot from the Bots panel"></picture> | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/create-bot-form.webp"><source media="(prefers-color-scheme: light)" srcset="assets/screenshots/create-bot-form-light.webp"><img src="assets/screenshots/create-bot-form-light.webp" alt="Create a bot with its name, agent, instructions, permissions, and mascot"></picture> | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/create-thread.webp"><source media="(prefers-color-scheme: light)" srcset="assets/screenshots/create-thread-light.webp"><img src="assets/screenshots/create-thread-light.webp" alt="Choose a workspace and agent for a new thread"></picture> |
 
 You can also choose **Create with an agent** and give an installed agent the guided authoring prompt, or **Import bot** if someone has shared a code with you. In both cases, review the bot's instructions and permissions before you let it work.
 
@@ -129,7 +129,7 @@ Prefer to submit a listing yourself? Open the [GitBot Library publishing guide](
 
 | Choose how to share | Share with code | Publish to Marketplace |
 | --- | --- | --- |
-| ![Share a bot with a code or publish it to Marketplace](assets/screenshots/share-menu.webp) | ![Share a bot using its generated code](assets/screenshots/share-code.webp) | ![Publish a bot to Marketplace with an agent or manually](assets/screenshots/publish-marketplace.webp) |
+| <picture><source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/share-menu.webp"><source media="(prefers-color-scheme: light)" srcset="assets/screenshots/share-menu-light.webp"><img src="assets/screenshots/share-menu-light.webp" alt="Share a bot with a code or publish it to Marketplace"></picture> | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/share-code.webp"><source media="(prefers-color-scheme: light)" srcset="assets/screenshots/share-code-light.webp"><img src="assets/screenshots/share-code-light.webp" alt="Share a bot using its generated code"></picture> | <picture><source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/publish-marketplace.webp"><source media="(prefers-color-scheme: light)" srcset="assets/screenshots/publish-marketplace-light.webp"><img src="assets/screenshots/publish-marketplace-light.webp" alt="Publish a bot to Marketplace with an agent or manually"></picture> |
 
 <br><br><br>
 
