@@ -38,7 +38,7 @@ const CLIENT_VERSION_RANGE = ">=1.0.0";
 export const PORT_RANGE_START = 32100;
 export const PORT_RANGE_END = 32199;
 
-export function findAvailablePort(startPort: number, endPort: number): Promise<number> {
+export function findAvailablePort(startPort: number, endPort: number, host: string = "127.0.0.1"): Promise<number> {
   return new Promise((resolve, reject) => {
     const tryPort = (port: number) => {
       if (port > endPort) {
@@ -46,7 +46,7 @@ export function findAvailablePort(startPort: number, endPort: number): Promise<n
         return;
       }
       const server = http.createServer();
-      server.listen(port, () => {
+      server.listen(port, host, () => {
         server.close(() => resolve(port));
       });
       server.on("error", () => tryPort(port + 1));
@@ -91,35 +91,10 @@ export function getTailscaleIP(): Promise<string | null> {
   });
 }
 
-export async function showQR(network: string, port: number): Promise<void> {
-  let ip: string;
-  let label: string;
-
-  if (network === "tailscale") {
-    const tsIP = await getTailscaleIP();
-    if (!tsIP) {
-      console.error("  Tailscale IP not found. Is Tailscale running?");
-      process.exit(1);
-    }
-    ip = tsIP;
-    label = "Tailscale";
-  } else if (network === "remote-ip") {
-    const publicIP = await getPublicIP();
-    if (!publicIP) {
-      console.error("  Could not determine public IP address.");
-      process.exit(1);
-    }
-    ip = publicIP;
-    label = "Public";
-  } else if (network === "local") {
-    ip = getLocalIP();
-    label = "Local Network";
-  } else {
-    ip = network;
-    label = "Custom";
-  }
-
-  const url = `http://${ip}:${port}`;
+export async function showQR(host: string, port: number): Promise<void> {
+  const ip = host === "0.0.0.0" || host === "::" ? getLocalIP() : host;
+  const label = host === "127.0.0.1" || host === "::1" ? "Local" : "Network";
+  const url = `http://${ip.includes(":") ? `[${ip}]` : ip}:${port}`;
   console.log(`\n  ${label}  ${url}\n`);
 
   const qrCode = await new Promise<string>((resolve) => {
@@ -365,10 +340,11 @@ export function emitEvent(store: SessionStore, type: string, data: Record<string
 export async function createHttpServer(opts: {
   portOverride?: number;
   caffeinate: boolean;
-  network: string;
+  host?: string;
   label: string;
 }): Promise<{ server: http.Server; PORT: number; caffeinatePid: number | null }> {
   const caffeinatePid = maybeCaffeinate(opts.caffeinate);
+  const host = opts.host ?? "127.0.0.1";
   console.log(`  workspace: ${process.cwd()}`);
 
   let PORT: number;
@@ -377,7 +353,7 @@ export async function createHttpServer(opts: {
     console.log(`  port: ${PORT} (specified)`);
   } else {
     try {
-      PORT = await findAvailablePort(PORT_RANGE_START, PORT_RANGE_END);
+      PORT = await findAvailablePort(PORT_RANGE_START, PORT_RANGE_END, host);
       console.log(`  port: ${PORT} (auto-selected from ${PORT_RANGE_START}–${PORT_RANGE_END})`);
     } catch {
       console.error(`\n  No available port found in range ${PORT_RANGE_START}–${PORT_RANGE_END}.`);
@@ -415,8 +391,10 @@ export async function createHttpServer(opts: {
   });
 
   await new Promise<void>((resolve) => {
-    server.listen(PORT, async () => {
-      await showQR(opts.network, PORT);
+    server.listen(PORT, host, async () => {
+      const address = server.address();
+      if (address && typeof address !== "string") PORT = address.port;
+      await showQR(host, PORT);
       resolve();
     });
   });
