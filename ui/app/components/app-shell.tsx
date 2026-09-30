@@ -12,6 +12,7 @@ import { PencilIcon } from "@animateicons/react/lucide/pencil-icon";
 import { CodeIcon } from "@animateicons/react/lucide/code-icon";
 import { SearchIcon } from "@animateicons/react/lucide/search-icon";
 import { TrashIcon } from "@animateicons/react/lucide/trash-icon";
+import { XIcon } from "@animateicons/react/lucide/x-icon";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "./page-link";
@@ -43,6 +44,7 @@ import {
   getBots,
   getSessionStatus,
   getThreads,
+  renameThread,
 } from "../lib/api";
 import { getAvatarPref, setAvatarPref, resolveAvatar, defaultMascotFor, type AvatarPref } from "../lib/avatar-prefs";
 import type { Bot, ThreadFull } from "../lib/gitbot";
@@ -91,6 +93,8 @@ export default function V2() {
   const [threads, setThreads] = useState<ThreadFull[]>([]);
   const [threadsError, setThreadsError] = useState<string | null>(null);
   const [threadsLoading, setThreadsLoading] = useState(true);
+  const [renamingThread, setRenamingThread] = useState<{ id: string; title: string } | null>(null);
+  const [renameSaving, setRenameSaving] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [threadByBot, setThreadByBot] = useState<Record<string, string>>({});
   const [hoverId, setHoverId] = useState<string | null>(null);
@@ -355,6 +359,7 @@ export default function V2() {
   }, []);
 
   useEffect(() => {
+    setRenamingThread(null);
     if (bot) refreshThreads(bot.id);
     else {
       setThreads([]);
@@ -731,6 +736,27 @@ export default function V2() {
     setThreads((prev) => [thread, ...prev]);
     setThreadByBot((prev) => ({ ...prev, [bot.id]: thread.id }));
     setThreadPanel(false);
+  }
+
+  function finishRename(id: string) {
+    setRenamingThread(null);
+    requestAnimationFrame(() => threadsScrollRef.current?.querySelector<HTMLButtonElement>(`[data-thread-id="${id}"] .thread-rename`)?.focus());
+  }
+
+  async function saveThreadName() {
+    if (!renamingThread || renameSaving || !renamingThread.title.trim()) return;
+    const { id, title } = renamingThread;
+    setRenameSaving(true);
+    try {
+      const { thread } = await renameThread(id, title.trim());
+      setThreads((current) => current.map((candidate) => candidate.id === id ? thread : candidate));
+      finishRename(id);
+      toast("Thread renamed");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRenameSaving(false);
+    }
   }
 
   async function removeThread(thread: ThreadFull) {
@@ -1112,20 +1138,53 @@ export default function V2() {
                       {visibleThreads.map((t) => (
                         <div
                           key={t.id}
+                          data-thread-id={t.id}
                           className={`${t.id === activeThread?.id ? "thread-row active" : "thread-row"}${threadSearchText ? "" : " msg-in"}`}
                           aria-current={t.id === activeThread?.id ? "true" : undefined}
                         >
+                          {renamingThread?.id === t.id ? (
+                            <form className="thread-rename-form" onSubmit={(e) => { e.preventDefault(); void saveThreadName(); }}>
+                              <input
+                                autoFocus
+                                aria-label="Thread name"
+                                value={renamingThread.title}
+                                disabled={renameSaving}
+                                onFocus={(e) => e.currentTarget.select()}
+                                onChange={(e) => setRenamingThread({ id: t.id, title: e.target.value })}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Escape" && !renameSaving) { e.preventDefault(); finishRename(t.id); }
+                                }}
+                              />
+                              <button type="submit" aria-label="Save thread name" title="Save (Enter)" disabled={renameSaving || !renamingThread.title.trim()}>
+                                <AnimatedActionIcon icon={CheckIcon} size={14} aria-hidden="true" />
+                              </button>
+                              <button type="button" aria-label="Cancel rename" title="Cancel (Escape)" disabled={renameSaving} onClick={() => finishRename(t.id)}>
+                                <AnimatedActionIcon icon={XIcon} size={14} aria-hidden="true" />
+                              </button>
+                            </form>
+                          ) : <>
                           <button
                             type="button"
                             className="thread-open"
                             disabled={setupRequired}
-                            title={setupRequired ? "Available after setup" : undefined}
+                            title={setupRequired ? "Available after setup" : `${t.title} (double-click to rename)`}
+                            onDoubleClick={() => { if (!renameSaving) setRenamingThread({ id: t.id, title: t.title }); }}
                             onClick={() =>
                               bot && setThreadByBot((prev) => ({ ...prev, [bot.id]: t.id }))
                             }
                           >
                             <span className="thread-row-title">{t.title}</span>
                             {t.id === activeThread?.id && <AnimatedActionIcon icon={CheckIcon} className="thread-selected-mark" size={16} aria-hidden="true" />}
+                          </button>
+                          <button
+                            type="button"
+                            className="thread-rename"
+                            aria-label={`Rename thread ${t.title}`}
+                            title="Rename thread"
+                            disabled={renameSaving}
+                            onClick={() => setRenamingThread({ id: t.id, title: t.title })}
+                          >
+                            <AnimatedActionIcon icon={PencilIcon} size={14} aria-hidden="true" />
                           </button>
                           <button
                             type="button"
@@ -1136,6 +1195,7 @@ export default function V2() {
                           >
                             <AnimatedActionIcon icon={TrashIcon} size={14} aria-hidden="true" />
                           </button>
+                          </>}
                         </div>
                       ))}
                       {!threadsError && workThreads.length === 0 && (

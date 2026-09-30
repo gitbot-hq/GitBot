@@ -184,6 +184,13 @@ export async function handleBotRoutes(
     }
     if (method === "PATCH") {
       const body = await readBody(req);
+      if (body.title !== undefined) {
+        if (typeof body.title !== "string" || !body.title.trim()) {
+          jsonError(res, 400, "title must be a non-empty string");
+          return true;
+        }
+        body.title = body.title.trim();
+      }
       const thread = updateThread(threadId, body);
       if (!thread) { jsonError(res, 404, "Thread not found"); return true; }
       jsonOk(res, { thread });

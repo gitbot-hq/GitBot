@@ -4152,9 +4152,10 @@ button.file-chip:hover {
   text-align: left;
   cursor: pointer;
 }
-.thread-row:not(.active) .thread-open { padding-right: 40px; }
+.thread-open { padding-right: 40px; }
+.thread-row:hover .thread-open, .thread-row:focus-within .thread-open { padding-right: 68px; }
 .thread-open:disabled { cursor: default; opacity: 0.7; }
-.thread-kill {
+.thread-rename, .thread-kill {
   position: absolute;
   top: 50%;
   right: 7px;
@@ -4172,13 +4173,23 @@ button.file-chip:hover {
   pointer-events: none;
   transform: translateY(-50%);
 }
+.thread-rename { right: 35px; }
+.thread-row:hover .thread-rename,
+.thread-rename:focus-visible,
 .thread-row:hover .thread-kill,
 .thread-kill:focus-visible { opacity: 1; pointer-events: auto; }
 .thread-row:hover .thread-selected-mark,
+.thread-row:has(.thread-rename:focus-visible) .thread-selected-mark,
 .thread-row:has(.thread-kill:focus-visible) .thread-selected-mark { opacity: 0; }
+.thread-rename:hover, .thread-rename:focus-visible { background: var(--surface-2); color: var(--text); }
 .thread-kill:hover,
 .thread-kill:focus-visible { background: var(--surface-2); color: var(--danger); }
-.thread-selected-mark { flex: none; margin-left: auto; }
+.thread-rename-form { display: flex; align-items: center; gap: var(--space-1); width: 100%; padding: var(--space-1); }
+.thread-rename-form input { min-width: 0; width: 100%; padding: var(--space-1); background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; }
+.thread-rename-form button { display: grid; place-items: center; flex: none; width: 24px; height: 24px; padding: 0; background: none; border: 0; border-radius: var(--radius-sm); color: var(--text); cursor: pointer; }
+.thread-rename-form button:hover { background: var(--surface-2); }
+.thread-rename-form button:disabled { opacity: 0.5; cursor: default; }
+.thread-selected-mark { position: absolute; right: 12px; }
 
 /* Keyboard actions keep a strong ring; editable fields use their own quiet border cue. */
 .page :is(button, a, [tabindex], input[type="checkbox"], input[type="radio"], input[type="range"], input[type="file"]):focus-visible,
@@ -4193,6 +4204,11 @@ button.file-chip:hover {
   box-shadow: none;
 }
 @media (hover: none) { .bot-profile-btn { opacity: 1; } }
+@media (hover: none) {
+  .thread-rename, .thread-kill { opacity: 1; pointer-events: auto; }
+  .thread-open { padding-right: 68px; }
+  .thread-selected-mark { display: none; }
+}
 
 /* The header stays visually anchored while the page changes underneath. */
 .topbar { view-transition-name: app-header; }

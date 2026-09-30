@@ -168,6 +168,13 @@ export function deleteThread(id: string) {
   });
 }
 
+export function renameThread(id: string, title: string) {
+  return req<{ thread: import("./gitbot").ThreadFull }>(`/threads/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+}
+
 export function botSetupAction(id: string, action: "complete" | "reset" | "fail") {
   return req<{ bot: import("./gitbot").Bot; setupThread?: unknown }>(
     `/bots/${encodeURIComponent(id)}/setup`,
