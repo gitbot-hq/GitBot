@@ -71,7 +71,7 @@ A bot is a reusable set of instructions for a coding agent. You decide what it d
 1. In the **Bots** panel, select **+** and then **Create manually**.
 2. Give the bot a **name** and a short **description** so you can recognize it later.
 3. Choose an installed **agent**. Write the bot's standing job in **Instructions**.
-4. Leave **Permissions** on **Ask before each tool** for Claude Code or OpenCode. For Codex, **Edit in the working directory** allows edits inside the selected folder; choose **Plan only** for read-only exploration. Add **Setup instructions** only if the bot needs to check or prepare something once on this machine.
+4. Leave **Permissions** on **Ask before each tool**; choose **Plan only** for read-only exploration. Add **Setup instructions** only if the bot needs to check or prepare something once on this machine.
 5. Select **Create bot**. Open a new thread, choose the repo folder, and send your first message.
 
 For a first bot, try instructions like these:
@@ -96,7 +96,7 @@ You can also choose **Create with an agent** and give an installed agent the gui
 
 Choose a repo when you start a thread. The bot runs its agent in that folder and streams the conversation back to GitBot. You can close the browser tab and return to a running turn.
 
-With Claude Code or OpenCode, GitBot shows an approval card when a tool requires permission. Codex has no per-action approval channel, so its selected permission mode chooses a sandbox instead.
+GitBot shows an approval card when a tool requires permission. Codex additionally runs inside a sandbox chosen by the mode: on **Ask before each tool** it is read-only until you approve a command, on **Auto-approve** it has full access and nothing is asked.
 
 ![A GitBot working through a task in a conversation](assets/screenshots/gitbot-working.webp)
 
@@ -135,11 +135,11 @@ Prefer to submit a listing yourself? Open the [GitBot Library publishing guide](
 
 ## Permissions and agent differences
 
-Start with **Ask before tools** for Claude Code or OpenCode. For Codex, use **Read-only** when you do not want edits. Move to broader permissions only when you understand the bot's instructions and trust the repo it is working in. You can change a thread's permission mode from its chat bar. Codex and Plan changes apply from the next message; a broader Claude Code or OpenCode mode can also resolve approvals already waiting in the current reply.
+Start with **Ask before tools**, or **Plan only** when you do not want edits. Move to broader permissions only when you understand the bot's instructions and trust the repo it is working in. You can change a thread's permission mode from its chat bar. Plan changes apply from the next message; a broader mode also resolves approvals already waiting in the current reply, though Codex keeps its current sandbox until the next message.
 
 | | Claude Code | OpenCode | Codex |
 | --- | --- | --- | --- |
-| Approval requests | When a tool requires it | When a tool requires it | No; the selected mode chooses a sandbox |
+| Approval requests | When a tool requires it | When a tool requires it | Before each command and file change, inside a sandbox chosen by the mode |
 | Allowed or disallowed tool list | Yes | Yes | Not enforced |
 | Resume threads and run setup steps | Yes | Yes | Yes |
 | Model | Optional | Required as `provider/model` | Optional |

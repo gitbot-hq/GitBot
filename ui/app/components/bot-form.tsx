@@ -427,24 +427,14 @@ export default function BotForm({
           </Field>
           <Field label="Permissions">
             <select value={permissionMode} onChange={(e) => setPermissionMode(e.target.value)}>
-              {agent === "codex" ? (
-                <>
-                  <option value="ask-permissions">Edit in the working directory</option>
-                  <option value="auto-approve">Full access (edit anywhere, network)</option>
-                  <option value="plan">Plan only (no edits)</option>
-                </>
-              ) : (
-                <>
-                  <option value="ask-permissions">Ask before each tool</option>
-                  <option value="auto-approve">Auto-approve tools</option>
-                  <option value="plan">Plan only (no edits)</option>
-                </>
-              )}
+              <option value="ask-permissions">Ask before each tool</option>
+              <option value="auto-approve">Auto-approve tools</option>
+              <option value="plan">Plan only (no edits)</option>
             </select>
             {agent === "codex" && (
               <small className="field-warn">
-                Codex cannot be asked mid-turn, so a mode picks its sandbox instead. Read-only stays
-                available per conversation from the chat composer.
+                Codex also runs inside a sandbox chosen by the mode: read-only until you approve a
+                command, and never asked at all on auto-approve. Tool lists are not enforced on Codex.
               </small>
             )}
           </Field>

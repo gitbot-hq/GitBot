@@ -254,14 +254,20 @@ const permissionOptions = [
   { mode: "plan", label: "Plan only", detail: "Explore without making edits.", icon: FileTextIcon },
 ] as const;
 
-// Codex cannot be asked for permission mid-turn — it has no approval channel,
-// so a mode selects one of its sandboxes and nothing else. Name the sandbox
-// rather than promise a prompt that never arrives.
-const codexPermissionCopy: Record<string, { label: string; detail: string }> = {
-  "ask-permissions": { label: "Read-only", detail: "Codex reads and answers; it cannot edit or reach the network." },
-  "allow-all-edits": { label: "Edit in workspace", detail: "Codex edits inside this folder without asking." },
-  "yolo": { label: "Full access", detail: "Codex edits anywhere and reaches the network." },
-  "plan": { label: "Plan only", detail: "Explore without making edits." },
+// Codex asks for real now, so the labels are the shared ones. What stays
+// codex-specific is the sandbox: it is a second boundary underneath the prompts,
+// and two modes behave in ways the shared copy would misdescribe.
+const codexPermissionCopy: Record<string, { detail: string }> = {
+  // The sandbox is read-only, but approving a command can escalate out of it —
+  // so this must not claim codex "cannot edit".
+  "ask-permissions": { detail: "Approve each command and each file change." },
+  // Deletions are not covered: they get a card of their own, because buying out
+  // of per-edit prompts is not buying out of being told a file will be removed.
+  "allow-all-edits": { detail: "File edits run without asking; deletions and commands still ask." },
+  // `never`, not auto-approval — codex raises nothing, which also means its own
+  // refusal of destructive commands has no approval path to override it.
+  "yolo": { detail: "Nothing is asked. Codex still refuses a few commands it judges destructive." },
+  "plan": { detail: "Explore in a read-only sandbox; edits are refused." },
 };
 
 function permissionOptionsFor(agent: string) {
@@ -272,12 +278,11 @@ function permissionOptionsFor(agent: string) {
 const threadPermissionKey = "gitbot-thread-permissions";
 
 /** The bot's own vocabulary ("auto-approve") → the chat's. Mirrors the server's
- *  botPermissionToSession, including its codex case: "ask" is not a thing codex
- *  can do, so those bots run in the workspace-write sandbox. */
-function safePermissionMode(mode: string | undefined, agent: string): ChatPermissionMode {
+ *  botPermissionToSession, which no longer special-cases codex: it can ask. */
+function safePermissionMode(mode: string | undefined): ChatPermissionMode {
   if (mode === "auto-approve") return "yolo";
   if (mode === "plan") return "plan";
-  return agent === "codex" ? "allow-all-edits" : "ask-permissions";
+  return "ask-permissions";
 }
 
 function isChatPermissionMode(mode: unknown): mode is ChatPermissionMode {
@@ -1102,7 +1107,7 @@ export default function Chat({
       const { sessionId } = await postChat(
         thread.id,
         prompt,
-        permissionModesRef.current[thread.id] ?? safePermissionMode(botPermissionMode, agent),
+        permissionModesRef.current[thread.id] ?? safePermissionMode(botPermissionMode),
       );
       if (threadRef.current !== thread.id) return;
       sessionRef.current = sessionId;
@@ -1219,7 +1224,7 @@ export default function Chat({
   /** Remember the thread's chosen mode; the bot's own default = no entry. */
   function rememberMode(tid: string, mode: ChatPermissionMode) {
     const next = { ...permissionModesRef.current };
-    if (mode === safePermissionMode(botPermissionMode, agent)) delete next[tid];
+    if (mode === safePermissionMode(botPermissionMode)) delete next[tid];
     else next[tid] = mode;
     permissionModesRef.current = next;
     setPermissionModes(next);
@@ -1233,7 +1238,7 @@ export default function Chat({
   function changeMode(mode: ChatPermissionMode) {
     if (!thread) return;
     const tid = thread.id;
-    const before = permissionModesRef.current[tid] ?? safePermissionMode(botPermissionMode, agent);
+    const before = permissionModesRef.current[tid] ?? safePermissionMode(botPermissionMode);
     rememberMode(tid, mode);
     const sid = sessionRef.current;
     if (!sid || mode === "plan") return;
@@ -1268,8 +1273,8 @@ export default function Chat({
   );
   const showThreadEmpty = !loading && visibleMsgs.length === 0 && !historyError && !setup;
   const permissionMode = thread
-    ? permissionModes[thread.id] ?? safePermissionMode(botPermissionMode, agent)
-    : safePermissionMode(botPermissionMode, agent);
+    ? permissionModes[thread.id] ?? safePermissionMode(botPermissionMode)
+    : safePermissionMode(botPermissionMode);
   const agentPermissionOptions = permissionOptionsFor(agent);
   const permissionOption = agentPermissionOptions.find((option) => option.mode === permissionMode)!;
   useMascotPointerFollow({

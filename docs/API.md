@@ -118,7 +118,7 @@ A session is one running (or finished) agent conversation, held in the server's 
 | `GET` | `/sessions/:id/history?agent=<agent>&repoPath=<path>` | `{ messages }` for a session |
 | `GET` | `/sessions/:id/status` | `{ streaming: boolean, sdkSessionId }` |
 | `GET` | `/sessions/:id/config` | `{ gitbotId, sessionId, agent, model, mode, permissionMode }` |
-| `PATCH` | `/sessions/:id` | Change the permission mode, also mid-turn. Body: `{ permissionMode }`. Approvals already waiting that the new mode covers are resolved at once. Returns `{ sessionId, permissionMode }`. On Codex the change applies from the next turn |
+| `PATCH` | `/sessions/:id` | Change the permission mode, also mid-turn. Body: `{ permissionMode }`. Approvals already waiting that the new mode covers are resolved at once. Returns `{ sessionId, permissionMode }`. On Codex the sandbox changes from the next turn; waiting approvals are still resolved at once |
 | `GET` | `/sessions/:id/permissions` | `{ pending: string[] }` — the `toolUseID`s still awaiting an answer |
 | `POST` | `/sessions/:id/permission` | Answer an approval. Body: `{ toolUseID, approved: boolean }` |
 | `POST` | `/sessions/:id/abort` | Stop a running turn |
@@ -144,7 +144,7 @@ Events carry a `seq` field and an SSE `id:`, so a client that reconnects with `L
 | `tool_use` | `tool_name`, `tool_input` | The agent is calling a tool |
 | `tool_result` | `tool_use_id`, `tool_name`, `output`, `exit_code`, `status` | A command finished (Codex) |
 | `status` | `status`, `tool_name?`, `summary?` | Activity: `thinking`, `tool`, `tool_summary` |
-| `permission_request` | `toolUseID`, `toolName`, `input` | The agent needs approval (Claude Code, OpenCode — Codex never asks; its permission mode selects a sandbox) |
+| `permission_request` | `toolUseID`, `toolName`, `input` | The agent needs approval. On Codex this covers commands, file changes and sandbox escalations; `GITBOT_CODEX_APP_SERVER=0` disables it |
 | `result` | `subtype`, `cost`, `duration_ms`, `num_turns` | Turn statistics (Claude Code) |
 | `agent_error` | `message` | The agent itself reported a problem — provider refused, bad model (OpenCode); a connection retry or transport fallback (Codex). Not terminal on its own: it is followed by a terminal event only if the turn actually fails |
 | `done` | — | Turn finished |

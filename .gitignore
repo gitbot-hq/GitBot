@@ -6,3 +6,6 @@ out
 *.tsbuildinfo
 dist
 .DS_Store
+# Playwright MCP writes snapshots and console logs here; it refuses paths
+# outside the repo root, so the directory reappears on every browser test.
+.playwright-mcp

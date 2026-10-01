@@ -24,6 +24,7 @@ import {
 } from "./server-common";
 import { bindSession, dataDir } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcomeFromEvents } from "./bot-prompt";
+import { appServerEnabled, runAppServerTurn } from "./codex-app-server";
 
 let CodexCtor: typeof CodexClass | null = null;
 
@@ -87,6 +88,80 @@ interface PendingAttachment {
   url: string;
 }
 
+/** Where this turn's images landed, and whether they still need promoting. */
+export interface StagedAttachments {
+  dir: string;
+  /**
+   * True while `dir` is keyed on `gitbotId` instead of the codex thread id.
+   *
+   * `loadTranscript` finds an image's original URL through
+   * `codex-attachments/<threadId>/manifest.json`, and on a first turn the
+   * thread id does not exist until codex answers — so the files go to a
+   * staging directory and `settleAttachments` renames it once the id is known.
+   */
+  staging: boolean;
+  downloaded: PendingAttachment[];
+}
+
+function attachmentBaseDir(): string {
+  return join(dataDir(), "codex-attachments");
+}
+
+/**
+ * Downloads this turn's attachments to a directory codex can read them from.
+ * Throws on a failed or refused download; both call sites report it and end
+ * the turn rather than silently sending a prompt with the images missing.
+ */
+export async function stageAttachments(
+  store: SessionStore,
+  attachments: Array<{ url: string }>,
+): Promise<StagedAttachments> {
+  const base = attachmentBaseDir();
+  const staging = !store.sdkSessionId;
+  const dir = staging ? join(base, `_staging-${store.gitbotId}`) : join(base, store.sdkSessionId!);
+  let downloaded: PendingAttachment[] = [];
+  if (attachments.length > 0) {
+    mkdirSync(dir, { recursive: true });
+    downloaded = await downloadAttachments(dir, attachments);
+  }
+  return { dir, staging, downloaded };
+}
+
+/**
+ * Moves a staging directory onto the thread id codex handed back and records
+ * the manifest. Runs in a `finally`, so it never throws: losing the manifest
+ * costs an image's URL on reload, failing the turn costs the whole answer.
+ */
+export function settleAttachments(store: SessionStore, staged: StagedAttachments): void {
+  const { dir, staging, downloaded } = staged;
+  if (staging && store.sdkSessionId) {
+    const finalDir = join(attachmentBaseDir(), store.sdkSessionId);
+    try {
+      if (existsSync(finalDir)) {
+        if (existsSync(dir)) {
+          moveDirContents(dir, finalDir);
+          try { rmSync(dir, { recursive: true, force: true }); } catch {}
+        }
+        if (downloaded.length > 0) appendManifest(finalDir, downloaded);
+      } else if (existsSync(dir)) {
+        renameSync(dir, finalDir);
+        if (downloaded.length > 0) writeManifestArray(finalDir, downloaded);
+      }
+    } catch (err: any) {
+      console.error("[codex] failed to promote staging dir:", err?.message);
+    }
+  } else if (!staging && downloaded.length > 0) {
+    appendManifest(dir, downloaded);
+  } else if (staging && !store.sdkSessionId && existsSync(dir)) {
+    // The turn never got a thread id, so nothing will ever read these.
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch (err: any) {
+      console.error("[codex] failed to clean up orphan staging dir:", err?.message);
+    }
+  }
+}
+
 /**
  * A permission mode picks a codex sandbox, and only a sandbox. `codex exec`
  * reports "Approval policy is currently never" whichever policy it is handed —
@@ -107,6 +182,11 @@ function permissionToCodex(mode: PermissionMode): ThreadOptions["sandboxMode"] {
 }
 
 export async function runAgent(store: SessionStore): Promise<void> {
+  // By default a JSON-RPC client over `codex app-server` runs the turn: it is
+  // the only transport that can ask the user anything. Everything below is the
+  // SDK path, kept for GITBOT_CODEX_APP_SERVER=0.
+  if (appServerEnabled()) return runAppServerTurn(store);
+
   const lastUserEvent = [...store.events].reverse().find(e => e.type === "user_prompt");
   const promptText = (lastUserEvent?.prompt as string) ?? "";
   const attachments = (lastUserEvent?.attachments as Array<{ url: string }> | undefined) ?? [];
@@ -135,22 +215,9 @@ export async function runAgent(store: SessionStore): Promise<void> {
     });
   }
 
-  const baseDir = join(dataDir(), "codex-attachments");
-  let attachmentDir: string;
-  let isStaging = false;
-  if (store.sdkSessionId) {
-    attachmentDir = join(baseDir, store.sdkSessionId);
-  } else {
-    attachmentDir = join(baseDir, `_staging-${store.gitbotId}`);
-    isStaging = true;
-  }
-
-  let downloaded: PendingAttachment[] = [];
+  let staged: StagedAttachments;
   try {
-    if (attachments.length > 0) {
-      mkdirSync(attachmentDir, { recursive: true });
-      downloaded = await downloadAttachments(attachmentDir, attachments);
-    }
+    staged = await stageAttachments(store, attachments);
   } catch (err: any) {
     console.error("[codex] attachment download failed:", err?.message);
     emitEvent(store, "error", { message: `Attachment download failed: ${err?.message ?? "unknown"}` });
@@ -162,7 +229,7 @@ export async function runAgent(store: SessionStore): Promise<void> {
 
   const userInput: UserInput[] = [];
   if (promptText) userInput.push({ type: "text", text: promptText });
-  for (const a of downloaded) userInput.push({ type: "local_image", path: a.path });
+  for (const a of staged.downloaded) userInput.push({ type: "local_image", path: a.path });
   if (userInput.length === 0) {
     emitEvent(store, "error", { message: "prompt or attachments is required" });
     store.status = "error";
@@ -232,31 +299,7 @@ export async function runAgent(store: SessionStore): Promise<void> {
     emitEvent(store, "error", { message: err?.message ?? "Unknown error" });
     store.status = "error";
   } finally {
-    if (isStaging && store.sdkSessionId) {
-      const finalDir = join(baseDir, store.sdkSessionId);
-      try {
-        if (existsSync(finalDir)) {
-          if (existsSync(attachmentDir)) {
-            moveDirContents(attachmentDir, finalDir);
-            try { rmSync(attachmentDir, { recursive: true, force: true }); } catch {}
-          }
-          if (downloaded.length > 0) appendManifest(finalDir, downloaded);
-        } else if (existsSync(attachmentDir)) {
-          renameSync(attachmentDir, finalDir);
-          if (downloaded.length > 0) writeManifestArray(finalDir, downloaded);
-        }
-      } catch (err: any) {
-        console.error("[codex] failed to promote staging dir:", err?.message);
-      }
-    } else if (!isStaging && downloaded.length > 0) {
-      appendManifest(attachmentDir, downloaded);
-    } else if (isStaging && !store.sdkSessionId && existsSync(attachmentDir)) {
-      try {
-        rmSync(attachmentDir, { recursive: true, force: true });
-      } catch (err: any) {
-        console.error("[codex] failed to clean up orphan staging dir:", err?.message);
-      }
-    }
+    settleAttachments(store, staged);
     store.abortController = null;
     store.pendingPermissions.clear();
     notifyPermissionsChanged();
