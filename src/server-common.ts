@@ -91,11 +91,54 @@ export function getTailscaleIP(): Promise<string | null> {
   });
 }
 
+export const LOOPBACK_HOST = "127.0.0.1";
+export const LAN_HOST = "0.0.0.0";
+
+/** True for an address only this machine can reach: 127.0.0.0/8 or ::1. */
+export function isLoopbackHost(host: string): boolean {
+  return host === "::1" || /^127\./.test(host);
+}
+
+/** True for "every interface": the address a LAN-mode server binds. */
+function isWildcardHost(host: string): boolean {
+  return host === "0.0.0.0" || host === "::";
+}
+
+/**
+ * Which address the server binds. Nothing asked for → every interface, so
+ * devices on the network can connect. `-l` → loopback, this computer only. An
+ * explicit `--host` wins over `-l`, because naming one address is the more
+ * specific request.
+ */
+export function resolveHost(opts: { local?: boolean; host?: string }): string {
+  if (opts.host) return opts.host;
+  return opts.local ? LOOPBACK_HOST : LAN_HOST;
+}
+
+function hostUrl(ip: string, port: number): string {
+  return `http://${ip.includes(":") ? `[${ip}]` : ip}:${port}`;
+}
+
+/**
+ * Prints where the hub can be opened. The QR code and the network address only
+ * appear when the server is actually reachable from another device; on loopback
+ * a QR would encode an address a phone cannot open.
+ */
 export async function showQR(host: string, port: number): Promise<void> {
-  const ip = host === "0.0.0.0" || host === "::" ? getLocalIP() : host;
-  const label = host === "127.0.0.1" || host === "::1" ? "Local" : "Network";
-  const url = `http://${ip.includes(":") ? `[${ip}]` : ip}:${port}`;
-  console.log(`\n  ${label}  ${url}\n`);
+  if (isLoopbackHost(host)) {
+    console.log(`\n  Local    ${hostUrl(host, port)}`);
+    console.log(`  Only this computer can connect.\n`);
+    return;
+  }
+
+  const wildcard = isWildcardHost(host);
+  const url = hostUrl(wildcard ? getLocalIP() : host, port);
+  console.log("");
+  // Bound to every interface, the hub still answers on loopback too.
+  if (wildcard) console.log(`  Local    ${hostUrl(host === "::" ? "::1" : LOOPBACK_HOST, port)}`);
+  console.log(`  Network  ${url}`);
+  console.log(`  Anyone who can reach this address can use the agents on this machine. GitBot has no login.`);
+  console.log(`  Run with -l to keep it on this computer only.\n`);
 
   const qrCode = await new Promise<string>((resolve) => {
     qrcode.generate(url, { small: true }, (code: string) => {
