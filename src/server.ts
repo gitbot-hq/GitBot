@@ -31,7 +31,7 @@ import { initAgent as initCodex, runAgent as runCodex, listSessions as listCodex
 import { handleBotRoutes } from "./bot-routes";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
 import { getBot, getThread, touchThread, updateThread, botNeedsSetup, DEFAULT_BOT_AGENT } from "./bot-store";
-import { botPermissionToSession } from "./server-common";
+import { botPermissionToSession, corsHeaders } from "./server-common";
 import { uiFileFor } from "./static-ui";
 
 export async function handleRequest(
@@ -48,7 +48,7 @@ export async function handleRequest(
   // CORS preflight
   if (method === "OPTIONS") {
     res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
+      ...corsHeaders(),
       "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, Last-Event-ID, X-Client-Version, X-Daytona-Skip-Preview-Warning",
     });
@@ -466,7 +466,7 @@ export async function handleRequest(
   }
 }
 
-export async function start(host: string = "127.0.0.1", portOverride?: number, caffeinate: boolean = false) {
+export async function start(host: string = "127.0.0.1", portOverride?: number, caffeinate: boolean = false, token: boolean = false) {
   const workspaceCwd = process.cwd();
   console.log(`gitbot — starting workspace server in ${workspaceCwd}`);
 
@@ -488,14 +488,17 @@ export async function start(host: string = "127.0.0.1", portOverride?: number, c
   ];
   console.log(`  available agents: ${availableAgents.join(", ") || "none"}`);
 
-  const { server, caffeinatePid } = await createHttpServer({
+  const { server, caffeinatePid, access } = await createHttpServer({
     portOverride,
     caffeinate,
     host,
+    token,
     label: "gitbot server",
   });
 
   server.on("request", (req: http.IncomingMessage, res: http.ServerResponse) => {
+    // The access gate answers denied requests itself; both listeners ask it.
+    if (!access.allow(req, res)) return;
     // UI files are answered by createHttpServer's listener
     if (uiFileFor(req.method, req.url)) return;
     handleRequest(req as unknown as IRequest, res as unknown as IResponse, availableAgents, workspaceCwd);

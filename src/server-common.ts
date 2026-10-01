@@ -4,6 +4,7 @@ import { execSync, execFile, spawn } from "child_process";
 import http from "node:http";
 import { EventEmitter } from "events";
 import qrcode from "qrcode-terminal";
+import { createAccessGuard, type AccessGuard } from "./access";
 import { serveUiFile, uiAvailable, uiFileFor } from "./static-ui";
 import { listRepos, cloneRepo, createFolder, listDir, readFile, getRepoDetails, browseDirs } from "./workspace";
 
@@ -91,11 +92,20 @@ export function getTailscaleIP(): Promise<string | null> {
   });
 }
 
-export async function showQR(host: string, port: number): Promise<void> {
+export function serverUrl(host: string, port: number): string {
   const ip = host === "0.0.0.0" || host === "::" ? getLocalIP() : host;
+  return `http://${ip.includes(":") ? `[${ip}]` : ip}:${port}`;
+}
+
+export async function showQR(host: string, port: number, access?: AccessGuard): Promise<void> {
   const label = host === "127.0.0.1" || host === "::1" ? "Local" : "Network";
-  const url = `http://${ip.includes(":") ? `[${ip}]` : ip}:${port}`;
+  const url = access ? access.urlFor(serverUrl(host, port)) : serverUrl(host, port);
   console.log(`\n  ${label}  ${url}\n`);
+  if (access?.enabled) {
+    console.log("  Access token on: open the link above (or scan the code) on one other device.");
+    console.log("  It works once, then that browser stays signed in until gitbot restarts.");
+    console.log("  This machine's own browser never needs it.\n");
+  }
 
   const qrCode = await new Promise<string>((resolve) => {
     qrcode.generate(url, { small: true }, (code: string) => {
@@ -341,10 +351,14 @@ export async function createHttpServer(opts: {
   portOverride?: number;
   caffeinate: boolean;
   host?: string;
+  /** `gitbot start -t`: require a one-time access link for network clients. */
+  token?: boolean;
   label: string;
-}): Promise<{ server: http.Server; PORT: number; caffeinatePid: number | null }> {
+}): Promise<{ server: http.Server; PORT: number; caffeinatePid: number | null; access: AccessGuard }> {
   const caffeinatePid = maybeCaffeinate(opts.caffeinate);
   const host = opts.host ?? "127.0.0.1";
+  const access = createAccessGuard({ enabled: opts.token === true });
+  setCorsOpen(!access.enabled);
   console.log(`  workspace: ${process.cwd()}`);
 
   let PORT: number;
@@ -366,6 +380,7 @@ export async function createHttpServer(opts: {
 
   // Serve the web UI: static files from the bundled export
   server.on("request", (req, res) => {
+    if (!access.allow(req, res)) return;
     const uiFile = uiFileFor(req.method, req.url);
     if (uiFile) {
       serveUiFile(req, res, uiFile);
@@ -394,12 +409,12 @@ export async function createHttpServer(opts: {
     server.listen(PORT, host, async () => {
       const address = server.address();
       if (address && typeof address !== "string") PORT = address.port;
-      await showQR(host, PORT);
+      await showQR(host, PORT, access);
       resolve();
     });
   });
 
-  return { server, PORT, caffeinatePid };
+  return { server, PORT, caffeinatePid, access };
 }
 
 export function setupShutdown(cleanup: () => void, caffeinatePid: number | null): void {
@@ -423,12 +438,23 @@ export function setupShutdown(cleanup: () => void, caffeinatePid: number | null)
 
 // --- SSE helper ---
 
+let corsOpen = true;
+
+/** Cross-origin access is only allowed while the server answers loopback alone. */
+export function setCorsOpen(open: boolean): void {
+  corsOpen = open;
+}
+
+export function corsHeaders(): Record<string, string> {
+  return corsOpen ? { "Access-Control-Allow-Origin": "*" } : {};
+}
+
 export function sseHeaders(): Record<string, string> {
   return {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     "Connection": "keep-alive",
-    "Access-Control-Allow-Origin": "*",
+    ...corsHeaders(),
   };
 }
 

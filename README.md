@@ -50,9 +50,9 @@ cd /path/to/your/projects
 gitbot start
 ```
 
-Open **http://127.0.0.1:3000** on your computer. GitBot binds to localhost by default, so other devices cannot connect. For access from another device on a trusted network, run `gitbot start --host 0.0.0.0`; GitBot then prints a LAN address and QR code. The workspace works best on desktop.
+Open **http://127.0.0.1:3000** on your computer. GitBot binds to localhost by default, so other devices cannot connect. For access from another device on a trusted network, run `gitbot start --host 0.0.0.0 -t`; GitBot then prints a network link that carries a one-time access token, and a QR code for it. Open that link (or scan the code) on the other device: it works once, that browser stays signed in until GitBot restarts, and every other browser on the network is refused. Without `-t`, anyone who can reach the port can use GitBot. The workspace works best on desktop.
 
-> **Before connecting another device:** GitBot has no authentication. Anyone who can reach its port can use the agents running on your machine. Keep it on a trusted network and never expose the port to the public internet. [Read the security notes](#security-and-privacy).
+> **Before connecting another device:** `-t` stops uninvited devices from reaching your agents. It does not encrypt the connection, so on a network you do not control, traffic can still be read or tampered with in transit. Keep it on a trusted network, never expose the port to the public internet, and use a VPN or TLS for anything more. [Read the security notes](#security-and-privacy).
 
 <br><br><br>
 
@@ -150,7 +150,9 @@ An **Allowed tools** list limits which tools a bot can use; its permission mode 
 
 ## Security and privacy
 
-> **Important:** GitBot has no authentication. It binds to `127.0.0.1` by default. Using `--host 0.0.0.0` enables access on all IPv4 network interfaces, and anyone who can reach its port can run agents using your machine's access. Enable LAN access only on a trusted network, never expose the port to the internet, and stop GitBot when you are not using it.
+> **Important:** GitBot binds to `127.0.0.1` by default, and there is no login: only programs on your own machine can connect. Using `--host 0.0.0.0` enables access on all IPv4 network interfaces, and on its own that means anyone who can reach the port can run agents with your machine's access. Add `-t` to require an access link: GitBot prints a one-time link, the first browser to open it is given a session cookie, the link is then dead, and every other request from the network is refused. Programs on the machine itself never need it. The session lasts until GitBot restarts; each start prints a new link. Treat the link like a password.
+>
+> **What `-t` does not do.** It is access control, not encryption. The link, the cookie and everything you type travel as plain HTTP, so on a café or office network someone in a position to watch or alter traffic can still read it, replay it, or impersonate the server. If that is a risk you care about, put GitBot behind something that encrypts the connection: a VPN or overlay network such as Tailscale, an SSH tunnel to the machine, or a reverse proxy that terminates TLS. Enable LAN access only on a trusted network, never expose the port to the internet, and stop GitBot when you are not using it.
 
 Bots act with your user account's file and shell access. Auto-approval removes a chance to inspect individual tool calls. Imported bots may include setup instructions that run when imported, so read them and their permission mode first.
 
@@ -164,12 +166,15 @@ GitBot has no account, telemetry, or hosted database. Bots and thread records li
 gitbot start                 # use port 3000
 gitbot start -p 4000         # choose another port
 gitbot start --caffeinate    # keep a Mac awake during long jobs
-gitbot start --host 0.0.0.0  # opt in to LAN access on a trusted network
+gitbot start --host 0.0.0.0     # opt in to LAN access on a trusted network
+gitbot start --host 0.0.0.0 -t  # same, but require the one-time access link GitBot prints
 ```
 
 The folder where you run `gitbot start` becomes the workspace shown first in the folder picker. A thread can still run in another folder you can read.
 
 `--host` accepts an IPv4 or IPv6 address. The default is `127.0.0.1`; use `::1` for IPv6 loopback or a specific interface address to limit where GitBot listens. The legacy `--local` flag remains accepted for compatibility.
+
+`-t` (`--token`) generates a new access link on every start and only affects clients on the network; requests that arrive over loopback never need it, so this machine's own browser and local scripts keep working while the server is shared. The link admits one browser. To sign in another device, restart GitBot for a fresh link.
 
 <br><br><br>
 

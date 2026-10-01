@@ -4,7 +4,7 @@ The bot hub UI talks to the gitbot server over a plain REST + Server-Sent Events
 
 - **Base URL:** `http://127.0.0.1:3000` by default. Use `gitbot start --host 0.0.0.0` to opt in to LAN access.
 - **Format:** JSON in, JSON out, unless noted. Errors are `{ "error": "<message>" }` with a 4xx/5xx status; some carry extra fields (noted below).
-- **Auth:** none. See [Security](../README.md#security-and-privacy) before enabling LAN access.
+- **Auth:** none by default. With `gitbot start -t`, requests from the network must present the `gitbot_session` cookie. It is issued once: a request carrying the printed bootstrap token as `?token=<value>` on any URL answers `303` to the same URL without it and sets the cookie (`HttpOnly`, `SameSite=Strict`); the bootstrap token is spent at that point and refused everywhere afterwards (`403`). Requests without a valid session cookie get `401`. Requests from loopback are exempt. The session lasts until the server restarts. Cross-origin requests are only allowed while `-t` is off. See [Security](../README.md#security-and-privacy).
 - **CORS:** every origin is allowed for `GET`, `POST` and `PATCH`. `DELETE` is not in the allowed methods, so browser clients on another origin cannot delete; same-origin clients (the bundled UI) and non-browser clients can.
 
 Contents: [Workspace](#workspace) · [Bots](#bots) · [Threads](#threads) · [Chat](#chat) · [Sessions](#sessions) · [Event streams](#event-streams)

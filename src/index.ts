@@ -22,6 +22,7 @@ program
   .option("-c, --caffeinate", "run caffeinate for 8 hours to prevent sleep")
   .option("-p, --port <port>", "bind this local port and serve the UI at http://localhost:<port>", "3000")
   .option("--host <address>", "IP address to bind; use 0.0.0.0 for LAN access", "127.0.0.1")
+  .option("-t, --token", "require a one-time access link for browsers on the network")
   // Keep the flag so existing scripts continue to work.
   .option("-l, --local", "bind a local port (the default)")
   .action(async (opts) => {
@@ -34,7 +35,10 @@ program
       console.error("  --host must be an IPv4 or IPv6 address");
       process.exit(1);
     }
-    await start(opts.host, port, opts.caffeinate ?? false);
+    if (opts.token && (opts.host === "127.0.0.1" || opts.host === "::1")) {
+      console.log("  note: -t only matters for network clients; this server is bound to loopback, so nothing else can connect anyway");
+    }
+    await start(opts.host, port, opts.caffeinate ?? false, opts.token === true);
   });
 
 program.parse();
