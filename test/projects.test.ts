@@ -1,12 +1,17 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "fs";
-import { tmpdir } from "os";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { homedir, tmpdir } from "os";
 import { join } from "path";
 import { createThread, dataDir, JARVIS_BOT_ID, jarvisDir } from "../src/bot-store";
-import { addProject, getProjects, listProjects, projectId } from "../src/project-index";
+import { addProject, getProjects, listProjects, projectId, scrubRemote } from "../src/project-index";
 import { jarvisSystemPrompt } from "../src/jarvis";
+
+// git here — the tests' own and the index's — must not depend on this
+// machine's git config (default branch, hooks, signing, url rewrites).
+process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+process.env.GIT_CONFIG_NOSYSTEM = "1";
 
 const PROJECTS_FILE = join(dataDir(), "projects.json");
 const THREADS_FILE = join(dataDir(), "threads.json");
@@ -32,6 +37,13 @@ function gitInit(dir: string, remote?: string): void {
   const run = (...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "ignore" });
   run("init", "-q", "-b", "trunk");
   if (remote) run("remote", "add", "origin", remote);
+}
+
+function gitCommit(dir: string): void {
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "x"], {
+    cwd: dir,
+    stdio: "ignore",
+  });
 }
 
 beforeEach(() => {
@@ -107,6 +119,10 @@ test("add_project rejects bad paths and dedupes by folder", () => {
   assert.equal(missing.ok, false);
   assert.match((missing as { error: string }).error, /not an existing folder/);
   assert.equal(addProject(jarvisDir()).ok, false, "Jarvis's own folder is not a project");
+  assert.equal(addProject(dataDir()).ok, false, "nor is gitbot's data dir");
+  assert.equal(addProject("/").ok, false, "nor the filesystem root");
+  assert.equal(addProject(homedir()).ok, false, "nor the home folder itself");
+  assert.equal(addProject("~").ok, false);
 
   const dir = tempFolder("found");
   const first = addProject(dir);
@@ -171,4 +187,94 @@ test("Jarvis's prompt resolves folders through the project tools", () => {
   for (const name of ["list_projects", "get_projects", "add_project"]) assert.match(prompt, new RegExp(name));
   assert.match(prompt, /a project the user names \(earlier in this thread counts\),\s+resolved with list_projects/);
   assert.match(prompt, /Starting threads is not available yet/);
+});
+
+test("a thread folder reached through a symlink is one project, at its real path", () => {
+  const real = tempFolder("real");
+  const link = join(tempRoot(), "alias");
+  symlinkSync(real, link);
+  createThread("some-bot", link);
+  createThread("some-bot", real);
+  assert.deepEqual(listProjects(), [{ id: projectId(real), name: "real" }]);
+});
+
+test("a folder reached in another letter case is one project on a case-insensitive disk", (t) => {
+  const real = tempFolder("Mixed");
+  const upper = real.toUpperCase();
+  if (!existsSync(upper)) return t.skip("case-sensitive filesystem");
+  createThread("some-bot", real);
+  createThread("some-bot", upper);
+  assert.deepEqual(listProjects(), [{ id: projectId(real), name: "Mixed" }]);
+});
+
+test("a corrupt projects.json is set aside and the tools still work", async () => {
+  writeFileSync(PROJECTS_FILE, "{ not json", "utf-8");
+  const dir = tempFolder("survivor");
+  createThread("some-bot", dir);
+  assert.deepEqual(listProjects().map((p) => p.name), ["survivor"]);
+  const aside = readdirSync(dataDir()).filter((f) => f.startsWith("projects.json.corrupt-"));
+  assert.ok(aside.length >= 1, "the unreadable file is kept beside the new one");
+  assert.equal(readFileSync(join(dataDir(), aside[aside.length - 1]), "utf-8"), "{ not json");
+  assert.equal((await getProjects([projectId(dir)]))[0].id, projectId(dir));
+  aside.forEach((f) => rmSync(join(dataDir(), f)));
+});
+
+test("malformed entries are skipped, not fatal", () => {
+  const good = tempFolder("good");
+  writeFileSync(
+    PROJECTS_FILE,
+    JSON.stringify({
+      version: 1,
+      builtAt: new Date().toISOString(),
+      projects: [null, { id: 7, path: good }, { path: good }, { id: projectId(good), path: good, source: "added", addedAt: "" }],
+    }),
+    "utf-8",
+  );
+  assert.deepEqual(listProjects(), [{ id: projectId(good), name: "good" }]);
+});
+
+test("a detached HEAD reports the commit it sits on", async () => {
+  const repo = tempFolder("detached");
+  gitInit(repo);
+  gitCommit(repo);
+  execFileSync("git", ["checkout", "-q", "--detach"], { cwd: repo, stdio: "ignore" });
+  const added = addProject(repo);
+  assert.ok(added.ok);
+  const [details] = await getProjects([added.project.id]);
+  assert.match((details as { git: { branch: string } }).git.branch, /^detached at [0-9a-f]{4,}$/);
+});
+
+test("remote URLs come back without credentials", async () => {
+  assert.equal(scrubRemote("https://user:s3cret@github.com/acme/app.git"), "https://github.com/acme/app.git");
+  assert.equal(scrubRemote("https://ghp_token@github.com/acme/app.git"), "https://github.com/acme/app.git");
+  assert.equal(scrubRemote("ssh://git@host.example:2222/acme/app.git"), "ssh://host.example:2222/acme/app.git");
+  assert.equal(scrubRemote("https://github.com/acme/app.git"), "https://github.com/acme/app.git");
+  assert.equal(scrubRemote("git@github.com:acme/app.git"), "git@github.com:acme/app.git");
+  assert.equal(scrubRemote("/srv/repos/app.git"), "/srv/repos/app.git");
+
+  const repo = tempFolder("secret");
+  gitInit(repo, "https://bob:tok3n@example.com/acme/secret.git");
+  const added = addProject(repo);
+  assert.ok(added.ok);
+  const [details] = await getProjects([added.project.id]);
+  assert.equal((details as { git: { remote: string } }).git.remote, "https://example.com/acme/secret.git");
+  assert.doesNotMatch(JSON.stringify(details), /tok3n|bob/);
+});
+
+test("git ignores GIT_DIR and friends inherited from the server's environment", async () => {
+  const other = tempFolder("other");
+  gitInit(other, "git@example.com:wrong/repo.git");
+  const repo = tempFolder("right");
+  gitInit(repo, "git@example.com:right/repo.git");
+  const added = addProject(repo);
+  assert.ok(added.ok);
+  process.env.GIT_DIR = join(other, ".git");
+  process.env.GIT_WORK_TREE = other;
+  try {
+    const [details] = await getProjects([added.project.id]);
+    assert.equal((details as { git: { remote: string } }).git.remote, "git@example.com:right/repo.git");
+  } finally {
+    delete process.env.GIT_DIR;
+    delete process.env.GIT_WORK_TREE;
+  }
 });

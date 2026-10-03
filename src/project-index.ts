@@ -3,7 +3,7 @@ import { createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { basename, isAbsolute, join, relative, sep } from "path";
-import { dataDir, jarvisDir, listThreads } from "./bot-store";
+import { dataDir, listThreads } from "./bot-store";
 
 // The project index Jarvis resolves folders against. A project is a folder:
 // one a gitbot thread has run in, or one Jarvis added after finding it with
@@ -48,33 +48,70 @@ function isDirectory(path: string): boolean {
   }
 }
 
-/** The folder's real path (symlinks resolved), or null when it is not a folder. */
+/**
+ * True only when the folder is known to be gone: missing, or not a folder.
+ * Any other failure (permissions, a slow mount) keeps the entry.
+ */
+function folderGone(path: string): boolean {
+  try {
+    return !statSync(path).isDirectory();
+  } catch (err: any) {
+    return err?.code === "ENOENT" || err?.code === "ENOTDIR";
+  }
+}
+
+/**
+ * The folder's real path, or null when it is not a folder. The native
+ * realpath also gives the on-disk letter case, so a folder reached as
+ * ~/Code/App and ~/code/app on macOS is one project, not two.
+ */
 function resolveFolder(path: string): string | null {
   if (!path || !isDirectory(path)) return null;
   try {
-    return realpathSync(path);
+    return realpathSync.native(path);
   } catch {
     return null;
   }
 }
 
-/** Jarvis's own scratch folder, and anything under it, is not a project. */
-function isJarvisFolder(path: string): boolean {
-  const own = resolveFolder(jarvisDir()) ?? jarvisDir();
-  const rel = relative(own, path);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+/** True when `path` is `base` or below it. */
+function isWithin(base: string, path: string): boolean {
+  const rel = relative(base, path);
+  return rel === "" || !(rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel));
 }
 
+/**
+ * gitbot's own data dir — which holds Jarvis's scratch folder — is never a
+ * project. Resolved once and passed around, not once per entry.
+ */
+function ownFolder(): string {
+  return resolveFolder(dataDir()) ?? dataDir();
+}
+
+/** The index on disk, or null when there is none (or it could not be used). */
 function readIndex(): ProjectIndex | null {
   const file = indexFile();
   if (!existsSync(file)) return null;
   try {
     const parsed = JSON.parse(readFileSync(file, "utf-8"));
-    if (parsed && Array.isArray(parsed.projects)) return parsed as ProjectIndex;
+    if (parsed?.version !== 1 || !Array.isArray(parsed.projects)) throw new Error("unrecognised shape");
+    // One bad entry must not take every project tool down with it.
+    const projects = (parsed.projects as unknown[]).filter(
+      (p): p is ProjectEntry =>
+        !!p && typeof (p as ProjectEntry).path === "string" && typeof (p as ProjectEntry).id === "string",
+    );
+    return { ...parsed, projects };
   } catch (err: any) {
-    console.error(`[projects] could not read ${file}: ${err.message}`);
+    // Set it aside rather than overwrite it: folders Jarvis added are only here.
+    const aside = `${file}.corrupt-${Date.now()}`;
+    console.error(`[projects] could not read ${file} (${err.message}); moved to ${aside} and rebuilding`);
+    try {
+      renameSync(file, aside);
+    } catch {
+      // Rebuilding over it is still better than every tool failing.
+    }
+    return null;
   }
-  return null;
 }
 
 function writeIndex(index: ProjectIndex): void {
@@ -87,8 +124,8 @@ function writeIndex(index: ProjectIndex): void {
 }
 
 /** Adds a folder unless it is already there; true when it was added. */
-function addEntry(index: ProjectIndex, path: string, source: ProjectSource): boolean {
-  if (isJarvisFolder(path)) return false;
+function addEntry(index: ProjectIndex, path: string, source: ProjectSource, own: string): boolean {
+  if (isWithin(own, path)) return false;
   const id = projectId(path);
   if (index.projects.some((p) => p.id === id)) return false;
   index.projects.push({ id, path, source, addedAt: new Date().toISOString() });
@@ -105,17 +142,19 @@ function syncedIndex(): ProjectIndex {
   const index: ProjectIndex = existing ?? { version: 1, builtAt: new Date().toISOString(), projects: [] };
   let changed = !existing;
 
+  const own = ownFolder();
   const before = index.projects.length;
-  index.projects = index.projects.filter((p) => isDirectory(p.path) && !isJarvisFolder(p.path));
+  index.projects = index.projects.filter((p) => !folderGone(p.path) && !isWithin(own, p.path));
   if (index.projects.length !== before) changed = true;
 
   // Oldest threads first, so entries keep the order their folders appeared in.
+  const threads = [...listThreads()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const seen = new Set<string>();
-  for (const thread of listThreads().reverse()) {
+  for (const thread of threads) {
     if (seen.has(thread.repoPath)) continue;
     seen.add(thread.repoPath);
     const folder = resolveFolder(thread.repoPath);
-    if (folder && addEntry(index, folder, "thread")) changed = true;
+    if (folder && addEntry(index, folder, "thread", own)) changed = true;
   }
 
   if (changed) writeIndex(index);
@@ -189,6 +228,43 @@ export type ProjectLookup = ProjectDetails | { id: string; error: string };
 
 const GIT_TIMEOUT_MS = 3000;
 
+/**
+ * Variables that would point git somewhere other than the folder asked
+ * about, should the server have been started with them set.
+ */
+const REPO_LOCATION_VARS = [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_COMMON_DIR",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_CEILING_DIRECTORIES",
+];
+
+function gitEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" };
+  for (const name of REPO_LOCATION_VARS) delete env[name];
+  return env;
+}
+
+/**
+ * A remote URL without its credentials: https://user:token@host/x becomes
+ * https://host/x. scp-style git@host:path has no secret and is left as is.
+ */
+export function scrubRemote(remote: string): string {
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(remote)) return remote;
+  try {
+    const url = new URL(remote);
+    if (!url.username && !url.password) return remote;
+    url.username = "";
+    url.password = "";
+    return url.toString();
+  } catch {
+    // Unparseable but scheme-shaped: drop anything before an @ in the authority.
+    return remote.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, "$1");
+  }
+}
+
 function git(cwd: string, args: string[]): Promise<string | null> {
   return new Promise((resolve) => {
     execFile(
@@ -199,7 +275,7 @@ function git(cwd: string, args: string[]): Promise<string | null> {
         timeout: GIT_TIMEOUT_MS,
         windowsHide: true,
         // Never prompt, never take locks: these are read-only peeks.
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
+        env: gitEnv(),
       },
       (err, stdout) => resolve(err ? null : stdout.toString().trim()),
     );
@@ -224,7 +300,7 @@ export async function gitDetails(folder: string): Promise<GitDetails | null> {
   const remoteName = names.includes("origin") ? "origin" : names[0];
   const remote = remoteName ? await git(folder, ["remote", "get-url", remoteName]) : null;
   const root = resolveFolder(top) ?? top;
-  return { ...(root !== folder ? { root } : {}), remote: remote || null, branch };
+  return { ...(root !== folder ? { root } : {}), remote: remote ? scrubRemote(remote) : null, branch };
 }
 
 /** Folder and git details for each id asked for, in order. */
@@ -252,10 +328,15 @@ export function addProject(path: string): AddProjectResult {
   if (!isAbsolute(expanded)) return { ok: false, error: `path must be absolute: ${raw}` };
   const folder = resolveFolder(expanded);
   if (!folder) return { ok: false, error: `not an existing folder: ${raw}` };
-  if (isJarvisFolder(folder)) return { ok: false, error: "that is Jarvis's own folder, not a project" };
+  const own = ownFolder();
+  if (isWithin(own, folder)) return { ok: false, error: "that is gitbot's own data folder, not a project" };
+  const home = resolveFolder(homedir()) ?? homedir();
+  if (folder === home || folder === resolveFolder("/")) {
+    return { ok: false, error: `too broad to be a project: ${folder}` };
+  }
 
   const index = syncedIndex();
-  const added = addEntry(index, folder, "added");
+  const added = addEntry(index, folder, "added", own);
   if (added) writeIndex(index);
   const id = projectId(folder);
   const names = displayNames(index.projects);
