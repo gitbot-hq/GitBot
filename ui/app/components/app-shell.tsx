@@ -500,6 +500,7 @@ export default function V2() {
           ? `${childBotName} is working on ${childInfo.repoPath.split("/").filter(Boolean).pop() ?? childInfo.repoPath}`
           : "A child thread is working",
         onOpen: childInfo ? () => openThread(childInfo.botId, childInfo.id) : undefined,
+        sessionId: runningChild.sessionId,
         onStop: () => postAbort(runningChild.sessionId),
       }
     : undefined;

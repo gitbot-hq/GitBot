@@ -6,7 +6,8 @@ import { tmpdir } from "os";
 import { basename, join } from "path";
 import { createThread, getThread, JARVIS_BOT_ID, jarvisDir, updateThread } from "../src/bot-store";
 import { sendToThread } from "../src/send-to-thread";
-import { runningChildOf } from "../src/child-lock";
+import { runningChildOf, withNote } from "../src/child-lock";
+import { stripGitbotNotes } from "../ui/app/lib/gitbot-note";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
 import { watchChildReports } from "../src/reports";
@@ -231,6 +232,33 @@ test("the stopped note is stored on the thread and prepended to the next user me
   assert.equal(sessions.get(second.sessionId)!.events.find((e) => e.type === "user_prompt")?.prompt, "and again");
 });
 
+test("a second Stop while the first is in flight changes nothing and notes nothing more", async () => {
+  const { jarvis, child, proj } = jarvisWithChild();
+  child.abortController = new AbortController();
+  assert.equal((await post(`/sessions/${child.gitbotId}/abort`)).status, 200);
+  assert.equal((await post(`/sessions/${child.gitbotId}/abort`)).status, 200);
+  assert.equal(getThread(jarvis.id)?.pendingNote, `[you stopped Claude Code on ${basename(proj.folder)}]`);
+  await end(child, "error");
+  assert.equal(jarvisRuns(jarvis.id).length, 0);
+});
+
+test("a Stop with nothing to stop yet is refused, leaves no note, and the child still reports", async () => {
+  const proj = project();
+  const jarvis = jarvisThread();
+  const started = startChildThread(jarvis.id, { agent: "codex", project: proj.id, message: "go" }, ALL_AGENTS);
+  assert.ok(started.ok);
+  const child = runs[runs.length - 1];
+  // The codex runner has not made its abort controller yet.
+  assert.equal(child.abortController, null);
+  const res = await post(`/sessions/${child.gitbotId}/abort`);
+  assert.equal(res.status, 409);
+  assert.match(res.body.error, /not stoppable yet/i);
+  assert.equal(child.abortRequested, false);
+  assert.equal(getThread(jarvis.id)?.pendingNote, undefined);
+  await end(child, "done", "went");
+  assert.equal(jarvisRuns(jarvis.id).length, 1, "the finished child reported");
+});
+
 test("a report turn does not take the note; the user's next message does", async () => {
   const proj = project();
   const jarvis = jarvisThread();
@@ -271,3 +299,16 @@ async function request(method: string, url: string, body?: unknown): Promise<{ s
   await done;
   return { status, body: JSON.parse(out || "{}") };
 }
+
+// --- The UI hides gitbot's notes in the user's bubble ---
+
+test("stripGitbotNotes removes leading stop and restart notes, and only those", () => {
+  const sent = withNote("[you stopped PR Validator on Trophy]\n[Codex on api was interrupted by a restart]", "hi\n[you stopped X on Y]");
+  assert.equal(stripGitbotNotes(sent!), "hi\n[you stopped X on Y]");
+  assert.equal(stripGitbotNotes(withNote("[you stopped Claude Code on proj]", "a\n\nb")!), "a\n\nb");
+  assert.equal(stripGitbotNotes("[you stopped Claude Code on proj]"), "");
+  // Not a note: the user's own bracketed text, and a child's report header.
+  assert.equal(stripGitbotNotes("[draft] tidy up"), "[draft] tidy up");
+  const report = "[Claude Code · proj · thread abc · done]\nok";
+  assert.equal(stripGitbotNotes(report), report);
+});

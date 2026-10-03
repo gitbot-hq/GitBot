@@ -55,6 +55,7 @@ export function noteChildStopped(store: SessionStore): void {
   const jarvis = getThread(owner);
   if (!jarvis) return;
   const note = `[you stopped ${childLabel(store.threadId)}]`;
+  if (jarvis.pendingNote?.split("\n").includes(note)) return;
   updateThread(owner, { pendingNote: jarvis.pendingNote ? `${jarvis.pendingNote}\n${note}` : note });
 }
 
