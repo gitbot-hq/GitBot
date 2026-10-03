@@ -281,6 +281,10 @@ export default function ThreadPanel({
           </div>
           {installed?.length === 0 && <p className="field-warn">Install Claude Code, Codex, or OpenCode to create a thread.</p>}
         </section>}
+        {/* A built-in agent bot has no agent step, so say here why it can't start. */}
+        {bot.builtin && agentMissing && (
+          <p className="field-warn">{bot.name} is not installed on this machine. Install it to create a thread.</p>
+        )}
 
         <footer className="pick-acts">
           <button

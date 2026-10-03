@@ -96,7 +96,7 @@ export default function MarketplaceBotDetails({ bot, open, onClose }: {
     if (!open) return;
     let cancelled = false;
     getBots().then(({ bots }) => {
-      if (!cancelled) setSavedBots(bots);
+      if (!cancelled) setSavedBots(bots.filter((b) => !b.builtin));
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [open]);
@@ -147,7 +147,7 @@ export default function MarketplaceBotDetails({ bot, open, onClose }: {
       if (!agents.includes(selected.agent)) {
         throw new Error(`Install ${AGENT_LABELS[selected.agent]} to add this bot. It was written for that agent.`);
       }
-      const { bots } = await getBots();
+      const bots = (await getBots()).bots.filter((b) => !b.builtin);
       setSavedBots(bots);
       const existing = bots.find((candidate) => candidate.name === selected.name && candidate.instructions === selected.instructions);
       if (!existing) {

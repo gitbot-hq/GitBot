@@ -41,9 +41,10 @@ export function getBots() {
   return req<{ bots: import("./gitbot").Bot[] }>("/bots");
 }
 
-export function getThreads(botId: string) {
+/** One bot's threads, or every thread when no bot is given. */
+export function getThreads(botId?: string) {
   return req<{ threads: import("./gitbot").ThreadFull[] }>(
-    `/threads?botId=${encodeURIComponent(botId)}`,
+    botId ? `/threads?botId=${encodeURIComponent(botId)}` : "/threads",
   );
 }
 

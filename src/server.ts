@@ -30,7 +30,7 @@ import { initAgent as initOpencode, stopAgent as stopOpencode, runAgent as runOp
 import { initAgent as initCodex, runAgent as runCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
 import { handleBotRoutes } from "./bot-routes";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
-import { getBot, getThread, touchThread, updateThread, botNeedsSetup, DEFAULT_BOT_AGENT } from "./bot-store";
+import { getBot, getThread, touchThread, updateThread, botNeedsSetup, threadAgent } from "./bot-store";
 import { botPermissionToSession } from "./server-common";
 import { uiFileFor } from "./static-ui";
 
@@ -246,9 +246,7 @@ export async function handleRequest(
         const bot = getBot(thread.botId);
         if (!bot) { jsonError(res, 404, "Bot not found"); return; }
         repoPath = thread.repoPath;
-        // An explicit thread choice wins; older threads without one inherit
-        // the bot's configured agent.
-        agent = thread.agent ?? bot.agent ?? DEFAULT_BOT_AGENT;
+        agent = threadAgent(thread, bot);
         if (!availableAgents.includes(agent)) {
           jsonError(res, 400, `${bot.name} runs on ${agent}, which is not installed on this machine`, {
             agentUnavailable: agent,

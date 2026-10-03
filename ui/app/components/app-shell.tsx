@@ -62,6 +62,24 @@ const THREADS_MIN = 200;
 const THREADS_MAX = 480;
 const SIDE_WIDTH_KEY = "gitbot-v2-side-width";
 const THREADS_WIDTH_KEY = "gitbot-v2-threads-width";
+// Set once the user skips onboarding to use a plain agent bot directly.
+const ONBOARDING_SKIPPED_KEY = "gitbot-onboarding-skipped";
+
+function readOnboardingSkipped(): boolean {
+  try {
+    return localStorage.getItem(ONBOARDING_SKIPPED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function storeOnboardingSkipped() {
+  try {
+    localStorage.setItem(ONBOARDING_SKIPPED_KEY, "1");
+  } catch {
+    // private mode — the skip lasts for this visit only
+  }
+}
 
 function storeWidth(key: string, value: number) {
   try {
@@ -88,6 +106,9 @@ export default function V2() {
   const [bots, setBots] = useState<Bot[]>([]);
   const [botsLoading, setBotsLoading] = useState(true);
   const [botsError, setBotsError] = useState<string | null>(null);
+  // Any thread at all, under any bot: someone with history never sees onboarding.
+  const [hasThreads, setHasThreads] = useState(false);
+  const [onboardingSkipped, setOnboardingSkipped] = useState(false);
   const [threads, setThreads] = useState<ThreadFull[]>([]);
   const [threadsError, setThreadsError] = useState<string | null>(null);
   const [threadsLoading, setThreadsLoading] = useState(true);
@@ -208,9 +229,12 @@ export default function V2() {
   const loadBots = useCallback(() => {
     setBotsError(null);
     setBotsLoading(true);
-    getBots()
-      .then(({ bots }) => {
+    // Threads are only asked for to decide on onboarding; failing that
+    // must not fail the bot list.
+    Promise.all([getBots(), getThreads().catch(() => ({ threads: [] }))])
+      .then(([{ bots }, { threads: allThreads }]) => {
         setBots(bots);
+        setHasThreads(allThreads.length > 0);
         setSelectedId((prev) => prev ?? bots[0]?.id ?? null);
       })
       .catch((e) => setBotsError(e instanceof Error ? e.message : "Failed to load bots"))
@@ -218,6 +242,11 @@ export default function V2() {
   }, []);
 
   useEffect(loadBots, [loadBots]);
+
+  // Read after mount: the page is prerendered, where there is no storage.
+  useEffect(() => {
+    setOnboardingSkipped(readOnboardingSkipped());
+  }, []);
 
   // Widths: null means "CSS owns it" — layout.tsx sets --v2-side-w /
   // --v2-threads-w before paint, so the first paint is already final.
@@ -805,6 +834,7 @@ export default function V2() {
   }
 
   function threadCreated(thread: ThreadFull) {
+    setHasThreads(true);
     if (!bot) return;
     setThreads((prev) => [thread, ...prev]);
     setThreadByBot((prev) => ({ ...prev, [bot.id]: thread.id }));
@@ -852,7 +882,9 @@ export default function V2() {
   // flow takes the whole page; creating or importing reloads bots and
   // lands in the app with the new bot selected.
   // The built-in agent bots don't count: onboarding is about the user's own.
-  if (!botsLoading && !botsError && userBots.length === 0) {
+  // It never hides existing threads, and it can be skipped for a plain agent.
+  const skipTo = bots.find((b) => b.builtin) ?? null;
+  if (!botsLoading && !botsError && userBots.length === 0 && !hasThreads && !onboardingSkipped) {
     return (
       <div className="page v2">
         <TopBar
@@ -871,7 +903,16 @@ export default function V2() {
           onProfile={toggleUserProfile}
         />
         <div className="page-body">
-          <OnboardingFlow onDone={loadBots} active={!userOpen} />
+          <OnboardingFlow
+            onDone={loadBots}
+            active={!userOpen}
+            onSkip={skipTo ? () => {
+              storeOnboardingSkipped();
+              setOnboardingSkipped(true);
+              setSelectedId(skipTo.id);
+            } : undefined}
+            skipLabel={skipTo ? `Skip — use ${skipTo.name} directly` : undefined}
+          />
           <ProfilePanelOverlay open={userOpen}>
             {userOpen && (
               <UserProfile
@@ -1017,7 +1058,7 @@ export default function V2() {
                 <>
                 <div className="bot-list">
                   {visibleUserBots.map(botRow)}
-                  {userBots.length === 0 && <p className="threads-empty">No bots yet — add one with +.</p>}
+                  {userBots.length === 0 && <p className="threads-empty">None of your own yet — make one with +.</p>}
                   {userBots.length > 0 && visibleUserBots.length === 0 && (
                     <p className="threads-empty">No bots match your search.</p>
                   )}

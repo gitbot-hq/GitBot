@@ -169,11 +169,30 @@ export function isBuiltinBot(id: string): boolean {
   return builtinBot(id) !== undefined;
 }
 
+/**
+ * The agent a thread runs on. A plain agent bot is its agent, whatever the
+ * thread record says; any other thread keeps the agent of its first turn, and
+ * older threads without one inherit the bot's.
+ */
+export function threadAgent(thread: Pick<Thread, "agent">, bot: Pick<Bot, "agent" | "builtin">): BotAgent {
+  return bot.builtin ?? thread.agent ?? bot.agent ?? DEFAULT_BOT_AGENT;
+}
+
 // --- Bots ---
+
+/**
+ * The bots in bots.json, as bots.json may say anything: a record cannot take a
+ * built-in's id, and no stored bot is built-in.
+ */
+function readStoredBots(): Bot[] {
+  return readCollection<Bot>(BOTS_FILE)
+    .filter((b) => !isBuiltinBot(b.id))
+    .map(({ builtin: _builtin, ...bot }) => bot);
+}
 
 /** The user's bots by name, then the built-in bots for the installed agents. */
 export function listBots(installedAgents: readonly string[]): Bot[] {
-  const stored = readCollection<Bot>(BOTS_FILE).sort((a, b) => a.name.localeCompare(b.name));
+  const stored = readStoredBots().sort((a, b) => a.name.localeCompare(b.name));
   return [...stored, ...plainAgentBots(installedAgents)];
 }
 
@@ -183,7 +202,7 @@ export function listBots(installedAgents: readonly string[]): Bot[] {
  * refused elsewhere when the agent is missing.
  */
 export function getBot(id: string): Bot | undefined {
-  return builtinBot(id) ?? readCollection<Bot>(BOTS_FILE).find((b) => b.id === id);
+  return builtinBot(id) ?? readStoredBots().find((b) => b.id === id);
 }
 
 export function createBot(input: NewBot): Bot {

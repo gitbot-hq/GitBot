@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "events";
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { createBot, dataDir, getBot } from "../src/bot-store";
+import { createBot, dataDir, getBot, listThreads, threadAgent } from "../src/bot-store";
 import { handleBotRoutes } from "../src/bot-routes";
 import { presetSystemPrompt } from "../src/bot-prompt";
 import type { IRequest, IResponse } from "../src/server-common";
@@ -105,4 +105,44 @@ test("a thread with a plain bot runs on that bot's agent, with no system prompt"
   // The preset /chat builds for this thread adds nothing to the agent's prompt.
   const bot = getBot(thread.botId)!;
   assert.equal(presetSystemPrompt({ id: bot.id, name: bot.name, instructions: bot.instructions }), undefined);
+});
+
+test("a plain bot's thread is not made while its agent is missing", async () => {
+  const before = listThreads("builtin-codex").length;
+  const res = await call("POST", "/threads", { botId: "builtin-codex", repoPath: tmpdir() }, ["claude-code"]);
+  assert.equal(res.status, 400);
+  assert.equal(res.body.agentUnavailable, "codex");
+  assert.equal(listThreads("builtin-codex").length, before);
+});
+
+test("/chat's agent for a plain bot is the bot's, whatever the thread record says", () => {
+  const codex = getBot("builtin-codex")!;
+  assert.equal(threadAgent({ agent: "claude-code" }, codex), "codex");
+  assert.equal(threadAgent({}, codex), "codex");
+  // Other bots keep the agent of the thread's first turn, else their own.
+  assert.equal(threadAgent({ agent: "opencode" }, { agent: "codex" }), "opencode");
+  assert.equal(threadAgent({}, { agent: "codex" }), "codex");
+  assert.equal(threadAgent({}, {}), "claude-code");
+});
+
+test("records in bots.json cannot pose as or shadow a built-in", async () => {
+  const file = join(dataDir(), "bots.json");
+  const original = readFileSync(file, "utf-8");
+  try {
+    const posing = { ...createBot({ name: "Poser" }), builtin: "claude-code" };
+    const shadow = { ...createBot({ name: "Fake Codex", instructions: "evil" }), id: "builtin-codex" };
+    const stored = JSON.parse(original);
+    writeFileSync(file, JSON.stringify([...stored, posing, shadow]));
+
+    const { bots } = (await call("GET", "/bots")).body;
+    const codexes = bots.filter((b: any) => b.id === "builtin-codex");
+    assert.equal(codexes.length, 1);
+    assert.equal(codexes[0].name, "Codex");
+    assert.equal(bots.find((b: any) => b.id === posing.id).builtin, undefined);
+
+    assert.equal(getBot("builtin-codex")?.instructions, "");
+    assert.equal(getBot(posing.id)?.builtin, undefined);
+  } finally {
+    writeFileSync(file, original);
+  }
 });

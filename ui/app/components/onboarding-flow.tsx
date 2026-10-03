@@ -35,7 +35,18 @@ const SLIDES = [
 // First-run flow: hero (mark, intro, explainer carousel, three actions)
 // crossfading to the real bot studio. Creating or importing calls onDone
 // (the host reloads bots and carries on); the flow itself never navigates.
-export default function OnboardingFlow({ onDone, active = true }: { onDone: () => void; active?: boolean }) {
+export default function OnboardingFlow({
+  onDone,
+  active = true,
+  onSkip,
+  skipLabel,
+}: {
+  onDone: () => void;
+  active?: boolean;
+  /** Leaves onboarding for a built-in agent bot, when one is installed. */
+  onSkip?: () => void;
+  skipLabel?: string;
+}) {
   const [studio, setStudio] = useState(false);
   const [importing, setImporting] = useState(false);
   const [agentCreating, setAgentCreating] = useState(false);
@@ -126,6 +137,11 @@ export default function OnboardingFlow({ onDone, active = true }: { onDone: () =
                   Import bot
                 </button>
               </div>
+              {onSkip && (
+                <button type="button" className="btn-ghost" onClick={onSkip}>
+                  {skipLabel ?? "Skip"}
+                </button>
+              )}
             </div>
           </main>
             </div>

@@ -161,7 +161,12 @@ export async function handleBotRoutes(
         });
         return true;
       }
-      // A plain agent bot is its agent; its threads cannot run on another.
+      // A plain agent bot is its agent; its threads cannot run on another,
+      // and there is no thread to make while that agent is missing here.
+      if (bot.builtin && !availableAgents.includes(bot.builtin)) {
+        jsonError(res, 400, `${bot.name} is not installed on this machine`, { agentUnavailable: bot.builtin });
+        return true;
+      }
       const agent = bot.builtin ?? body.agent;
       jsonOk(res, { thread: createThread(bot.id, repoPath, body.title, "chat", agent) });
       return true;

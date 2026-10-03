@@ -58,7 +58,7 @@ A bot is a named, reusable agent preset.
 
 Read-only fields the server maintains: `id`, `setupStatus` (`pending` \| `complete` \| `failed`), `setupThreadId`, `createdAt`, `updatedAt`.
 
-**Built-in bots.** Each installed agent has a plain bot with no instructions — **Claude Code**, **Codex**, **OpenCode** — with id `builtin-<agent>` and `builtin` set to its agent. They are defined in code, not stored. `PATCH`, `DELETE` and `POST /setup` on them return `403`. A thread made with one always runs on that bot's agent; an `agent` in the request is ignored.
+**Built-in bots.** Each installed agent has a plain bot with no instructions — **Claude Code**, **Codex**, **OpenCode** — with id `builtin-<agent>` and `builtin` set to its agent. They are defined in code, not stored. `PATCH`, `DELETE` and `POST /setup` on them return `403`. A thread made with one always runs on that bot's agent; an `agent` in the request is ignored, and `POST /threads` returns `400` while that agent is not installed. Records in `bots.json` cannot take a built-in's id or claim `builtin`.
 
 ## Threads
 
