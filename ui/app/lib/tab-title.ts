@@ -17,13 +17,25 @@ export function untitled(title: string): string {
   return attentionTitle(title, 0);
 }
 
+function apply() {
+  const next = titled(document.title);
+  if (document.title !== next) document.title = next;
+}
+
 export function useAttentionTitle(count: number) {
   useEffect(() => {
     needsYou = count;
-    document.title = titled(document.title);
+    apply();
   }, [count]);
-  useEffect(() => () => {
-    needsYou = 0;
-    document.title = untitled(document.title);
+  // Next.js writes the page's own <title> as it loads, which can land after
+  // the count: put the prefix back whenever the title is rewritten.
+  useEffect(() => {
+    const observer = new MutationObserver(apply);
+    observer.observe(document.head, { subtree: true, childList: true, characterData: true });
+    return () => {
+      observer.disconnect();
+      needsYou = 0;
+      document.title = untitled(document.title);
+    };
   }, []);
 }
