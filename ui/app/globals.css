@@ -2888,13 +2888,164 @@ pre {
   overflow-x: auto;
 }
 
+/* Narrow screens: the chat takes the full width, and the Bots and Threads
+   columns become slide-in panels from the left, opened from a slim header
+   row above the chat (app-shell's mobilePanel). Nothing here reaches past
+   900px. */
+.mobile-chat-head,
+.mobile-scrim {
+  display: none;
+}
+
 @media (max-width: 900px) {
   .shell {
     grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .threads {
+  .v2 .page-body .side,
+  .v2 .page-body .threads {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 40;
+    /* beats the inline drag/collapse width: a panel has one size */
+    width: min(85vw, 360px) !important;
+    border-radius: 0 12px 12px 0;
+    box-shadow: 0 16px 48px rgb(0 0 0 / 0.28);
+    transform: translateX(-105%);
+    visibility: hidden;
+    transition:
+      transform var(--duration-slow) var(--ease-in-out),
+      visibility 0s linear var(--duration-slow);
+  }
+
+  .v2 .page-body .side.mobile-open,
+  .v2 .page-body .threads.mobile-open {
+    transform: none;
+    visibility: visible;
+    transition:
+      transform var(--duration-slow) var(--ease-in-out),
+      visibility 0s;
+  }
+
+  .v2 .page-body .side-handle,
+  .v2 .side-head .collapse-btn.fades {
     display: none;
+  }
+
+  /* + sits at the panel's right edge: its menu opens inward. */
+  .v2 .page-body .side .bot-create-menu {
+    left: auto;
+    right: 0;
+  }
+
+  /* The panel names its bot: the collapsed-rail header, always shown. */
+  .v2 .threads-bot-wrap {
+    grid-template-rows: 1fr;
+  }
+
+  .v2 .threads-bot-wrap .threads-bot {
+    opacity: 1;
+    visibility: visible;
+    padding-top: var(--space-4);
+  }
+
+  .mobile-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 39;
+    padding: 0;
+    border: 0;
+    background: rgb(0 0 0 / 0.4);
+    cursor: default;
+    animation: fade-in var(--duration-slow) var(--ease-out);
+  }
+
+  .mobile-chat-head {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    height: 44px;
+    padding: 0 var(--space-2);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+
+  .mobile-panel-btn {
+    position: relative;
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 var(--space-2);
+    background: none;
+    border: 0;
+    border-radius: var(--radius-sm);
+    color: var(--muted);
+    font: inherit;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+      background var(--duration-fast) var(--ease-out),
+      color var(--duration-fast) var(--ease-out);
+  }
+
+  .mobile-panel-btn:hover,
+  .mobile-panel-btn[aria-expanded="true"] {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  .mobile-chat-bot {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+    font-size: var(--text-sm);
+    font-weight: 650;
+  }
+
+  /* Needs-you dot on the icon's corner, same honey as the thread rows. */
+  .mobile-attn {
+    position: absolute;
+    top: 4px;
+    left: 19px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--brand-honey);
+    box-shadow: 0 0 0 2px var(--surface);
+  }
+
+  .page-body .chat-body {
+    padding-inline: var(--space-4);
+    padding-top: 56px;
+  }
+
+  .page-body .composer {
+    padding: 0 var(--space-3) var(--space-3);
+  }
+}
+
+@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
+  .v2 .page-body .side,
+  .v2 .page-body .threads,
+  .v2 .page-body .side.mobile-open,
+  .v2 .page-body .threads.mobile-open {
+    transition: none;
+  }
+
+  .mobile-scrim {
+    animation: none;
   }
 }
 

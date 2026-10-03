@@ -12,6 +12,8 @@ import { PencilIcon } from "@animateicons/react/lucide/pencil-icon";
 import { CodeIcon } from "@animateicons/react/lucide/code-icon";
 import { SearchIcon } from "@animateicons/react/lucide/search-icon";
 import { TrashIcon } from "@animateicons/react/lucide/trash-icon";
+import { UsersRoundIcon } from "@animateicons/react/lucide/users-round-icon";
+import { MessageSquareIcon } from "@animateicons/react/lucide/message-square-icon";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "./page-link";
@@ -176,6 +178,11 @@ export default function V2() {
   const { user, saveUser: savedUser } = useUserProfile();
   const [userOpen, setUserOpen] = useState(false);
   const { toast, view: toastView } = useToast();
+  // Narrow screens (≤900px): the Bots and Threads columns become slide-in
+  // panels, opened from the chat's header row. Never set on desktop.
+  const [mobilePanel, setMobilePanel] = useState<"bots" | "threads" | null>(null);
+  const botsToggleRef = useRef<HTMLButtonElement | null>(null);
+  const threadsToggleRef = useRef<HTMLButtonElement | null>(null);
 
   const [width, setWidth] = useState<number | null>(null);
   const [threadsWidth, setThreadsWidth] = useState<number | null>(null);
@@ -691,6 +698,69 @@ export default function V2() {
     [],
   );
 
+  function openMobilePanel(panel: "bots" | "threads") {
+    setCreateMenuOpen(false);
+    // The collapsed rail makes no sense as a panel: open it full.
+    if (panel === "bots" && collapsed) toggleCollapse();
+    setMobilePanel(panel);
+  }
+
+  /** Closes the open panel and hands focus back to the button that opens it. */
+  function closeMobilePanel() {
+    if (!mobilePanel) return;
+    setMobilePanel(null);
+    (mobilePanel === "bots" ? botsToggleRef : threadsToggleRef).current?.focus({ preventScroll: true });
+  }
+
+  // An open panel takes focus, and Escape closes it — unless a search box or
+  // the create menu inside it has the Escape to itself.
+  useEffect(() => {
+    if (!mobilePanel) return;
+    const panel = mobilePanel === "bots" ? sideRef.current : threadsAsideRef.current;
+    const frame = requestAnimationFrame(() => {
+      const first = Array.from(panel?.querySelectorAll<HTMLElement>("button:not([disabled]), input") ?? [])
+        .find((el) => el.tabIndex >= 0 && el.getClientRects().length > 0);
+      first?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [mobilePanel]);
+
+  useEffect(() => {
+    if (!mobilePanel || createMenuOpen) return;
+    function escape(event: KeyboardEvent) {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if ((event.target as HTMLElement | null)?.closest?.(".search-box")) return;
+      event.preventDefault();
+      closeMobilePanel();
+    }
+    document.addEventListener("keydown", escape);
+    return () => document.removeEventListener("keydown", escape);
+    // closeMobilePanel only reads mobilePanel.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mobilePanel, createMenuOpen]);
+
+  // Anything that slides over the chat (picker, profile, studio, user
+  // panel, modals) takes over from a panel. Focus left in the panel would
+  // fall to the page, so it goes back to the panel's button.
+  useEffect(() => {
+    if (!mobilePanel || !(threadPanel || editing || showProfile || userOpen || modal || learnMore)) return;
+    const panel = mobilePanel === "bots" ? sideRef.current : threadsAsideRef.current;
+    if (panel?.contains(document.activeElement)) {
+      (mobilePanel === "bots" ? botsToggleRef : threadsToggleRef).current?.focus({ preventScroll: true });
+    }
+    setMobilePanel(null);
+  }, [mobilePanel, threadPanel, editing, showProfile, userOpen, modal, learnMore]);
+
+  // Widening past the breakpoint puts the columns back in place.
+  useEffect(() => {
+    const narrow = matchMedia("(max-width: 900px)");
+    const change = () => {
+      if (!narrow.matches) setMobilePanel(null);
+    };
+    narrow.addEventListener("change", change);
+    return () => narrow.removeEventListener("change", change);
+  }, []);
+
   const onHandleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
@@ -798,6 +868,7 @@ export default function V2() {
       if (jarvisBlocked) return;
       const id = bot.id;
       setThreadByBot(({ [id]: _left, ...rest }) => rest);
+      closeMobilePanel();
       return;
     }
     setThreadPanel(true);
@@ -926,6 +997,15 @@ export default function V2() {
     if (editing) {
       if (editing !== "new" && editing.id === b.id) return; // already editing it
       setSwitchTo(b);
+      return;
+    }
+    // From the narrow-screen panel a pick goes on to that bot's threads —
+    // or, for Jarvis and a bot still setting up, straight to the chat.
+    if (mobilePanel === "bots") {
+      setSelectedId(b.id);
+      setUserOpen(false);
+      if (b.builtin === "jarvis" || needsSetup(b)) closeMobilePanel();
+      else setMobilePanel("threads");
       return;
     }
     setSelectedId(b.id);
@@ -1174,7 +1254,8 @@ export default function V2() {
       <div className="page-body">
         <aside
           ref={sideRef}
-          className={`side${collapsed ? " closing" : ""}${settled ? " settled" : ""}`}
+          id="bots-panel"
+          className={`side${collapsed ? " closing" : ""}${settled ? " settled" : ""}${mobilePanel === "bots" ? " mobile-open" : ""}`}
           style={{
             width: collapsed ? COLLAPSED_WIDTH : (width ?? undefined),
             transition: dragging ? "none" : undefined,
@@ -1320,11 +1401,15 @@ export default function V2() {
             aria-hidden="true"
           />
         </aside>
+        {mobilePanel === "bots" && (
+          <button type="button" className="mobile-scrim" onClick={closeMobilePanel} aria-label="Close bots" tabIndex={-1} />
+        )}
         <div className={`tray${editing ? " open" : ""}${showProfile ? " profile-open" : ""}`}>
           <div className="tray-main">
             <aside
               ref={threadsAsideRef}
-              className="threads"
+              id="threads-panel"
+              className={mobilePanel === "threads" ? "threads mobile-open" : "threads"}
               style={{
                 width: threadsWidth ?? undefined,
                 transition: threadsDragging ? "none" : undefined,
@@ -1423,9 +1508,10 @@ export default function V2() {
                             className="thread-open"
                             disabled={setupRequired}
                             title={setupRequired ? "Available after setup" : undefined}
-                            onClick={() =>
-                              bot && setThreadByBot((prev) => ({ ...prev, [bot.id]: t.id }))
-                            }
+                            onClick={() => {
+                              if (bot) setThreadByBot((prev) => ({ ...prev, [bot.id]: t.id }));
+                              closeMobilePanel();
+                            }}
                           >
                             {(rowNeedsYou || rowHasNews) && (
                               <span
@@ -1480,7 +1566,37 @@ export default function V2() {
                 aria-hidden="true"
               />
             </aside>
+            {mobilePanel === "threads" && (
+              <button type="button" className="mobile-scrim" onClick={closeMobilePanel} aria-label="Close threads" tabIndex={-1} />
+            )}
             <div className={threadPanel ? "chat-col panel-open" : "chat-col"}>
+              <div className="mobile-chat-head">
+                <button
+                  ref={botsToggleRef}
+                  type="button"
+                  className="mobile-panel-btn"
+                  aria-expanded={mobilePanel === "bots"}
+                  aria-controls="bots-panel"
+                  onClick={() => openMobilePanel("bots")}
+                >
+                  <AnimatedActionIcon icon={UsersRoundIcon} size={16} aria-hidden="true" />
+                  <span>Bots</span>
+                  {needsYou > 0 && <span className="mobile-attn" role="img" aria-label={needsYouLabel(needsYou) ?? undefined} />}
+                </button>
+                <b className="mobile-chat-bot">{bot?.name ?? ""}</b>
+                <button
+                  ref={threadsToggleRef}
+                  type="button"
+                  className="mobile-panel-btn"
+                  aria-expanded={mobilePanel === "threads"}
+                  aria-controls="threads-panel"
+                  onClick={() => openMobilePanel("threads")}
+                >
+                  <AnimatedActionIcon icon={MessageSquareIcon} size={16} aria-hidden="true" />
+                  <span>Threads</span>
+                  {isJarvis && needsYou > 0 && <span className="mobile-attn" role="img" aria-label={needsYouLabel(needsYou) ?? undefined} />}
+                </button>
+              </div>
               {isJarvis && activeThread && (
                 <JarvisChildren key={activeThread.id} jarvisThreadId={activeThread.id} bots={bots} working={chatWorking} onOpen={openThread} />
               )}
