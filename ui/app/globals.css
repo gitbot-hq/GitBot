@@ -1215,7 +1215,7 @@ pre {
 
 .composer-pill {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: flex-end;
   column-gap: var(--space-2);
   padding: var(--space-2);
@@ -1321,6 +1321,101 @@ pre {
 .send-btn:disabled {
   opacity: 0.35;
   cursor: default;
+}
+
+/* ---------------------------------------- */
+/* Mic / voice-dictation button              */
+/* ---------------------------------------- */
+
+.mic-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  aspect-ratio: 1;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    transform 160ms var(--ease-out);
+}
+
+.mic-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.mic-btn:active {
+  transform: scale(0.96);
+}
+
+.mic-btn:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* Recording state: red tint */
+.mic-btn--recording {
+  background: rgb(239 68 68 / 0.12);
+  color: rgb(239 68 68);
+  border-color: rgb(239 68 68 / 0.4);
+  animation: mic-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(239 68 68 / 0.35); }
+  50%       { box-shadow: 0 0 0 5px rgb(239 68 68 / 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mic-btn--recording { animation: none; }
+}
+
+/* Recording indicator dot */
+.mic-recording-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgb(239 68 68);
+  animation: mic-dot-blink 1s step-start infinite;
+}
+
+@keyframes mic-dot-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mic-recording-dot { animation: none; }
+}
+
+/* Cleaning state: subtle spinner */
+.mic-btn--cleaning {
+  color: var(--muted);
+}
+
+.mic-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--muted);
+  border-radius: 50%;
+  animation: mic-spin 0.7s linear infinite;
+}
+
+@keyframes mic-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mic-spinner { animation: none; }
 }
 
 .composer-action {

@@ -265,6 +265,70 @@ export async function handleRequest(
       return;
     }
 
+    // POST /api/dictation-cleanup — run a raw speech transcript through Claude
+    // Haiku for cleanup (punctuation, casing, filler-word removal).
+    if (method === "POST" && path === "/api/dictation-cleanup") {
+      const body = await readBody(req);
+      const { transcript } = body as { transcript?: string };
+      if (!transcript || typeof transcript !== "string") {
+        jsonError(res, 400, "transcript is required"); return;
+      }
+
+      const apiKey = process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) {
+        // No key: caller falls back to raw transcript
+        jsonOk(res, { cleaned: transcript }); return;
+      }
+
+      const systemPrompt = `You are a dictation cleanup assistant. Your job is to clean up raw speech-to-text transcripts.
+
+Rules:
+- Fix punctuation, capitalisation, and sentence boundaries
+- Remove filler words (um, uh, like, you know, basically, literally, actually, right, so, well) unless they are meaningful in context
+- Fix obvious speech-recognition errors based on context
+- Preserve the speaker's vocabulary and tone — do not rephrase or rewrite
+- Do not add information that was not in the original
+- Return ONLY the cleaned text, with no preamble, explanation, or quotes
+- If the input is already clean, return it unchanged`;
+
+      try {
+        const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+          },
+          body: JSON.stringify({
+            model: "claude-haiku-4-5",
+            max_tokens: 512,
+            temperature: 0,
+            system: systemPrompt,
+            messages: [
+              {
+                role: "user",
+                content: `Pasting into: GitBot\n\nClean up this transcript:\n${transcript}`,
+              },
+            ],
+          }),
+        });
+
+        if (!anthropicRes.ok) {
+          // Fallback to raw on API error
+          jsonOk(res, { cleaned: transcript }); return;
+        }
+
+        const data = await anthropicRes.json() as {
+          content?: { type: string; text: string }[];
+        };
+        const cleaned = data.content?.find(b => b.type === "text")?.text?.trim() ?? transcript;
+        jsonOk(res, { cleaned });
+      } catch {
+        jsonOk(res, { cleaned: transcript });
+      }
+      return;
+    }
+
     // POST /chat
     if (method === "POST" && path === "/chat") {
       const body = await readBody(req);

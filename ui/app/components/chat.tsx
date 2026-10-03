@@ -51,6 +51,7 @@ import { stripGitbotNotes } from "../lib/gitbot-note";
 import type { ThreadSessionStatus } from "../lib/use-thread-sessions";
 import RunSummary, { ActionRow } from "./run-summary";
 import QueueTray from "./queue-tray";
+import { useDictation } from "../lib/use-dictation";
 
 // Ordered segments: text and tool calls interleave exactly as they
 // arrived, so a turn reads text → tool → text → tool instead of all
@@ -626,6 +627,29 @@ export default function Chat({
   // Drafts are per thread: switching stashes, returning restores.
   const drafts = useRef<Record<string, string>>({});
   const draftRef = useRef("");
+
+  // Voice dictation — placed after boxRef and draftRef so the callbacks
+  // can safely close over them (they are always assigned before any event fires).
+  const { state: dictationState, supported: dictationSupported, toggle: toggleDictation } = useDictation({
+    onInterim: (text) => {
+      setDraft(text);
+      draftRef.current = text;
+      if (boxRef.current) {
+        boxRef.current.style.height = "auto";
+        boxRef.current.style.height = `${Math.min(boxRef.current.scrollHeight, 160)}px`;
+      }
+    },
+    onFinal: (text) => {
+      setDraft(text);
+      draftRef.current = text;
+      if (boxRef.current) {
+        boxRef.current.style.height = "auto";
+        boxRef.current.style.height = `${Math.min(boxRef.current.scrollHeight, 160)}px`;
+        boxRef.current.focus({ preventScroll: true });
+      }
+    },
+  });
+
   // Turn bookkeeping for the end-of-turn card.
   const turnStart = useRef(0);
   const pendingRun = useRef<{ secs: number; stopped: boolean } | null>(null);
@@ -2117,6 +2141,30 @@ export default function Chat({
                 <button type="button" className="menu-scrim" onClick={() => setActiveMenu(null)} aria-label="Close permissions" tabIndex={-1} />
               </>}
             </div>}
+            {dictationSupported && !streaming && (
+              <button
+                type="button"
+                className={`mic-btn${dictationState === "recording" ? " mic-btn--recording" : ""}${dictationState === "cleaning" ? " mic-btn--cleaning" : ""}`}
+                onClick={toggleDictation}
+                disabled={dictationState === "cleaning"}
+                aria-label={dictationState === "recording" ? "Stop recording" : dictationState === "cleaning" ? "Cleaning up transcript…" : "Start voice dictation"}
+                data-tip={dictationState === "recording" ? "Stop recording" : dictationState === "cleaning" ? "Cleaning up…" : "Dictate"}
+                data-tip-pos="above"
+              >
+                {dictationState === "cleaning" ? (
+                  <span className="mic-spinner" aria-hidden="true" />
+                ) : dictationState === "recording" ? (
+                  <span className="mic-recording-dot" aria-hidden="true" />
+                ) : (
+                  <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                    <line x1="12" y1="19" x2="12" y2="23"/>
+                    <line x1="8" y1="23" x2="16" y2="23"/>
+                  </svg>
+                )}
+              </button>
+            )}
             {streaming ? (
               <div className="composer-action">
                 {escapeStopArmed && (
