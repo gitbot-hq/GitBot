@@ -249,11 +249,33 @@ test("a running turn not yet bound to its thread is found by the thread id, with
     const started = await chat({ threadId: thread.id, prompt: "go" });
     const status = await serve("GET", `/sessions/${thread.id}/status`, undefined);
     assert.equal(status.status, 200);
-    assert.deepEqual(status.body, { streaming: true, sdkSessionId: null, gitbotId: started.body.sessionId, seq: 1 });
+    assert.deepEqual(status.body, { streaming: true, sdkSessionId: null, gitbotId: started.body.sessionId, seq: 1, pending: [] });
     sessions.delete(started.body.sessionId);
   } finally {
     agentRunners["claude-code"] = stub;
   }
+});
+
+test("a reused session's seq keeps counting across turns; status reports seq and pending together", async () => {
+  const first = startTurn({ agent: "codex", repoPath: tmpdir(), prompt: "one" }, ALL_AGENTS);
+  assert.ok(first.ok);
+  const store = sessions.get(first.sessionId)!;
+  const seqAfterFirst = store.seq;
+  assert.ok(seqAfterFirst >= 1);
+  store.status = "done";
+  const second = startTurn({ agent: "codex", repoPath: tmpdir(), prompt: "two", sessionId: first.sessionId }, ALL_AGENTS);
+  assert.ok(second.ok);
+  // Only this turn's events are kept, numbered after the last turn's.
+  assert.equal(store.events.length, 1);
+  assert.equal(store.events[0].type, "user_prompt");
+  assert.equal(store.events[0].seq, seqAfterFirst + 1);
+
+  store.status = "running";
+  store.pendingPermissions.set("tu-9", { resolve: () => {}, input: {}, toolName: "Bash", toolUseID: "tu-9" });
+  const status = await serve("GET", `/sessions/${first.sessionId}/status`, undefined);
+  assert.equal(status.body.seq, store.seq);
+  assert.deepEqual(status.body.pending, ["tu-9"]);
+  sessions.delete(first.sessionId);
 });
 
 test("Jarvis's prompt offers start_thread and no longer says it is unavailable", () => {

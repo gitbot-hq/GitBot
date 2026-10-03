@@ -152,15 +152,18 @@ export async function handleRequest(
       const store = sessions.get(statusId)
         ?? all.find(s => s.sdkSessionId === statusId)
         ?? all.find(s => s.threadId === statusId && s.status === "running")
+        // Else the thread's newest store (Map order is insertion order).
         ?? all.reverse().find(s => s.threadId === statusId);
       if (!store) { jsonError(res, 404, "Session not found"); return; }
       // gitbotId names the session for every later call; seq is how far the
-      // event log has got, so a rejoining client knows what is replay.
+      // event log has got, so a rejoining client knows what is replay; pending
+      // is read at the same moment, so the two agree.
       jsonOk(res, {
         streaming: store.status === "running",
         sdkSessionId: store.sdkSessionId ?? null,
         gitbotId: store.gitbotId,
         seq: store.seq,
+        pending: [...store.pendingPermissions.keys()],
       });
       return;
     }

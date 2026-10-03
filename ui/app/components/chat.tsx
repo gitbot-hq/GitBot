@@ -735,6 +735,7 @@ export default function Chat({
     threadRef.current = thread?.id ?? null;
     setMsgs([]);
     setPerms([]);
+    setLoading(false);
     setTurnError(null);
     setActivity(null);
     setStreaming(false);
@@ -763,60 +764,54 @@ export default function Chat({
       }
     });
     if (!thread) return;
-    // A thread with no session id yet has no transcript: its history is
-    // either nothing, or a running turn's replay (below) — read only once
-    // its status says which, so the two never overlap.
-    const awaitStatus = !thread.sdkSessionId && thread.messageCount > 0;
-    if (!awaitStatus) loadHistory(thread.id, true);
-    else setLoading(true);
-    // Rejoin a turn still running server-side: after a reload, or a turn
-    // gitbot started itself (a Jarvis child), whose session may not be bound
-    // to the thread yet — then the thread id finds it.
     const tid = thread.id;
-    const lookup = thread.sdkSessionId ?? (thread.messageCount > 0 ? tid : null);
-    // With a session id, history comes from the transcript; without one there
-    // is none yet, and the replayed events are all there is to show.
-    const historyCovers = !!thread.sdkSessionId;
-    if (lookup) {
-      getSessionStatus(lookup)
-        .then(({ streaming, gitbotId, seq }) => {
-          if (threadRef.current !== tid) return;
-          const sid = gitbotId ?? lookup;
-          // The session's mode is the truth: a child Jarvis started runs in
-          // its own, not the bot's default.
-          const adoptMode = () =>
-            getSessionConfig(sid)
-              .then(({ permissionMode, mode }) => {
-                if (threadRef.current !== tid) return;
-                rememberMode(tid, mode === "plan" ? "plan" : permissionMode);
-              })
-              .catch(() => {});
-          if (!streaming) {
-            if (awaitStatus) loadHistory(tid, true);
-            if (!permissionModesRef.current[tid]) adoptMode();
-            return;
-          }
-          return getPendingPermissions(sid)
-            .catch(() => ({ pending: [] as string[] }))
-            .then(({ pending }) => {
+    // A thread this snapshot shows unbound may be bound by now, or running a
+    // turn gitbot started (a Jarvis child): ask the server before reading
+    // history, and look the session up by thread id.
+    const awaitStatus = !thread.sdkSessionId;
+    if (!awaitStatus) loadHistory(tid, true);
+    else setLoading(true);
+    // Rejoin a turn still running server-side: after a reload, or one gitbot
+    // started itself.
+    const lookup = thread.sdkSessionId ?? tid;
+    getSessionStatus(lookup)
+      .then(({ streaming, gitbotId, seq, sdkSessionId, pending }) => {
+        // The user may have started a turn of their own meanwhile: it wins.
+        if (threadRef.current !== tid || turnActiveRef.current) return;
+        const sid = gitbotId ?? lookup;
+        // With a session id the transcript is on disk and history shows the
+        // turn so far; without one, the replayed events are all there is.
+        const historyCovers = !!sdkSessionId;
+        if (awaitStatus && (historyCovers || !streaming)) loadHistory(tid, true);
+        // The session's mode is the truth: a child Jarvis started runs in
+        // its own, not the bot's default.
+        const adoptMode = () =>
+          getSessionConfig(sid)
+            .then(({ permissionMode, mode }) => {
               if (threadRef.current !== tid) return;
-              pendingFilter.current = pending;
-              catchupRef.current = true;
-              replaySeqRef.current = seq ?? Number.MAX_SAFE_INTEGER;
-              historyCoversRef.current = historyCovers;
-              sessionRef.current = sid;
-              turnActiveRef.current = true;
-              setStreaming(true);
-              setActivity("Thinking…");
-              if (awaitStatus) setLoading(false);
-              openStream(sid);
-              adoptMode();
-            });
-        })
-        .catch(() => {
-          if (awaitStatus && threadRef.current === tid) loadHistory(tid, true);
-        });
-    }
+              rememberMode(tid, mode === "plan" ? "plan" : permissionMode);
+            })
+            .catch(() => {});
+        if (!streaming) {
+          if (!permissionModesRef.current[tid]) adoptMode();
+          return;
+        }
+        pendingFilter.current = pending ?? [];
+        catchupRef.current = true;
+        replaySeqRef.current = seq ?? Number.MAX_SAFE_INTEGER;
+        historyCoversRef.current = historyCovers;
+        sessionRef.current = sid;
+        turnActiveRef.current = true;
+        setStreaming(true);
+        setActivity("Thinking…");
+        if (awaitStatus && !historyCovers) setLoading(false);
+        openStream(sid);
+        adoptMode();
+      })
+      .catch(() => {
+        // No session (never run, or gone after a restart): history is all.
+        if (awaitStatus && threadRef.current === tid) loadHistory(tid, true);
+      });
     return () => {
       closeStream();
       if (reloadTimer.current) clearTimeout(reloadTimer.current);
@@ -1062,7 +1057,9 @@ export default function Chat({
       // Live prompts are this client's own, already on screen; a replayed one
       // is shown only when no history covers it (a turn gitbot started).
       if (!replayed(ev) || historyCoversRef.current) return;
-      const text = String(data(ev).prompt ?? "");
+      const d = data(ev);
+      const files = Array.isArray(d.attachments) ? d.attachments.length : 0;
+      const text = String(d.prompt ?? "") || (files ? `_${files} attachment${files === 1 ? "" : "s"}_` : "");
       if (text) setMsgs((prev) => [...prev, { id: nid(), role: "user", segs: [{ kind: "text", text }] }]);
     });
     es.addEventListener("assistant", (ev) => {

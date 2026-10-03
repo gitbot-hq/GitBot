@@ -106,8 +106,10 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
     }
     store.status = "running";
     notifyPermissionsChanged();
+    // A turn's events start afresh, but seq keeps counting up across turns:
+    // a client that read seq N, or reconnects with Last-Event-ID N, must
+    // never mistake the next turn's events for ones it has already seen.
     store.events = [];
-    store.seq = 0;
     if (model) store.model = model;
     if (mode) store.mode = mode;
     if (permissionMode) store.permissionMode = permissionMode as PermissionMode;
