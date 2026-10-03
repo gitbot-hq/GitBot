@@ -342,7 +342,7 @@ function projectDir(cwd: string): string {
 export async function loadTranscript(
   sessionId: string,
   cwd: string
-): Promise<{ role: string; content: any[] }[]> {
+): Promise<{ role: string; content: any[]; at?: string }[]> {
   const transcriptPath = join(projectDir(cwd), `${sessionId}.jsonl`);
 
   // Callers only ask for sessions that have already run, so a missing file means
@@ -352,7 +352,9 @@ export async function loadTranscript(
     return [];
   }
 
-  const messages: { role: string; content: any[] }[] = [];
+  // Each message carries its transcript time (`at`) when the line has one:
+  // the UI places gitbot's own rows (a child's approvals) among them by time.
+  const messages: { role: string; content: any[]; at?: string }[] = [];
 
   try {
     const rl = createInterface({
@@ -369,6 +371,8 @@ export async function loadTranscript(
         continue;
       }
 
+      const at = typeof entry.timestamp === "string" ? { at: entry.timestamp } : {};
+
       if (entry.type === "user" && entry.userType === "external" && !entry.isMeta) {
         const rawContent = entry.message?.content;
         const blocks: any[] = [];
@@ -380,7 +384,7 @@ export async function loadTranscript(
             else if (b.type === "image" && b.source?.url) blocks.push({ type: "image_url", url: b.source.url });
           }
         }
-        if (blocks.length) messages.push({ role: "user", content: blocks });
+        if (blocks.length) messages.push({ role: "user", content: blocks, ...at });
       }
 
       if (entry.type === "assistant") {
@@ -400,11 +404,11 @@ export async function loadTranscript(
             }
           }
         }
-        if (blocks.length) messages.push({ role: "assistant", content: blocks });
+        if (blocks.length) messages.push({ role: "assistant", content: blocks, ...at });
       }
 
       if (entry.type === "result" && entry.subtype === "success" && typeof entry.result === "string" && entry.result.trim()) {
-        messages.push({ role: "assistant", content: [{ type: "text", text: entry.result }] });
+        messages.push({ role: "assistant", content: [{ type: "text", text: entry.result }], ...at });
       }
     }
 

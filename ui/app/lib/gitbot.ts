@@ -70,6 +70,8 @@ export type HistoryBlock = {
 export type HistoryMsg = {
   role: string;
   content: HistoryBlock[];
+  /** The transcript's time for the message (ISO), where the agent keeps one. */
+  at?: string;
 };
 
 /** Tools the "Allow all edits" shortcut on an approval card covers

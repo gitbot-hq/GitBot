@@ -123,8 +123,8 @@ export interface ChildApproval {
   bot: string;
   /** What it asked to run: the command, the file, or the tool's name. */
   tool: string;
-  /** The Jarvis thread's messageCount when it asked: the row follows that many turns. */
-  after: number;
+  /** When it asked (ISO time): the row sits among the messages by time. */
+  askedAt: string;
   /** Unset while it waits. "dropped": the turn ended or stopped before an answer. */
   outcome?: "approved" | "denied" | "dropped";
 }
@@ -483,13 +483,17 @@ export function setThreadOwner(id: string, reportTo: string | undefined): void {
 
 /**
  * Rewrites a thread's approval rows. Like ownership, not activity: updatedAt
- * stays, so the thread list keeps its order.
+ * stays, so the thread list keeps its order. An edit that returns the rows it
+ * was given changes nothing, and nothing is written.
  */
 export function setThreadApprovals(id: string, edit: (rows: ChildApproval[]) => ChildApproval[]): void {
   const threads = readCollection<Thread>(THREADS_FILE);
   const thread = threads.find((t) => t.id === id);
   if (!thread) return;
-  thread.approvals = edit(thread.approvals ?? []);
+  const before = thread.approvals ?? [];
+  const after = edit(before);
+  if (after === before) return;
+  thread.approvals = after;
   writeCollection(THREADS_FILE, threads);
 }
 

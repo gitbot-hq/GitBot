@@ -46,7 +46,7 @@ import { groupTools, type ToolChip } from "../lib/tool-ui";
 import { parseMarketplaceListing, type MarketplaceListing } from "../lib/marketplace-publish";
 import { presentSetupText, readSetupNeedsInput } from "../lib/setup";
 import { parseReport, type Report } from "../lib/report";
-import type { ApprovalRow } from "../lib/approvals";
+import { placeApprovals, type ApprovalRow } from "../lib/approvals";
 import { stripGitbotNotes } from "../lib/gitbot-note";
 import type { ThreadSessionStatus } from "../lib/use-thread-sessions";
 import RunSummary, { ActionRow } from "./run-summary";
@@ -65,6 +65,9 @@ type Msg = {
   retryPrompt?: string;
   /** End-of-turn receipt (client-side overlay, see below). */
   summary?: { secs: number; stopped: boolean };
+  /** When the message began (ISO): the transcript's time, or this client's
+   *  for a live one. Approval rows are placed among messages by it. */
+  at?: string;
 };
 
 let seq = 0;
@@ -422,6 +425,13 @@ function ApprovalRowView({ row, onReview }: { row: ApprovalRow; onReview?: (row:
             </>
           )}
         </>
+      ) : row.state === "unknown" ? (
+        <>
+          <span className="approval-row-dot" aria-hidden="true" />
+          <span className="approval-row-label">
+            <b>{row.bot}</b> asked to run {tool}
+          </span>
+        </>
       ) : (
         <>
           <span className="approval-row-dot" aria-hidden="true" />
@@ -467,8 +477,8 @@ export default function Chat({
   onReviewApproval,
 }: {
   thread: ThreadFull | null;
-  /** Jarvis threads: its children's approvals, each a row after the turn it
-   *  came in (ChildApproval.after counts turns, i.e. user messages). */
+  /** Jarvis threads: its children's approvals, each a row placed among the
+   *  messages by when it was asked. */
   approvals?: ApprovalRow[];
   /** Switches the hub to the child whose approval this is. */
   onReviewApproval?: (row: ApprovalRow) => void;
@@ -792,7 +802,7 @@ export default function Chat({
           ? prev.segs
           : (() => {
               const fresh: Seg[] = [];
-              out.push({ id: `h${out.length}`, role, segs: fresh });
+              out.push({ id: `h${out.length}`, role, segs: fresh, ...(m.at ? { at: m.at } : {}) });
               return fresh;
             })();
       for (const s of segs) pushSeg(target, s);
@@ -1246,7 +1256,7 @@ export default function Chat({
       const d = data(ev);
       const files = Array.isArray(d.attachments) ? d.attachments.length : 0;
       const text = stripGitbotNotes(String(d.prompt ?? "")) || (files ? `_${files} attachment${files === 1 ? "" : "s"}_` : "");
-      if (text) setMsgs((prev) => [...prev, { id: nid(), role: "user", segs: [{ kind: "text", text }] }]);
+      if (text) setMsgs((prev) => [...prev, { id: nid(), role: "user", segs: [{ kind: "text", text }], at: new Date().toISOString() }]);
     });
     es.addEventListener("assistant", (ev) => {
       if (shown(ev)) return;
@@ -1289,7 +1299,7 @@ export default function Chat({
     es.addEventListener("aborted", () => {
       setMsgs((prev) => [
         ...prev,
-        { id: nid(), role: "assistant", segs: [{ kind: "text", text: setup ? "_Setup paused._" : "_Stopped._" }] },
+        { id: nid(), role: "assistant", segs: [{ kind: "text", text: setup ? "_Setup paused._" : "_Stopped._" }], at: new Date().toISOString() },
       ]);
       setTurnError(null);
       catchupRef.current = false;
@@ -1368,7 +1378,7 @@ export default function Chat({
     const msgId = nid();
     setMsgs((prev) => [
       ...prev,
-      { id: msgId, role: "user", segs: [{ kind: "text", text: prompt }] },
+      { id: msgId, role: "user", segs: [{ kind: "text", text: prompt }], at: new Date().toISOString() },
     ]);
     setStreaming(true);
     setActivity("Thinking…");
@@ -1606,23 +1616,12 @@ export default function Chat({
     (!!latestAssistant && readSetupNeedsInput(msgText(latestAssistant)))
   );
   const showThreadEmpty = !loading && visibleMsgs.length === 0 && !historyError && !setup && !approvals?.length;
-  // Approval rows by the message they precede: a row asked during turn n sits
-  // after that turn's replies, before the next user message (or a report).
-  // Rows past the last message trail the conversation.
-  const rowsBefore = new Map<number, ApprovalRow[]>();
-  let trailingRows: ApprovalRow[] = [];
-  if (approvals?.length) {
-    let turns = 0;
-    let rest = approvals;
-    visibleMsgs.forEach((m, i) => {
-      if (m.role !== "user") return;
-      const here = rest.filter((r) => r.after <= turns);
-      if (here.length) rowsBefore.set(i, here);
-      rest = rest.filter((r) => r.after > turns);
-      turns++;
-    });
-    trailingRows = rest;
-  }
+  // Approval rows by time: each just before the first message that began
+  // after it was asked; rows newer than every message trail the conversation.
+  const { before: rowsBefore, trailing: trailingRows } = placeApprovals(
+    visibleMsgs.map((m) => m.at),
+    approvals ?? [],
+  );
   const approvalRowsOf = (list: ApprovalRow[] | undefined) =>
     list?.map((r) => <ApprovalRowView key={`ap-${r.id}`} row={r} onReview={onReviewApproval} />);
   const permissionMode = thread

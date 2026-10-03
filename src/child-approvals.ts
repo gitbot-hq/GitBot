@@ -7,8 +7,8 @@ import { isShuttingDown, permissionsEmitter, sessions, turnReportsTo, type Sessi
 // whether a pending approval exists is in the live stream, but how it was
 // answered is not, and the history must still say so after a reload.
 
-/** How many rows a Jarvis thread keeps; the oldest go first. */
-const MAX_ROWS = 200;
+/** How many answered rows a Jarvis thread keeps; the oldest go first. Rows still waiting are never evicted. */
+const MAX_SETTLED_ROWS = 200;
 
 /** Pending approvals already given a row, by toolUseID: the Jarvis thread each belongs to. */
 const recorded = new Map<string, string>();
@@ -24,10 +24,20 @@ export function approvalLabel(toolName: string, input: unknown): string {
   return line.length > 120 ? `${line.slice(0, 119)}…` : line;
 }
 
-function settle(owner: string, id: string, outcome: NonNullable<ChildApproval["outcome"]>): void {
-  setThreadApprovals(owner, (rows) =>
-    rows.map((r) => (r.id === id && !r.outcome ? { ...r, outcome } : r)),
-  );
+/** Drops the oldest answered rows past the cap; rows still waiting all stay. */
+function capped(rows: ChildApproval[]): ChildApproval[] {
+  let excess = rows.filter((r) => r.outcome).length - MAX_SETTLED_ROWS;
+  if (excess <= 0) return rows;
+  return rows.filter((r) => !(r.outcome && excess-- > 0));
+}
+
+/** Gives these rows of one Jarvis thread an outcome, in one write (none if nothing changes). */
+function settle(owner: string, ids: readonly string[], outcome: NonNullable<ChildApproval["outcome"]>): void {
+  const wanted = new Set(ids);
+  setThreadApprovals(owner, (rows) => {
+    if (!rows.some((r) => wanted.has(r.id) && !r.outcome)) return rows;
+    return capped(rows.map((r) => (wanted.has(r.id) && !r.outcome ? { ...r, outcome } : r)));
+  });
 }
 
 /**
@@ -39,53 +49,66 @@ function settle(owner: string, id: string, outcome: NonNullable<ChildApproval["o
  */
 export function syncChildApprovals(): void {
   const live = new Set<string>();
+  const owned: Array<[SessionStore, string]> = [];
+  // Every pending id counts as live before any lookup: a thread that cannot
+  // be read now must not get a waiting approval marked dropped.
   for (const store of sessions.values()) {
     const owner = turnReportsTo(store);
     if (!owner || !store.threadId || store.pendingPermissions.size === 0) continue;
-    const child = getThread(store.threadId);
-    const jarvis = getThread(owner);
-    if (!child || !jarvis) continue;
-    const fresh: ChildApproval[] = [];
-    for (const perm of store.pendingPermissions.values()) {
-      live.add(perm.toolUseID);
-      if (recorded.has(perm.toolUseID)) continue;
-      recorded.set(perm.toolUseID, owner);
-      fresh.push({
-        id: perm.toolUseID,
-        childThreadId: child.id,
-        childBotId: child.botId,
-        bot: getBot(child.botId)?.name ?? "Bot",
-        tool: approvalLabel(perm.toolName, perm.input),
-        after: jarvis.messageCount,
-      });
-    }
-    if (fresh.length) {
-      setThreadApprovals(owner, (rows) => {
-        const known = new Set(rows.map((r) => r.id));
-        return [...rows, ...fresh.filter((r) => !known.has(r.id))].slice(-MAX_ROWS);
-      });
-    }
+    for (const id of store.pendingPermissions.keys()) live.add(id);
+    owned.push([store, owner]);
+  }
+  for (const [store, owner] of owned) {
+    const fresh = [...store.pendingPermissions.values()].filter((p) => !recorded.has(p.toolUseID));
+    if (fresh.length === 0) continue;
+    const child = getThread(store.threadId!);
+    if (!child || !getThread(owner)) continue;
+    const askedAt = new Date().toISOString();
+    const rows: ChildApproval[] = fresh.map((perm) => ({
+      id: perm.toolUseID,
+      childThreadId: child.id,
+      childBotId: child.botId,
+      bot: getBot(child.botId)?.name ?? "Bot",
+      tool: approvalLabel(perm.toolName, perm.input),
+      askedAt,
+    }));
+    setThreadApprovals(owner, (existing) => {
+      const known = new Set(existing.map((r) => r.id));
+      const added = rows.filter((r) => !known.has(r.id));
+      return added.length ? capped([...existing, ...added]) : existing;
+    });
+    for (const r of rows) recorded.set(r.id, owner);
   }
   // A shutdown kills turns rather than ending them: their approvals stay
   // unanswered, as after any restart, not dropped.
   if (isShuttingDown()) return;
+  const gone = new Map<string, string[]>();
   for (const [id, owner] of recorded) {
     if (live.has(id)) continue;
     recorded.delete(id);
-    settle(owner, id, "dropped");
+    gone.set(owner, [...(gone.get(owner) ?? []), id]);
   }
+  for (const [owner, ids] of gone) settle(owner, ids, "dropped");
 }
 
 /**
- * The user answered an approval. Called by whatever answers it, before the
- * approval leaves the store, so its row says how. A no-op for an approval
- * that is not a Jarvis-owned child's.
+ * The user answered these approvals of one store. Called by whatever answers
+ * them, once they are resolved and before the change is broadcast, so the
+ * rows say how. A no-op for approvals that are not a Jarvis-owned child's.
+ * Never throws: a row that cannot be written must not hold up an answer.
  */
-export function answerChildApproval(store: SessionStore, toolUseID: string, approved: boolean): void {
-  const owner = recorded.get(toolUseID) ?? turnReportsTo(store);
-  if (!owner) return;
-  recorded.delete(toolUseID);
-  settle(owner, toolUseID, approved ? "approved" : "denied");
+export function answerChildApprovals(store: SessionStore, toolUseIDs: readonly string[], approved: boolean): void {
+  try {
+    const byOwner = new Map<string, string[]>();
+    for (const id of toolUseIDs) {
+      const owner = recorded.get(id) ?? turnReportsTo(store);
+      recorded.delete(id);
+      if (owner) byOwner.set(owner, [...(byOwner.get(owner) ?? []), id]);
+    }
+    for (const [owner, ids] of byOwner) settle(owner, ids, approved ? "approved" : "denied");
+  } catch (err: any) {
+    console.error("[child-approvals] could not record an answer:", err?.message ?? err);
+  }
 }
 
 /**
