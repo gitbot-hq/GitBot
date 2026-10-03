@@ -33,6 +33,8 @@ export interface TurnRequest {
   mode?: "plan" | "build";
   /** A child's report to its Jarvis thread: a turn, but not the user's words. */
   report?: boolean;
+  /** Jarvis started this turn: when it ends, it reports to the thread's Jarvis. */
+  reportable?: boolean;
 }
 
 export type TurnResult =
@@ -132,6 +134,10 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
   }
 
   const s = store;
+  // Per-turn flags start afresh: a stop belongs to the turn it stopped, and
+  // only a turn Jarvis started reports back to it.
+  s.abortRequested = false;
+  s.reportable = !!request.reportable;
   // A report is not what the thread is about: it leaves preview and title be.
   if (threadId) touchThread(threadId, request.report ? '' : prompt ?? '');
 

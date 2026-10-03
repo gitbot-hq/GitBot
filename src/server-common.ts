@@ -241,6 +241,11 @@ export interface SessionStore {
   // Bot hub: the thread this session belongs to, and the preset driving it.
   threadId?: string;
   botPreset?: BotPreset;
+  // Per turn, reset by startTurn: the user asked to stop this turn (set
+  // before any await in the abort route, so it is never seen late), and the
+  // turn reports to the thread's Jarvis when it ends (Jarvis started it).
+  abortRequested?: boolean;
+  reportable?: boolean;
 }
 
 /** The parts of a bot that shape the agent run. Mirrors fields on Bot in bot-store. */
@@ -326,7 +331,19 @@ export function buildSessionsDump(): SessionSummaryItem[] {
 // "running" and calls notifyPermissionsChanged. Watching for that transition
 // here covers all three agents and every way a turn ends, in one place.
 
-type TurnEndListener = (store: SessionStore, status: SessionStore["status"]) => void;
+/**
+ * A turn as it ended, read at that moment: a new turn on the same store may
+ * start before listeners run, and it replaces `events` and resets the flags.
+ */
+export interface EndedTurn {
+  status: SessionStore["status"];
+  events: StoredEvent[];
+  threadId?: string;
+  abortRequested: boolean;
+  reportable: boolean;
+}
+
+type TurnEndListener = (store: SessionStore, turn: EndedTurn) => void;
 const turnEndListeners = new Set<TurnEndListener>();
 const lastStatus = new WeakMap<SessionStore, SessionStore["status"]>();
 
@@ -341,12 +358,17 @@ export function notifyPermissionsChanged(): void {
     const before = lastStatus.get(store);
     lastStatus.set(store, store.status);
     if (before !== "running" || store.status === "running") continue;
-    const status = store.status;
-    // Deferred: a harness may emit its closing event (opencode's "aborted")
-    // just after notifying, and a listener may start a turn of its own.
+    const turn: EndedTurn = {
+      status: store.status,
+      events: store.events,
+      threadId: store.threadId,
+      abortRequested: !!store.abortRequested,
+      reportable: !!store.reportable,
+    };
+    // Deferred: a listener may start a turn of its own.
     setImmediate(() => {
       for (const listener of turnEndListeners) {
-        try { listener(store, status); } catch (err: any) { console.error("[turn-end]", err?.message ?? err); }
+        try { listener(store, turn); } catch (err: any) { console.error("[turn-end]", err?.message ?? err); }
       }
     });
   }

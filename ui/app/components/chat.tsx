@@ -874,7 +874,7 @@ export default function Chat({
   // is picked up live: join it when it starts, and read history if it ended
   // before the chat could join. The chat's own turns are left alone.
   // `joined`: the chat already follows this run (its own turn, or a rejoin),
-  // so the run's end is the stream's to handle.
+  // so the run's end is the stream's to handle. Read by maybeFlush too.
   const serverSeen = useRef<{ tid: string | null; status?: ThreadSessionStatus; joined: boolean }>({ tid: null, joined: true });
   useEffect(() => {
     const tid = thread?.id ?? null;
@@ -889,12 +889,15 @@ export default function Chat({
     }
     if (live(serverStatus) && !live(prev.status)) {
       // A turn the chat is not already in: join it. (Short turns that end
-      // before the status answers are read from history by rejoin.) One that
-      // starts while the chat's own turn is still closing is read at its end.
-      next.joined = turnActiveRef.current;
-      if (!next.joined) {
+      // before the status answers are read from history by rejoin.)
+      if (!turnActiveRef.current) {
         next.joined = true;
         rejoin(tid, tid, false, true);
+      } else {
+        // Busy: the chat's own turn starting (streaming), or its previous
+        // one still closing — then this is gitbot's, and maybeFlush joins
+        // it (or reads it from history) once the chat is free.
+        next.joined = streaming;
       }
     } else if (!live(serverStatus) && live(prev.status) && !prev.joined && !turnActiveRef.current) {
       loadHistory(tid, true, true);
@@ -1044,7 +1047,18 @@ export default function Chat({
       queueRef.current = null;
       setQueue(null);
     }
-    if (next) startTurn(next);
+    if (next) {
+      startTurn(next);
+      return;
+    }
+    // A turn gitbot started while this one was closing (a child's report):
+    // the chat was busy then, so join it now — or, if it has ended
+    // meanwhile, rejoin reads it from history.
+    const seen = serverSeen.current;
+    if (seen.tid === tid && !seen.joined) {
+      seen.joined = true;
+      rejoin(tid, tid, false, true);
+    }
   }
 
   function finish(refetch: boolean, stopped = false) {

@@ -149,7 +149,8 @@ export async function runAgent(store: SessionStore): Promise<void> {
           modelLogged = true;
         }
 
-        if (preset?.setup && msg.type === "assistant") {
+        // A sub-agent's words are not the run's verdict.
+        if (preset?.setup && msg.type === "assistant" && !(msg as any).parent_tool_use_id) {
           for (const block of (msg as any).message?.content ?? []) {
             if (block?.type === "text" && block.text) assistantText += block.text + "\n";
           }
@@ -232,7 +233,7 @@ function allowListHooks(allowedTools: string[], botName: string): Options["hooks
   };
 }
 
-function formatMessage(
+export function formatMessage(
   msg: SDKMessage,
 ): Record<string, unknown> | Record<string, unknown>[] | null {
   switch (msg.type) {
@@ -241,12 +242,16 @@ function formatMessage(
 
     case "assistant": {
       const payloads: Record<string, unknown>[] = [];
+      // A sub-agent's message (inside a Task) carries the Task's id; keep it,
+      // so the turn's own last word can be told from the sub-agent's.
+      const parent = (msg as any).parent_tool_use_id;
+      const from = parent ? { parent_tool_use_id: parent } : {};
 
       // Walk the blocks in order so the client can paint text and tool calls
       // where they actually happened; consecutive text blocks coalesce.
       let text = "";
       const flushText = () => {
-        if (text) payloads.push({ type: "assistant", content: text });
+        if (text) payloads.push({ type: "assistant", content: text, ...from });
         text = "";
       };
       for (const block of msg.message.content as any[]) {
@@ -258,6 +263,7 @@ function formatMessage(
             type: "tool_use",
             tool_name: block.name,
             tool_input: formatToolInput(block.name, block.input),
+            ...from,
           });
         }
       }

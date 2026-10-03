@@ -188,6 +188,9 @@ export async function handleRequest(
         ?? [...sessions.values()].find(s => s.sdkSessionId === abortId);
       if (!store) { jsonError(res, 404, "Session not found"); return; }
       if (store.status !== "running") { jsonOk(res, { ok: true }); return; }
+      // Before any await: the agent may end the turn while the abort is in
+      // flight, and a stopped turn must never wake Jarvis.
+      store.abortRequested = true;
       if (store.agent === "claude-code" && store.abortController) {
         store.abortController.abort();
       } else if (store.agent === "codex" && store.abortController) {

@@ -1,5 +1,6 @@
 import { test, after, afterEach, before } from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "events";
 import { mkdtempSync, realpathSync } from "fs";
 import { tmpdir } from "os";
 import { basename, join } from "path";
@@ -7,7 +8,9 @@ import { createThread, getThread, JARVIS_BOT_ID, jarvisDir, updateThread } from 
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
 import { capReport, formatReport, lastAssistantMessage, REPORT_CAP, watchChildReports } from "../src/reports";
-import { emitEvent, notifyPermissionsChanged, sessions, type SessionStore, type StoredEvent } from "../src/server-common";
+import { emitEvent, notifyPermissionsChanged, sessions, type IRequest, type IResponse, type SessionStore, type StoredEvent } from "../src/server-common";
+import { handleRequest } from "../src/server";
+import { formatMessage } from "../src/start-claude-code";
 import { agentRunners, startTurn } from "../src/turns";
 import { parseReport } from "../ui/app/lib/report";
 
@@ -172,3 +175,77 @@ test("a report that finds Jarvis mid-turn is dropped, and the server says so", a
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], new RegExp(`dropped: thread ${childThread.id} .*Jarvis thread ${jarvis.id} refused .*409`));
 });
+
+test("a stop that is still in flight when the child's turn ends does not wake Jarvis", async () => {
+  const { jarvis, child } = jarvisWithChild();
+  child.abortController = new AbortController();
+  const res = await post(`/sessions/${child.gitbotId}/abort`);
+  assert.equal(res.status, 200);
+  assert.ok(child.abortController.signal.aborted);
+  // The agent ends the turn as "done" first; its "aborted" event lands later.
+  await end(child, "done", [["assistant", { content: "halfway" }]]);
+  await new Promise((r) => setTimeout(r, 20));
+  emitEvent(child, "aborted", { message: "Request aborted by user" });
+  await turnEnd();
+  assert.equal(jarvisRuns(jarvis.id).length, 0);
+});
+
+test("only a turn Jarvis started reports; one the user types into the child does not", async () => {
+  const { jarvis, childThread, child } = jarvisWithChild();
+  await end(child, "done", [["assistant", { content: "Created a.txt" }]]);
+  assert.equal(jarvisRuns(jarvis.id).length, 1);
+  // The user now types into the child thread.
+  const typed = startTurn({ threadId: childThread.id, prompt: "also add c.txt" }, ALL_AGENTS);
+  assert.ok(typed.ok, JSON.stringify(typed));
+  await end(sessions.get(typed.sessionId)!, "done", [["assistant", { content: "Added c.txt" }]]);
+  assert.equal(jarvisRuns(jarvis.id).length, 1);
+});
+
+test("the report reads the turn as it ended, even if a new turn swaps the store's events", async () => {
+  const { jarvis, childThread, child } = jarvisWithChild();
+  emitEvent(child, "assistant", { content: "Created a.txt with 'one'." });
+  child.status = "done";
+  notifyPermissionsChanged();
+  // A new turn on the same store, before the turn-end listeners run.
+  child.events = [];
+  child.reportable = false;
+  child.threadId = undefined;
+  await turnEnd();
+  const woke = jarvisRuns(jarvis.id);
+  assert.equal(woke.length, 1);
+  assert.match(String(woke[0].events[0].prompt), new RegExp(`thread ${childThread.id} · done\\]\\nCreated a.txt with 'one'.$`));
+});
+
+test("claude-code events keep a sub-agent's parent_tool_use_id, so its words are not the report", () => {
+  const sdk = (content: unknown[], parent: string | null) =>
+    ({ type: "assistant", parent_tool_use_id: parent, message: { content } }) as any;
+  const asEvents = (msg: any): StoredEvent[] => {
+    const out = formatMessage(msg);
+    return (Array.isArray(out) ? out : out ? [out] : []).map((e) => ({ seq: 0, ...e }) as StoredEvent);
+  };
+  const events = [
+    ...asEvents(sdk([{ type: "text", text: "Delegating." }, { type: "tool_use", name: "Task", input: {} }], null)),
+    ...asEvents(sdk([{ type: "text", text: "Done: a.txt" }], null)),
+    ...asEvents(sdk([{ type: "text", text: "sub-agent: wrote it" }, { type: "tool_use", name: "Write", input: {} }], "toolu_7")),
+  ];
+  assert.equal(events.length, 5);
+  assert.equal(events[2].parent_tool_use_id, undefined);
+  assert.equal(events[3].parent_tool_use_id, "toolu_7");
+  assert.equal(events[4].parent_tool_use_id, "toolu_7");
+  assert.equal(lastAssistantMessage(events), "Done: a.txt");
+});
+
+async function post(url: string): Promise<{ status: number; body: any }> {
+  const req = Object.assign(new EventEmitter(), { method: "POST", url, headers: {} }) as unknown as IRequest;
+  let status = 0;
+  let out = "";
+  const res: IResponse = {
+    headersSent: false,
+    writableEnded: false,
+    writeHead(code) { status = code; },
+    write() {},
+    end(chunk) { out = chunk ?? ""; },
+  };
+  await handleRequest(req, res, ALL_AGENTS, tmpdir());
+  return { status, body: JSON.parse(out || "{}") };
+}

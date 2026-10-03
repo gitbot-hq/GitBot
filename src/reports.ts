@@ -1,6 +1,6 @@
 import { basename } from "path";
 import { getBot, getThread } from "./bot-store";
-import { onTurnEnd, type SessionStore, type StoredEvent } from "./server-common";
+import { onTurnEnd, type EndedTurn, type StoredEvent } from "./server-common";
 import { startTurn } from "./turns";
 
 // A finished child wakes its Jarvis: when a turn ends in a thread Jarvis
@@ -39,16 +39,19 @@ export function formatReport(bot: string, project: string, threadId: string, sta
   return `[${bot} · ${project} · thread ${threadId} · ${status}]\n${capReport(message) || "(no message)"}`;
 }
 
-/** The report a store's ended turn makes, or null when it wakes no one. */
-export function reportFor(store: SessionStore, status: SessionStore["status"]): { owner: string; prompt: string; child: string } | null {
+/** The report an ended turn makes, or null when it wakes no one. */
+export function reportFor(turn: EndedTurn): { owner: string; prompt: string; child: string } | null {
+  const { status, events } = turn;
+  // Only a turn Jarvis started reports; one the user typed into the child does not.
+  if (!turn.reportable) return null;
   if (status !== "done" && status !== "error") return null;
   // Stopped by the user: the sequence stops with it (slice 08 builds Stop).
-  if (store.events.some((e) => e.type === "aborted")) return null;
-  const child = store.threadId ? getThread(store.threadId) : undefined;
+  if (turn.abortRequested || events.some((e) => e.type === "aborted")) return null;
+  const child = turn.threadId ? getThread(turn.threadId) : undefined;
   if (!child?.reportTo) return null;
-  let message = lastAssistantMessage(store.events);
+  let message = lastAssistantMessage(events);
   if (!message && status === "error") {
-    const err = [...store.events].reverse().find((e) => e.type === "error" || e.type === "agent_error");
+    const err = [...events].reverse().find((e) => e.type === "error" || e.type === "agent_error");
     message = String((err as any)?.message ?? "");
   }
   const bot = getBot(child.botId)?.name ?? "Bot";
@@ -60,8 +63,8 @@ export function reportFor(store: SessionStore, status: SessionStore["status"]): 
  * turn refuses it (409), and the report is dropped — parked:
  * docs/issues/future/report-collides-with-jarvis-turn.md.
  */
-export function deliverReport(store: SessionStore, status: SessionStore["status"], availableAgents: readonly string[]): void {
-  const report = reportFor(store, status);
+export function deliverReport(turn: EndedTurn, availableAgents: readonly string[]): void {
+  const report = reportFor(turn);
   if (!report) return;
   let refused: string;
   try {
@@ -79,5 +82,5 @@ export function deliverReport(store: SessionStore, status: SessionStore["status"
 
 /** Wires reports to every turn end, whichever agent ran it. Call once at start. */
 export function watchChildReports(availableAgents: readonly string[]): () => void {
-  return onTurnEnd((store, status) => deliverReport(store, status, availableAgents));
+  return onTurnEnd((_store, turn) => deliverReport(turn, availableAgents));
 }
