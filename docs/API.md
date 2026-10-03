@@ -34,7 +34,7 @@ A bot is a named, reusable agent preset.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/bots` | `{ bots: Bot[] }` — Jarvis (while Claude Code is installed), your bots by name, then the built-in plain agent bots for the installed agents |
+| `GET` | `/bots` | `{ bots: Bot[] }` — Jarvis (always, even without Claude Code; its threads then cannot be made or run), your bots by name, then the built-in plain agent bots for the installed agents |
 | `POST` | `/bots` | Create a bot. Returns `{ bot, setupThread? }` |
 | `GET` | `/bots/:id` | `{ bot }` |
 | `PATCH` | `/bots/:id` | Update any bot field. Returns `{ bot, setupThread? }` |
