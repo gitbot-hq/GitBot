@@ -380,6 +380,7 @@ export default function Chat({
   onNewThread,
   newThread,
   emptyCopy,
+  emptyHint,
   booting,
   setup,
 }: {
@@ -413,6 +414,8 @@ export default function Chat({
   };
   /** Replaces the no-thread empty-state copy (and its button). */
   emptyCopy?: ReactNode;
+  /** An extra line under a new, still-empty thread's greeting. */
+  emptyHint?: ReactNode;
   /** True while the app is still loading bots/threads on boot. Shows a
    *  skeleton instead of the empty-thread copy, so the first paint never
    *  flashes placeholder text. Defaults to false (old behavior). */
@@ -483,6 +486,9 @@ export default function Chat({
   // A thread just created from a new-thread view: the chat is already in it
   // (its turn is starting), so arriving there must not reset anything.
   const adoptedRef = useRef<string | null>(null);
+  // Stop pressed before the turn's session exists (a new thread still being
+  // made, or POST /chat in flight): honored once the request returns.
+  const stopRequestedRef = useRef(false);
   const lastPrompt = useRef("");
   const scrollRef = useRef<HTMLElement | null>(null);
   const stick = useRef(true);
@@ -695,6 +701,8 @@ export default function Chat({
 
   // Load history on thread switch; drop any live turn.
   useEffect(() => {
+    // The new-thread view itself registers no cleanup, so arriving in the
+    // adopted thread leaves its starting turn alone.
     if (thread && adoptedRef.current === thread.id) {
       adoptedRef.current = null;
       return () => {
@@ -702,6 +710,7 @@ export default function Chat({
         if (reloadTimer.current) clearTimeout(reloadTimer.current);
       };
     }
+    adoptedRef.current = null;
     viewEpoch.current++;
     closeStream();
     if (reloadTimer.current) clearTimeout(reloadTimer.current);
@@ -1129,29 +1138,48 @@ export default function Chat({
     liveTextRef.current = "";
     turnStart.current = Date.now();
     turnActiveRef.current = true;
+    stopRequestedRef.current = false;
+    const msgId = nid();
     setMsgs((prev) => [
       ...prev,
-      { id: nid(), role: "user", segs: [{ kind: "text", text: prompt }] },
+      { id: msgId, role: "user", segs: [{ kind: "text", text: prompt }] },
     ]);
     setStreaming(true);
     setActivity("Thinking…");
     stick.current = true;
     requestAnimationFrame(scrollDown);
     const epoch = viewEpoch.current;
+    const startKey = viewRef.current;
     let tid = thread?.id ?? null;
     try {
       if (!tid) {
         // First send of a new thread: only now is it stored.
-        const created = await newThread!.create();
+        let created: ThreadFull;
+        try {
+          created = await newThread!.create();
+        } catch (e) {
+          if (viewEpoch.current !== epoch) return;
+          unsend(msgId, prompt);
+          setTurnError(errText(e));
+          return;
+        }
         tid = created.id;
         const opened = viewEpoch.current === epoch;
-        if (opened) {
-          // Still looking at it: carry on in the new thread, no reset.
-          adoptedRef.current = created.id;
-          threadRef.current = created.id;
-          viewRef.current = created.id;
-        }
         newThread!.onCreated(created, opened);
+        if (!opened) {
+          // The user moved on: send nothing unseen (Jarvis auto-approves).
+          // The message waits in that new thread's draft instead.
+          drafts.current[startKey] = mergeQueued(prompt, drafts.current[startKey] ?? "");
+          return;
+        }
+        // Still looking at it: carry on in the new thread, no reset.
+        adoptedRef.current = created.id;
+        threadRef.current = created.id;
+        viewRef.current = created.id;
+        if (stopRequestedRef.current) {
+          unsend(msgId, prompt);
+          return;
+        }
       }
       const { sessionId } = await postChat(
         tid,
@@ -1160,6 +1188,11 @@ export default function Chat({
       );
       if (threadRef.current !== tid) return;
       sessionRef.current = sessionId;
+      if (stopRequestedRef.current) {
+        postAbort(sessionId).catch(() => {});
+        finish(false, true);
+        return;
+      }
       openStream(sessionId);
     } catch (e) {
       if (tid ? threadRef.current !== tid : viewEpoch.current !== epoch) return;
@@ -1168,6 +1201,24 @@ export default function Chat({
       setActivity(null);
       setTurnError(errText(e));
     }
+  }
+
+  /** A send that never reached the server: take its bubble back and return
+   *  the text, plus anything queued behind it, to the composer. */
+  function unsend(msgId: string, prompt: string) {
+    if (stopTimer.current) {
+      window.clearTimeout(stopTimer.current);
+      stopTimer.current = null;
+    }
+    turnActiveRef.current = false;
+    turnStart.current = 0;
+    setStreaming(false);
+    setActivity(null);
+    setMsgs((prev) => prev.filter((m) => m.id !== msgId));
+    const q = queueRef.current;
+    queueRef.current = null;
+    setQueue(null);
+    restoreToDraft(mergeQueued(prompt, q ?? ""));
   }
 
   function abortCurrent() {
@@ -1200,6 +1251,7 @@ export default function Chat({
       // pendingSteer.current = null;
       restoreToDraft(q);
     }
+    stopRequestedRef.current = true;
     setup?.onPause();
     abortCurrent();
   }
@@ -1569,6 +1621,7 @@ export default function Chat({
             <div className="conversation-empty-copy">
               <h1>Start a conversation</h1>
               <p>Tell <BotName color={botAvatar?.color}>{botName}</BotName> what you’d like help with.</p>
+              {!thread && emptyHint}
             </div>
           </div>
         )}

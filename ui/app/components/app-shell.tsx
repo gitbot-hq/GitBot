@@ -133,6 +133,11 @@ export default function V2() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selectedId;
+  // Thread-list loads: only the latest one for the selected bot lands.
+  const threadsSeq = useRef(0);
+  // Threads made by a first send that a load may not include yet (it was
+  // asked for before they existed); merged in until a load has them.
+  const createdThreads = useRef<ThreadFull[]>([]);
   const [threadByBot, setThreadByBot] = useState<Record<string, string>>({});
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [botActivity, setBotActivity] = useState<string | null>(null);
@@ -268,6 +273,17 @@ export default function V2() {
 
   useEffect(loadBots, [loadBots]);
 
+  /** Re-reads the installed agents. A failed read keeps what was known. */
+  const refreshAgents = useCallback(() => {
+    getAgents().then(({ agents }) => setAgents(agents), () => {});
+  }, []);
+
+  // Installing Claude Code while gitbot is open should unblock Jarvis.
+  useEffect(() => {
+    window.addEventListener("focus", refreshAgents);
+    return () => window.removeEventListener("focus", refreshAgents);
+  }, [refreshAgents]);
+
   // Read after mount: the page is prerendered, where there is no storage.
   useEffect(() => {
     setOnboardingSkipped(readOnboardingSkipped());
@@ -352,8 +368,10 @@ export default function V2() {
   const activeLabel = bot ? shortActivity(botActivity) : null;
   const idleLabel = (b: Bot | null) => (b?.builtin === "jarvis" && jarvisMissing ? "Needs Claude Code" : "Idle");
   const setupRequired = !!bot && needsSetup(bot);
-  const setupThread = threads.find((t) => t.kind === "setup") ?? null;
-  const workThreads = threads.filter((t) => t.kind !== "setup");
+  // The list can still hold the previous bot's threads while this one's load.
+  const botThreads = threads.filter((t) => t.botId === bot?.id);
+  const setupThread = botThreads.find((t) => t.kind === "setup") ?? null;
+  const workThreads = botThreads.filter((t) => t.kind !== "setup");
 
   const searchText = query.trim().toLowerCase();
   const visibleBots = searchText
@@ -397,10 +415,17 @@ export default function V2() {
   }, [botsLoading, visibleBots.length, bot?.id, threadsLoading, visibleThreads.length]);
 
   const refreshThreads = useCallback((botId: string) => {
+    const seq = ++threadsSeq.current;
+    const current = () => seq === threadsSeq.current && selectedRef.current === botId;
     setThreadsLoading(true);
     setThreadsError(null);
     getThreads(botId)
-      .then(({ threads }) => {
+      .then(({ threads: loaded }) => {
+        if (!current()) return;
+        const has = (t: ThreadFull) => loaded.some((l) => l.id === t.id);
+        const missing = createdThreads.current.filter((t) => t.botId === botId && !has(t));
+        createdThreads.current = createdThreads.current.filter((t) => !has(t));
+        const threads = [...missing, ...loaded];
         setThreads(threads);
         setThreadByBot((prev) => {
           if (
@@ -416,10 +441,12 @@ export default function V2() {
           return rest;
         });
       })
-      .catch((e) =>
-        setThreadsError(e instanceof Error ? e.message : "Failed to load threads"),
-      )
-      .finally(() => setThreadsLoading(false));
+      .catch((e) => {
+        if (current()) setThreadsError(e instanceof Error ? e.message : "Failed to load threads");
+      })
+      .finally(() => {
+        if (current()) setThreadsLoading(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -859,6 +886,7 @@ export default function V2() {
     if (!bot) return;
     const current = bot;
     refreshThreads(current.id);
+    refreshAgents();
     // A turn may change bot metadata server-side. In particular a setup
     // run's verdict is recorded by the server from the agent's own reply
     // (never from sub-agent output), so the bot is re-read rather than
@@ -883,6 +911,7 @@ export default function V2() {
    *  otherwise the user moved on, so it only joins the list. */
   function newThreadStored(thread: ThreadFull, opened: boolean) {
     setHasThreads(true);
+    createdThreads.current = [...createdThreads.current, thread];
     const add = (prev: ThreadFull[]) => (prev.some((t) => t.id === thread.id) ? prev : [thread, ...prev]);
     if (!opened) {
       if (selectedRef.current === thread.botId) setThreads(add);
@@ -914,6 +943,7 @@ export default function V2() {
     if (!confirm(`Delete "${thread.title}"? The agent's transcript stays on disk.`)) return;
     deleteThread(thread.id).then(
       () => {
+        createdThreads.current = createdThreads.current.filter((candidate) => candidate.id !== thread.id);
         setThreads((current) => current.filter((candidate) => candidate.id !== thread.id));
         setThreadByBot((current) => {
           if (current[bot.id] !== thread.id) return current;
@@ -1323,6 +1353,7 @@ export default function V2() {
                   create: () => createThread(bot.id).then(({ thread }) => thread),
                   onCreated: newThreadStored,
                 } : undefined}
+                emptyHint={isJarvis ? <p>Or make a bot of your own with + in Your bots.</p> : undefined}
                 emptyCopy={jarvisBlocked && bot ? (
                   <p>
                     <BotName color={avatarFor(bot.id).color}>{bot.name}</BotName> runs on Claude Code,
