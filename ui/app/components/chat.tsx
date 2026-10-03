@@ -45,6 +45,8 @@ import { useStatusFavicon } from "../lib/status-favicon";
 import { groupTools, type ToolChip } from "../lib/tool-ui";
 import { parseMarketplaceListing, type MarketplaceListing } from "../lib/marketplace-publish";
 import { presentSetupText, readSetupNeedsInput } from "../lib/setup";
+import { parseReport, type Report } from "../lib/report";
+import type { ThreadSessionStatus } from "../lib/use-thread-sessions";
 import RunSummary, { ActionRow } from "./run-summary";
 import QueueTray from "./queue-tray";
 
@@ -361,8 +363,33 @@ function SetupIntro({
   );
 }
 
+/** A child's report to Jarvis: a compact row, not the user's own bubble. */
+function ReportRow({ report, botColor }: { report: Report; botColor?: string }) {
+  const failed = report.status !== "done";
+  return (
+    <details className={failed ? "report-row failed" : "report-row"}>
+      <summary>
+        <span className="report-row-dot" aria-hidden="true" />
+        <span className="report-row-label">
+          <b>{report.bot}</b> {failed ? "stopped with an error" : "finished"} in {report.project}
+        </span>
+        <AnimatedActionIcon icon={ChevronDownIcon} size={14} aria-hidden="true" />
+      </summary>
+      <div className="report-row-body">
+        <RichText botColor={botColor} text={report.message || "_No message._"} />
+      </div>
+    </details>
+  );
+}
+
+/** The report a history or live message carries, if it is one. */
+function msgReport(m: Msg): Report | null {
+  return m.role === "user" ? parseReport(msgText(m)) : null;
+}
+
 export default function Chat({
   thread,
+  serverStatus,
   botId,
   botName,
   botPermissionMode,
@@ -385,6 +412,9 @@ export default function Chat({
   setup,
 }: {
   thread: ThreadFull | null;
+  /** The open thread's session status on the server, pushed live: how the
+   *  chat notices a turn gitbot started itself (a child's report). */
+  serverStatus?: ThreadSessionStatus;
   botId?: string;
   botName: string;
   botPermissionMode?: string;
@@ -639,8 +669,9 @@ export default function Chat({
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }
 
-  function loadHistory(tid: string, scroll = false) {
-    setLoading(true);
+  /** `quiet`: refresh what is on screen without the loading skeleton. */
+  function loadHistory(tid: string, scroll = false, quiet = false) {
+    if (!quiet) setLoading(true);
     setHistoryError(null);
     getMessages(tid)
       .then(({ messages }) => {
@@ -678,8 +709,10 @@ export default function Chat({
       const { role, segs } = flatten(m.role, m.content);
       if (segs.length === 0) return;
       const prev = out[out.length - 1];
+      // A child's report is its own row: never merged with a neighbour.
+      const report = (s: Seg[]) => s[0]?.kind === "text" && !!parseReport(s[0].text);
       const target =
-        prev && prev.role === role
+        prev && prev.role === role && !(role === "user" && (report(segs) || report(prev.segs)))
           ? prev.segs
           : (() => {
               const fresh: Seg[] = [];
@@ -696,7 +729,8 @@ export default function Chat({
     }
     const visible = out.filter((m) => m.segs.length > 0);
     visible.forEach((m, i) => {
-      if (m.role === "assistant" && visible[i - 1]?.role === "user") {
+      // A report is not the user's to resend.
+      if (m.role === "assistant" && visible[i - 1]?.role === "user" && !msgReport(visible[i - 1])) {
         m.retryPrompt = msgText(visible[i - 1]);
       }
     });
@@ -773,7 +807,21 @@ export default function Chat({
     else setLoading(true);
     // Rejoin a turn still running server-side: after a reload, or one gitbot
     // started itself.
-    const lookup = thread.sdkSessionId ?? tid;
+    rejoin(tid, thread.sdkSessionId ?? tid, awaitStatus);
+    return () => {
+      closeStream();
+      if (reloadTimer.current) clearTimeout(reloadTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewKey]);
+
+  /**
+   * Joins the thread's running turn, if it has one. `awaitStatus`: history is
+   * not loaded yet and waits on the answer. `fresh`: the turn started after
+   * history was loaded (gitbot started it while this thread was open), so
+   * nothing it has done is on screen yet.
+   */
+  function rejoin(tid: string, lookup: string, awaitStatus: boolean, fresh = false) {
     getSessionStatus(lookup)
       .then(({ streaming, gitbotId, seq, sdkSessionId, pending }) => {
         // The user may have started a turn of their own meanwhile: it wins.
@@ -781,8 +829,14 @@ export default function Chat({
         const sid = gitbotId ?? lookup;
         // With a session id the transcript is on disk and history shows the
         // turn so far; without one, the replayed events are all there is.
-        const historyCovers = !!sdkSessionId;
+        const historyCovers = !!sdkSessionId && !fresh;
         if (awaitStatus && (historyCovers || !streaming)) loadHistory(tid, true);
+        // Caught too late: the turn already ended, so history has all of it.
+        if (fresh && !streaming) {
+          loadHistory(tid, true, true);
+          onTurnDone();
+          return;
+        }
         // The session's mode is the truth: a child Jarvis started runs in
         // its own, not the bot's default.
         const adoptMode = () =>
@@ -802,6 +856,8 @@ export default function Chat({
         historyCoversRef.current = historyCovers;
         sessionRef.current = sid;
         turnActiveRef.current = true;
+        // Seen from its start: it gets the end-of-turn card like the user's own.
+        if (fresh) turnStart.current = Date.now();
         setStreaming(true);
         setActivity("Thinking…");
         if (awaitStatus && !historyCovers) setLoading(false);
@@ -812,12 +868,40 @@ export default function Chat({
         // No session (never run, or gone after a restart): history is all.
         if (awaitStatus && threadRef.current === tid) loadHistory(tid, true);
       });
-    return () => {
-      closeStream();
-      if (reloadTimer.current) clearTimeout(reloadTimer.current);
-    };
+  }
+
+  // A turn gitbot starts on the open thread (a child's report waking Jarvis)
+  // is picked up live: join it when it starts, and read history if it ended
+  // before the chat could join. The chat's own turns are left alone.
+  // `joined`: the chat already follows this run (its own turn, or a rejoin),
+  // so the run's end is the stream's to handle.
+  const serverSeen = useRef<{ tid: string | null; status?: ThreadSessionStatus; joined: boolean }>({ tid: null, joined: true });
+  useEffect(() => {
+    const tid = thread?.id ?? null;
+    const prev = serverSeen.current;
+    const live = (s?: ThreadSessionStatus) => s === "running" || s === "awaiting_permissions";
+    const next = { tid, status: serverStatus, joined: prev.joined };
+    serverSeen.current = next;
+    // Opening a thread rejoins it already (the view effect above).
+    if (!tid || prev.tid !== tid || threadRef.current !== tid) {
+      next.joined = true;
+      return;
+    }
+    if (live(serverStatus) && !live(prev.status)) {
+      // A turn the chat is not already in: join it. (Short turns that end
+      // before the status answers are read from history by rejoin.) One that
+      // starts while the chat's own turn is still closing is read at its end.
+      next.joined = turnActiveRef.current;
+      if (!next.joined) {
+        next.joined = true;
+        rejoin(tid, tid, false, true);
+      }
+    } else if (!live(serverStatus) && live(prev.status) && !prev.joined && !turnActiveRef.current) {
+      loadHistory(tid, true, true);
+      onTurnDone();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewKey]);
+  }, [serverStatus, thread?.id]);
 
   // A new thread opens ready to type into.
   useEffect(() => {
@@ -1567,7 +1651,10 @@ export default function Chat({
           </p>
         )}
         {!loading &&
-          visibleMsgs.map((m) => (
+          visibleMsgs.map((m) => {
+            const report = msgReport(m);
+            if (report) return <ReportRow key={m.id} report={report} botColor={botAvatar?.color} />;
+            return (
             <article
               key={m.id}
               className={`${m.role === "user" ? "bubble user" : "bubble assistant"}${m.id.startsWith("m") ? " msg-in" : ""}`}
@@ -1615,7 +1702,8 @@ export default function Chat({
                 </span>
               )}
             </article>
-          ))}
+            );
+          })}
         {live && (liveTextLen(live.segs) > 0 || streaming) && (
           <article key={live.key} className="bubble assistant msg-in">
             {revealSegs(live.segs, live.shown).map((s, si) =>

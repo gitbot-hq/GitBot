@@ -188,6 +188,11 @@ export function getPendingPermissions(sessionId: string) {
   );
 }
 
+/** Every session's status, pushed on each change (and pending approvals). */
+export function sessionsStreamUrl() {
+  return `${BASE}/permissions/events`;
+}
+
 export function streamUrl(sessionId: string) {
   return `${BASE}/events?sessionId=${encodeURIComponent(sessionId)}`;
 }

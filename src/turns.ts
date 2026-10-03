@@ -31,6 +31,8 @@ export interface TurnRequest {
   model?: string;
   permissionMode?: PermissionMode;
   mode?: "plan" | "build";
+  /** A child's report to its Jarvis thread: a turn, but not the user's words. */
+  report?: boolean;
 }
 
 export type TurnResult =
@@ -130,7 +132,8 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
   }
 
   const s = store;
-  if (threadId) touchThread(threadId, prompt ?? '');
+  // A report is not what the thread is about: it leaves preview and title be.
+  if (threadId) touchThread(threadId, request.report ? '' : prompt ?? '');
 
   // Anything thrown past runAgent's own handling would otherwise leave the
   // session pinned to "running": every later message on the thread answers

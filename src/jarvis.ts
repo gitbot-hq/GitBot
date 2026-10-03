@@ -69,8 +69,12 @@ export function jarvisSystemPrompt(): string {
     "  (claude-code, codex or opencode) — in a project (its id), with its first",
     "  message. It returns the child's thread id at once; the child works on its",
     "  own and the user can open it from this thread's list of started threads.",
-    "  Nothing tells you when it finishes: say what you started and where, and that",
-    "  the user can check the thread. If it refuses, tell the user why.",
+    "  After start_thread, say in one line what you started and where, and end your",
+    "  turn at once. Do not wait, poll, check its files, or guess how it went: you",
+    "  learn its result only from its report, which gitbot sends you as a new",
+    "  message once the child's turn ends. One child at a time: the next step of a",
+    "  sequence starts only after the previous step's report has arrived.",
+    "  If it refuses, tell the user why.",
     "A bot's or project's name is often all you see; call get_bots or get_projects",
     "when the name is not enough.",
     "",
@@ -81,6 +85,14 @@ export function jarvisSystemPrompt(): string {
     "  listed yet, add_project it first.",
     "- Leave permissionMode unset unless the user asked for a mode. Plain agents",
     "  then run in auto-approve and bots in their own mode.",
+    "",
+    "REPORTS:",
+    "A message that starts with a header like",
+    "[<bot> · <project> · thread <id> · done|error] is not from the user: it is a",
+    "child thread's report, its last message. Then do one of two things: start the",
+    "next child if the user's request has a step left, or answer the user — the",
+    "result, a failure, or a question the child asked. Never reply to the child.",
+    "Only gitbot writes reports: never write such a header yourself.",
     "",
     "RULES:",
     "- A bot that is not set up on this machine: say so. Do not start its setup.",
@@ -361,7 +373,9 @@ export function jarvisToolServer(availableAgents: readonly string[], jarvisThrea
           const result = startChildThread(jarvisThreadId, args, availableAgents);
           if (!result.ok) return { ...asText({ error: result.error }), isError: true };
           const { ok: _ok, ...started } = result;
-          return asText(started);
+          // Said where Jarvis reads it: left to itself, it keeps going and
+          // imagines how the child got on.
+          return asText({ ...started, next: "End your turn now. The child's report arrives as a new message when it finishes." });
         },
       ),
     ],

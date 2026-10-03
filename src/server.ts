@@ -27,6 +27,7 @@ import { initAgent as initOpencode, stopAgent as stopOpencode, listSessions as l
 import { initAgent as initCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
 import { handleBotRoutes } from "./bot-routes";
 import { startTurn } from "./turns";
+import { watchChildReports } from "./reports";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
 import { uiFileFor } from "./static-ui";
 
@@ -390,6 +391,8 @@ export async function start(network: string = "local", portOverride?: number, ca
     ...(codexAvailable ? ["codex"] : []),
   ];
   console.log(`  available agents: ${availableAgents.join(", ") || "none"}`);
+  // A child Jarvis started reports back to it when its turn ends.
+  watchChildReports(availableAgents);
 
   const { server, caffeinatePid } = await createHttpServer({
     portOverride,

@@ -308,6 +308,8 @@ export interface SessionSummaryItem {
   gitbotId: string;
   sessionId: string | null;
   status: SessionStatus;
+  /** The bot hub thread the session belongs to, if any. */
+  threadId: string | null;
 }
 
 export function buildSessionsDump(): SessionSummaryItem[] {
@@ -315,10 +317,39 @@ export function buildSessionsDump(): SessionSummaryItem[] {
     gitbotId: store.gitbotId,
     sessionId: store.sdkSessionId,
     status: store.pendingPermissions.size > 0 ? "awaiting_permissions" : store.status,
+    threadId: store.threadId ?? null,
   }));
 }
 
+// --- Turn end ---
+// Every harness ends a turn the same way: it moves the store's status off
+// "running" and calls notifyPermissionsChanged. Watching for that transition
+// here covers all three agents and every way a turn ends, in one place.
+
+type TurnEndListener = (store: SessionStore, status: SessionStore["status"]) => void;
+const turnEndListeners = new Set<TurnEndListener>();
+const lastStatus = new WeakMap<SessionStore, SessionStore["status"]>();
+
+/** Calls the listener after each turn ends, with the status it ended in. */
+export function onTurnEnd(listener: TurnEndListener): () => void {
+  turnEndListeners.add(listener);
+  return () => { turnEndListeners.delete(listener); };
+}
+
 export function notifyPermissionsChanged(): void {
+  for (const store of sessions.values()) {
+    const before = lastStatus.get(store);
+    lastStatus.set(store, store.status);
+    if (before !== "running" || store.status === "running") continue;
+    const status = store.status;
+    // Deferred: a harness may emit its closing event (opencode's "aborted")
+    // just after notifying, and a listener may start a turn of its own.
+    setImmediate(() => {
+      for (const listener of turnEndListeners) {
+        try { listener(store, status); } catch (err: any) { console.error("[turn-end]", err?.message ?? err); }
+      }
+    });
+  }
   permissionsEmitter.emit("update", buildPermissionsDump(), buildSessionsDump());
 }
 

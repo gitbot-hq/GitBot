@@ -51,6 +51,7 @@ import { getAvatarPref, setAvatarPref, resolveAvatar, defaultMascotFor, type Ava
 import { JARVIS_BOT_ID, type Bot, type ThreadFull } from "../lib/gitbot";
 import { setupPrompt, type SetupRunKind } from "../lib/setup";
 import { useScrollEdge } from "../lib/use-scroll-edge";
+import { useThreadSessions } from "../lib/use-thread-sessions";
 import "../v2-theme.css";
 import "../onboarding/onboarding.css";
 
@@ -391,6 +392,9 @@ export default function V2() {
   const visibleThreads = threadSearchText
     ? workThreads.filter((t) => t.title.toLowerCase().includes(threadSearchText))
     : workThreads;
+  // Server-side session status per thread: lets the open chat pick up a turn
+  // gitbot started itself (a child's report to Jarvis).
+  const threadSessions = useThreadSessions();
   const botsScrollEdge = useScrollEdge(
     botsScrollRef,
     `${collapsed}:${botsLoading}:${visibleBots.length}`,
@@ -1348,6 +1352,7 @@ export default function V2() {
               )}
               <Chat
                 thread={activeThread}
+                serverStatus={activeThread ? threadSessions[activeThread.id] : undefined}
                 botId={bot?.id}
                 botName={bot?.name ?? "bot"}
                 botPermissionMode={bot?.permissionMode}

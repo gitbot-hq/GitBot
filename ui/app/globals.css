@@ -4313,3 +4313,72 @@ button.file-chip:hover {
 .jarvis-child small {
   color: var(--muted);
 }
+
+/* A child's report to Jarvis: a compact row in the conversation, not a
+   user bubble. Opens to show what the child said. */
+.report-row {
+  align-self: stretch;
+  max-width: 65ch;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.report-row > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  list-style: none;
+  cursor: pointer;
+}
+
+.report-row > summary::-webkit-details-marker {
+  display: none;
+}
+
+.report-row > summary:hover,
+.report-row > summary:focus-visible {
+  background: var(--surface-2);
+}
+
+.report-row-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.report-row.failed .report-row-dot {
+  background: var(--danger);
+}
+
+.report-row-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-row-label b {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.report-row > summary svg {
+  flex: none;
+  transition: transform var(--duration-slow, 200ms) ease;
+}
+
+.report-row[open] > summary svg {
+  transform: rotate(180deg);
+}
+
+.report-row-body {
+  margin: var(--space-1) 0 0 var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-left: 2px solid var(--border);
+  color: var(--text);
+}
