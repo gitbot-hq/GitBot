@@ -2428,6 +2428,13 @@ pre {
   gap: var(--space-1);
 }
 
+/* Jarvis: pinned above the user's bots and ruled off from them. */
+.bot-pinned {
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
 /* Built-in agent bots: their own labelled group under the user's bots. */
 .bot-section {
   margin-top: var(--space-4);

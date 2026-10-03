@@ -366,6 +366,7 @@ export default function Chat({
   botId,
   botName,
   botPermissionMode,
+  fixedPermissions = false,
   botAgent,
   botAvatar,
   autoSend,
@@ -384,6 +385,9 @@ export default function Chat({
   botId?: string;
   botName: string;
   botPermissionMode?: string;
+  /** True when the bot's permissions are not the user's to change (Jarvis
+   *  always runs in auto-approve): the composer offers no permission menu. */
+  fixedPermissions?: boolean;
   botAgent?: string;
   botAvatar?: AvatarPref;
   autoSend: string | null;
@@ -1663,7 +1667,7 @@ export default function Chat({
               }
               aria-label={setup ? "Setup response" : "Message"}
             />
-            <div className="composer-permissions">
+            {!fixedPermissions && <div className="composer-permissions">
               <button
                 ref={permissionButtonRef}
                 type="button"
@@ -1713,7 +1717,7 @@ export default function Chat({
                 </div>
                 <button type="button" className="menu-scrim" onClick={() => setActiveMenu(null)} aria-label="Close permissions" tabIndex={-1} />
               </>}
-            </div>
+            </div>}
             {streaming ? (
               <div className="composer-action">
                 {escapeStopArmed && (

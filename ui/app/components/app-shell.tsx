@@ -328,10 +328,13 @@ export default function V2() {
   const visibleBots = searchText
     ? bots.filter((b) => b.name.toLowerCase().includes(searchText))
     : bots;
-  // Built-in plain agent bots get a section of their own, apart from the user's.
+  // Jarvis is pinned above everything; the built-in plain agent bots get a
+  // section of their own, apart from the user's.
   const userBots = bots.filter((b) => !b.builtin);
+  const visibleJarvis = visibleBots.find((b) => b.builtin === "jarvis") ?? null;
   const visibleUserBots = visibleBots.filter((b) => !b.builtin);
-  const visibleAgentBots = visibleBots.filter((b) => b.builtin);
+  const visibleAgentBots = visibleBots.filter((b) => b.builtin && b.builtin !== "jarvis");
+  const pinnedCount = visibleJarvis ? 1 : 0;
 
   const threadSearchText = threadQuery.trim().toLowerCase();
   const visibleThreads = threadSearchText
@@ -883,7 +886,7 @@ export default function V2() {
   // lands in the app with the new bot selected.
   // The built-in agent bots don't count: onboarding is about the user's own.
   // It never hides existing threads, and it can be skipped for a plain agent.
-  const skipTo = bots.find((b) => b.builtin) ?? null;
+  const skipTo = bots.find((b) => b.builtin && b.builtin !== "jarvis") ?? null;
   if (!botsLoading && !botsError && userBots.length === 0 && !hasThreads && !onboardingSkipped) {
     return (
       <div className="page v2">
@@ -1056,10 +1059,15 @@ export default function V2() {
                 </div>
               ) : (
                 <>
+                {visibleJarvis && (
+                  <div className="bot-list bot-pinned" aria-label="Jarvis">
+                    {botRow(visibleJarvis, 0)}
+                  </div>
+                )}
                 <div className="bot-list">
-                  {visibleUserBots.map(botRow)}
+                  {visibleUserBots.map((b, i) => botRow(b, pinnedCount + i))}
                   {userBots.length === 0 && <p className="threads-empty">None of your own yet — make one with +.</p>}
-                  {userBots.length > 0 && visibleUserBots.length === 0 && (
+                  {userBots.length > 0 && visibleUserBots.length === 0 && !visibleJarvis && (
                     <p className="threads-empty">No bots match your search.</p>
                   )}
                 </div>
@@ -1067,7 +1075,7 @@ export default function V2() {
                   <section className="bot-section" aria-labelledby="agent-bots-title">
                     <h3 id="agent-bots-title" className="bot-section-title">Agents</h3>
                     <div className="bot-list">
-                      {visibleAgentBots.map((b, i) => botRow(b, visibleUserBots.length + i))}
+                      {visibleAgentBots.map((b, i) => botRow(b, pinnedCount + visibleUserBots.length + i))}
                     </div>
                   </section>
                 )}
@@ -1242,6 +1250,7 @@ export default function V2() {
                 botId={bot?.id}
                 botName={bot?.name ?? "bot"}
                 botPermissionMode={bot?.permissionMode}
+                fixedPermissions={bot?.builtin === "jarvis"}
                 botAgent={bot?.agent}
                 botAvatar={bot ? avatarFor(bot.id) : undefined}
                 autoSend={autoSend && autoSend.botId === bot?.id ? autoSend.prompt : null}

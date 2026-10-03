@@ -34,7 +34,7 @@ A bot is a named, reusable agent preset.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/bots` | `{ bots: Bot[] }` — your bots by name, then the built-in plain agent bots for the installed agents |
+| `GET` | `/bots` | `{ bots: Bot[] }` — Jarvis (while Claude Code is installed), your bots by name, then the built-in plain agent bots for the installed agents |
 | `POST` | `/bots` | Create a bot. Returns `{ bot, setupThread? }` |
 | `GET` | `/bots/:id` | `{ bot }` |
 | `PATCH` | `/bots/:id` | Update any bot field. Returns `{ bot, setupThread? }` |
@@ -59,6 +59,8 @@ A bot is a named, reusable agent preset.
 Read-only fields the server maintains: `id`, `setupStatus` (`pending` \| `complete` \| `failed`), `setupThreadId`, `createdAt`, `updatedAt`.
 
 **Built-in bots.** Each installed agent has a plain bot with no instructions — **Claude Code**, **Codex**, **OpenCode** — with id `builtin-<agent>` and `builtin` set to its agent. They are defined in code, not stored. `PATCH`, `DELETE` and `POST /setup` on them return `403`. A thread made with one always runs on that bot's agent; an `agent` in the request is ignored, and `POST /threads` returns `400` while that agent is not installed. Records in `bots.json` cannot take a built-in's id or claim `builtin`.
+
+**Jarvis.** A built-in bot with id `builtin-jarvis` and `builtin: "jarvis"`, refused like the others on change. Its threads always run Claude Code in `<dataDir>/jarvis/`, on the default model, in auto-approve: `repoPath`, `agent`, `model`, `permissionMode` and `mode` in `POST /threads` or `POST /chat` are ignored for it, as are `repoPath`, `agent`, `kind` and `sdkSessionId` in `PATCH /threads/:id`. `PATCH /sessions/:id` with a `permissionMode` or `mode` returns `409` on a Jarvis session, and a `POST /chat` without `threadId` that reaches one returns `400`. Only Jarvis sessions get its tools (`mcp__gitbot__list_bots`, `mcp__gitbot__get_bots`), an in-process MCP server built per turn (`src/jarvis.ts`).
 
 ## Threads
 

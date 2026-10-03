@@ -28,10 +28,9 @@ import {
 import { initAgent as initClaudeCode, runAgent as runClaudeCode, listSessions as listClaudeSessions, loadTranscript } from "./start-claude-code";
 import { initAgent as initOpencode, stopAgent as stopOpencode, runAgent as runOpencode, listSessions as listOpencodeSessions, getSessionHistory, abortSession as opencodeAbort, respondPermission as opencodePermission } from "./start-opencode";
 import { initAgent as initCodex, runAgent as runCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
-import { handleBotRoutes } from "./bot-routes";
+import { handleBotRoutes, resolveThreadTurn } from "./bot-routes";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
-import { getBot, getThread, touchThread, updateThread, botNeedsSetup, threadAgent } from "./bot-store";
-import { botPermissionToSession } from "./server-common";
+import { getBot, getThread, touchThread, updateThread } from "./bot-store";
 import { uiFileFor } from "./static-ui";
 
 export async function handleRequest(
@@ -245,42 +244,11 @@ export async function handleRequest(
         if (!thread) { jsonError(res, 404, "Thread not found"); return; }
         const bot = getBot(thread.botId);
         if (!bot) { jsonError(res, 404, "Bot not found"); return; }
-        repoPath = thread.repoPath;
-        agent = threadAgent(thread, bot);
-        if (!availableAgents.includes(agent)) {
-          jsonError(res, 400, `${bot.name} runs on ${agent}, which is not installed on this machine`, {
-            agentUnavailable: agent,
-          });
-          return;
-        }
+        const turn = resolveThreadTurn(thread, bot, { model, permissionMode, mode }, availableAgents);
+        if (!turn.ok) { jsonError(res, turn.status, turn.message, turn.extra); return; }
+        ({ repoPath, agent, model, permissionMode, mode, preset: botPreset } = turn);
         if (thread.agent !== agent) updateThread(threadId, { agent });
         existingId = thread.sdkSessionId ?? undefined;
-        model = model ?? bot.model;
-        // Bot presets speak their own vocabulary ("auto-approve", "plan"); the
-        // session speaks PermissionMode. Translate, or nothing auto-approves.
-        const botPermission = botPermissionToSession(bot.permissionMode, agent);
-        permissionMode = permissionMode ?? botPermission.permissionMode;
-        mode = mode ?? botPermission.mode;
-        const isSetup = thread.kind === "setup";
-        // Work waits on setup; the setup thread itself is exempt, since it is
-        // the thing that clears the block.
-        if (!isSetup && botNeedsSetup(bot)) {
-          jsonError(res, 409, `${bot.name} still needs to set up this machine`, {
-            setupRequired: true,
-            setupThreadId: bot.setupThreadId,
-          });
-          return;
-        }
-        botPreset = {
-          id: bot.id,
-          name: bot.name,
-          instructions: bot.instructions,
-          // The allow-list fences the bot's work. Its setup run prepares the
-          // machine, which can need tools the job itself never uses.
-          allowedTools: isSetup ? undefined : bot.allowedTools,
-          disallowedTools: bot.disallowedTools,
-          ...(isSetup ? { setup: true, setupInstructions: bot.setupInstructions } : {}),
-        };
       }
 
       if (!repoPath) { jsonError(res, 400, "repoPath is required"); return; }
@@ -306,6 +274,12 @@ export async function handleRequest(
           jsonError(res, 409, "Session is already running");
           return;
         }
+        // A Jarvis session's settings are fixed by its thread; a bare /chat
+        // must not reach in and change them.
+        if (!threadId && store.botPreset?.jarvis) {
+          jsonError(res, 400, "Jarvis turns need a threadId");
+          return;
+        }
         store.status = "running";
         notifyPermissionsChanged();
         store.events = [];
@@ -313,6 +287,7 @@ export async function handleRequest(
         if (model) store.model = model;
         if (mode) store.mode = mode;
         if (permissionMode) store.permissionMode = permissionMode as PermissionMode;
+        if (botPreset?.jarvis) { store.model = undefined; store.mode = undefined; }
         if (threadId) { store.threadId = threadId; store.botPreset = botPreset; }
         emitEvent(store, 'user_prompt', { prompt: prompt ?? '', ...(attachments?.length ? { attachments } : {}) });
       } else {
@@ -422,6 +397,11 @@ export async function handleRequest(
       if (!store) { jsonError(res, 404, "Session not found"); return; }
 
       const body = await readBody(req);
+      // Jarvis always runs in auto-approve; its mode is not the client's to change.
+      if (store.botPreset?.jarvis && (body.permissionMode !== undefined || body.mode !== undefined)) {
+        jsonError(res, 409, "Jarvis always runs in auto-approve; its permission mode cannot be changed");
+        return;
+      }
       if (body.permissionMode !== undefined) {
         const valid: PermissionMode[] = ["ask-permissions", "allow-all-edits", "yolo"];
         if (!valid.includes(body.permissionMode)) {

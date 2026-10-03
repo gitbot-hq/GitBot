@@ -15,6 +15,9 @@ export type BotAgent = (typeof BOT_AGENTS)[number];
 /** Bots and threads saved before the field existed all ran on Claude Code. */
 export const DEFAULT_BOT_AGENT: BotAgent = "claude-code";
 
+/** What a built-in bot is: Jarvis, or the plain bot for one agent. */
+export type BuiltinKind = BotAgent | "jarvis";
+
 export function isBotAgent(value: unknown): value is BotAgent {
   return typeof value === "string" && (BOT_AGENTS as readonly string[]).includes(value);
 }
@@ -29,10 +32,11 @@ export interface Bot {
   /** The harness this bot runs on. Undefined on older records: Claude Code. */
   agent?: BotAgent;
   /**
-   * Set on bots defined in code rather than stored: the agent a plain agent bot
-   * runs. Built-in bots are not in bots.json and cannot be edited or deleted.
+   * Set on bots defined in code rather than stored: "jarvis" for Jarvis, or the
+   * agent a plain agent bot runs. Built-in bots are not in bots.json and cannot
+   * be edited or deleted.
    */
-  builtin?: BotAgent;
+  builtin?: BuiltinKind;
   /**
    * What this bot needs on a machine before it can work — "ffmpeg must be on
    * PATH", "run npm install in the repo". Travels with the bot when shared, and
@@ -158,8 +162,43 @@ export function plainAgentBots(installedAgents: readonly string[]): Bot[] {
   return PLAIN_AGENT_ORDER.filter((a) => installedAgents.includes(a)).map(plainAgentBot);
 }
 
+export const JARVIS_BOT_ID = "builtin-jarvis";
+
+/**
+ * Jarvis, the manager bot. Its prompt and tools live in code (see jarvis.ts),
+ * not in instructions; it always runs Claude Code on the default model, in
+ * auto-approve, in its own folder under the data dir.
+ */
+function jarvisBot(): Bot {
+  return {
+    id: JARVIS_BOT_ID,
+    name: "Jarvis",
+    description: "Tell it what you want done; it works out which bot or agent should do it.",
+    emoji: "🎩",
+    instructions: "",
+    agent: "claude-code",
+    builtin: "jarvis",
+    permissionMode: "auto-approve",
+    createdAt: BUILTIN_EPOCH,
+    updatedAt: BUILTIN_EPOCH,
+  };
+}
+
+/** True for Jarvis's bot. */
+export function isJarvisBot(bot: Pick<Bot, "builtin"> | undefined): boolean {
+  return bot?.builtin === "jarvis";
+}
+
+/** Where every Jarvis thread runs, whatever folder anyone asks for. Made on demand. */
+export function jarvisDir(): string {
+  const dir = join(DATA_DIR, "jarvis");
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 /** The built-in bot with this id, its agent installed here or not. */
 function builtinBot(id: string): Bot | undefined {
+  if (id === JARVIS_BOT_ID) return jarvisBot();
   const agent = PLAIN_AGENT_ORDER.find((a) => plainAgentBot(a).id === id);
   return agent ? plainAgentBot(agent) : undefined;
 }
@@ -175,7 +214,13 @@ export function isBuiltinBot(id: string): boolean {
  * older threads without one inherit the bot's.
  */
 export function threadAgent(thread: Pick<Thread, "agent">, bot: Pick<Bot, "agent" | "builtin">): BotAgent {
-  return bot.builtin ?? thread.agent ?? bot.agent ?? DEFAULT_BOT_AGENT;
+  if (bot.builtin) return builtinAgent(bot.builtin);
+  return thread.agent ?? bot.agent ?? DEFAULT_BOT_AGENT;
+}
+
+/** The agent a built-in bot is pinned to: Jarvis runs Claude Code in v1. */
+export function builtinAgent(builtin: BuiltinKind): BotAgent {
+  return builtin === "jarvis" ? "claude-code" : builtin;
 }
 
 // --- Bots ---
@@ -190,10 +235,14 @@ function readStoredBots(): Bot[] {
     .map(({ builtin: _builtin, ...bot }) => bot);
 }
 
-/** The user's bots by name, then the built-in bots for the installed agents. */
+/**
+ * Jarvis first (while Claude Code, which it runs on, is installed), then the
+ * user's bots by name, then the built-in bots for the installed agents.
+ */
 export function listBots(installedAgents: readonly string[]): Bot[] {
   const stored = readStoredBots().sort((a, b) => a.name.localeCompare(b.name));
-  return [...stored, ...plainAgentBots(installedAgents)];
+  const jarvis = installedAgents.includes("claude-code") ? [jarvisBot()] : [];
+  return [...jarvis, ...stored, ...plainAgentBots(installedAgents)];
 }
 
 /**

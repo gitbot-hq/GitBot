@@ -5,6 +5,9 @@ import {
   parseQuery,
   IRequest,
   IResponse,
+  botPermissionToSession,
+  type BotPreset,
+  type PermissionMode,
 } from "./server-common";
 import {
   listBots,
@@ -22,8 +25,14 @@ import {
   setSetupStatus,
   isBotAgent,
   isBuiltinBot,
+  isJarvisBot,
+  jarvisDir,
+  builtinAgent,
+  threadAgent,
   BOT_AGENTS,
   type Bot,
+  type BotAgent,
+  type Thread,
 } from "./bot-store";
 import { existsSync, statSync } from "fs";
 import { loadTranscript } from "./start-claude-code";
@@ -141,8 +150,9 @@ export async function handleBotRoutes(
       const bot = body.botId ? getBot(body.botId) : undefined;
       if (!bot) { jsonError(res, 400, "a valid botId is required"); return true; }
       // A thread runs where it is told to: the folder the user picked, else the
-      // bot's default, else the directory the CLI was started in.
-      const repoPath = body.repoPath ?? bot.repoPath ?? workspaceCwd;
+      // bot's default, else the directory the CLI was started in. Jarvis is the
+      // exception: it always works in its own folder, whatever was asked for.
+      const repoPath = isJarvisBot(bot) ? jarvisDir() : body.repoPath ?? bot.repoPath ?? workspaceCwd;
       if (!existsSync(repoPath) || !statSync(repoPath).isDirectory()) {
         jsonError(res, 400, `Not a directory: ${repoPath}`);
         return true;
@@ -161,13 +171,15 @@ export async function handleBotRoutes(
         });
         return true;
       }
-      // A plain agent bot is its agent; its threads cannot run on another,
-      // and there is no thread to make while that agent is missing here.
-      if (bot.builtin && !availableAgents.includes(bot.builtin)) {
-        jsonError(res, 400, `${bot.name} is not installed on this machine`, { agentUnavailable: bot.builtin });
+      // A built-in bot is pinned to its agent; its threads cannot run on
+      // another, and there is no thread to make while that agent is missing.
+      const pinned = bot.builtin ? builtinAgent(bot.builtin) : undefined;
+      if (pinned && !availableAgents.includes(pinned)) {
+        const what = isJarvisBot(bot) ? `${bot.name} needs ${pinned}, which is` : `${bot.name} is`;
+        jsonError(res, 400, `${what} not installed on this machine`, { agentUnavailable: pinned });
         return true;
       }
-      const agent = bot.builtin ?? body.agent;
+      const agent = pinned ?? body.agent;
       jsonOk(res, { thread: createThread(bot.id, repoPath, body.title, "chat", agent) });
       return true;
     }
@@ -200,6 +212,12 @@ export async function handleBotRoutes(
     }
     if (method === "PATCH") {
       const body = await readBody(req);
+      // A Jarvis thread's folder, agent, kind and session are not the caller's
+      // to change.
+      const existing = getThread(threadId);
+      if (existing && isJarvisBot(getBot(existing.botId))) {
+        for (const key of ["repoPath", "agent", "kind", "sdkSessionId"]) delete body[key];
+      }
       const thread = updateThread(threadId, body);
       if (!thread) { jsonError(res, 404, "Thread not found"); return true; }
       jsonOk(res, { thread });
@@ -217,6 +235,84 @@ export async function handleBotRoutes(
   }
 
   return false;
+}
+
+/** What a hub thread's turn runs with, or why it cannot run. */
+export type ThreadTurn =
+  | {
+      ok: true;
+      repoPath: string;
+      agent: BotAgent;
+      model?: string;
+      permissionMode: PermissionMode;
+      mode?: "plan" | "build";
+      preset: BotPreset;
+    }
+  | { ok: false; status: number; message: string; extra?: Record<string, unknown> };
+
+/**
+ * How /chat runs a turn on a hub thread: the thread supplies the folder and
+ * agent, the bot its preset, and the request may override model and
+ * permissions. Jarvis is fixed — its folder, the default model and
+ * auto-approve, whatever the thread record or the request says.
+ */
+export function resolveThreadTurn(
+  thread: Thread,
+  bot: Bot,
+  body: { model?: string; permissionMode?: PermissionMode; mode?: "plan" | "build" },
+  availableAgents: readonly string[],
+): ThreadTurn {
+  const agent = threadAgent(thread, bot);
+  if (!availableAgents.includes(agent)) {
+    return {
+      ok: false,
+      status: 400,
+      message: `${bot.name} runs on ${agent}, which is not installed on this machine`,
+      extra: { agentUnavailable: agent },
+    };
+  }
+  const isSetup = thread.kind === "setup";
+  // Work waits on setup; the setup thread itself is exempt, since it is
+  // the thing that clears the block.
+  if (!isSetup && botNeedsSetup(bot)) {
+    return {
+      ok: false,
+      status: 409,
+      message: `${bot.name} still needs to set up this machine`,
+      extra: { setupRequired: true, setupThreadId: bot.setupThreadId },
+    };
+  }
+  const preset: BotPreset = {
+    id: bot.id,
+    name: bot.name,
+    instructions: bot.instructions,
+    // The allow-list fences the bot's work. Its setup run prepares the
+    // machine, which can need tools the job itself never uses.
+    allowedTools: isSetup ? undefined : bot.allowedTools,
+    disallowedTools: bot.disallowedTools,
+    ...(isSetup ? { setup: true, setupInstructions: bot.setupInstructions } : {}),
+  };
+  if (isJarvisBot(bot) && !isSetup) {
+    return {
+      ok: true,
+      repoPath: jarvisDir(),
+      agent,
+      permissionMode: "yolo",
+      preset: { ...preset, jarvis: { availableAgents } },
+    };
+  }
+  // Bot presets speak their own vocabulary ("auto-approve", "plan"); the
+  // session speaks PermissionMode. Translate, or nothing auto-approves.
+  const botPermission = botPermissionToSession(bot.permissionMode, agent);
+  return {
+    ok: true,
+    repoPath: thread.repoPath,
+    agent,
+    model: body.model ?? bot.model,
+    permissionMode: body.permissionMode ?? botPermission.permissionMode,
+    mode: body.mode ?? botPermission.mode,
+    preset,
+  };
 }
 
 /** Extracts a single path segment: matchId("/bots/abc", "/bots/") -> "abc". */

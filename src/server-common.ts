@@ -254,6 +254,11 @@ export interface BotPreset {
   setupInstructions?: string;
   /** True while this run is the machine-preparation run rather than the bot's job. */
   setup?: boolean;
+  /**
+   * Set only on a Jarvis thread: what its tools need to know. Its presence is
+   * what gets the session Jarvis's prompt and its gitbot tool server.
+   */
+  jarvis?: { availableAgents: readonly string[] };
 }
 
 export const sessions = new Map<string, SessionStore>();
