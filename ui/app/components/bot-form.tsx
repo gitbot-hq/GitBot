@@ -344,7 +344,7 @@ export default function BotForm({
           <div className="studio-preview">
             <BotFace mascot={mascot} size={112} color={color} ambient={false} follow />
             <b>{name.trim() || "Name your bot"}</b>
-            <small>{description.trim() || "One line about what it does"}</small>
+            <small>{description.trim() || "When to use it, and what it does"}</small>
           </div>
           <p className="pick-label">Mascot</p>
           <div className="pick-grid" role="radiogroup" aria-label="Mascot">
@@ -379,7 +379,7 @@ export default function BotForm({
           </div>
         </div>
         <div className="studio-main">
-        <Field label="Name" tip="say what it does — often all that's seen when picking a bot">
+        <Field label="Name" tip="plain and descriptive, like PR Validator; often the only thing seen when picking a bot">
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -387,7 +387,7 @@ export default function BotForm({
             aria-label="Name"
           />
         </Field>
-          <Field label="Description" tip="one line on when to use it: what it does and what it won't touch">
+          <Field label="Description" tip="when to use this bot: what it does and what it won't touch">
             <input
               value={description}
               onChange={(e) => setDescription(e.target.value)}

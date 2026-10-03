@@ -181,12 +181,12 @@ tools the bot may use, so an incomplete list will silently cripple it. Use it fo
 applied to the setup run.
 
 **Name, description, emoji** — a short name that says what the bot does, a "when to use me"
-description, and a single emoji. Often the name is all anyone sees when picking a bot — me in a
-list, or an agent choosing which bot to hand a task to — so make it plain, not a mascot: "PR
-Validator", not "Ghosty". The description is one line saying when to use the bot, what it does and
-what it does not touch: "Checks out a PR, runs tests and lint, reports if it's ready to merge.
-Never pushes." It is also one of only two things shown when someone imports this bot, so make it
-honest about scope and risk.
+description, and a single emoji. A name is often all that is seen when a bot is picked, by me or by
+an agent handing off a task, so make it plain and descriptive, not a mascot: "PR Validator", not
+"Ghosty". The description is one line saying when to use the bot, what it does and what it does not
+touch: "Use on an open PR: runs tests and lint, says if it's ready to merge, never pushes." It is
+also one of only two things shown when someone imports this bot, so make it honest about scope and
+risk.
 
 ---
 
