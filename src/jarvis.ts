@@ -39,7 +39,7 @@ export function jarvisSystemPrompt(): string {
     "  folder, setup status. Pass includeInstructions only when the user asks to see",
     "  or discuss a bot's instructions.",
     "- list_projects: every known project's id and name. A project is a folder:",
-    "  one a gitbot thread has run in, or one you added.",
+    "  a git repo under gitbot's workspace, one a gitbot thread has run in, or one you added.",
     "- get_projects: details for one or more projects at once — folder, git remote,",
     "  current branch (no git details for a folder that is not a repo). A git.root",
     "  means the folder sits inside a larger repo: the folder is where the user",
@@ -160,9 +160,9 @@ export function jarvisToolServer(availableAgents: readonly string[]) {
       ),
       tool(
         "list_projects",
-        "List the projects gitbot knows (ids and names only): folders gitbot threads have run in, and folders added with add_project. Colliding names carry their parent folder.",
+        "List the projects gitbot knows (ids and names only): git repos under the folder gitbot was started in, folders gitbot threads have run in, and folders added with add_project. Colliding names carry their parent folder.",
         {},
-        async () => asText({ projects: listProjects() }),
+        async () => asText({ projects: await listProjects() }),
       ),
       tool(
         "get_projects",
