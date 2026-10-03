@@ -109,10 +109,17 @@ GitBot/
 │   ├── workspace.ts          # Repo listing, file browser, git details, clone
 │   └── static-ui.ts          # Serves the built web UI
 ├── ui/                       # Web UI source (Next.js static export) — not published
+├── test/                     # node:test suites, run with `npm test` — not published
 ├── scripts/build-ui.mjs      # Builds ui/ and copies the export into dist/ui
 ├── docs/                     # API reference and this document
 └── dist/                     # Build output — the only thing published to npm
 ```
+
+## Tests
+
+`npm test` runs every `test/*.test.ts` with Node's built-in `node:test`, through `tsx` — no other framework. Tests live outside `src/`, so `tsc` neither checks nor emits them.
+
+Every test file imports `./temp-data-dir` first. It points `GITBOT_DATA_DIR` at a fresh temp directory before `bot-store` loads (the store reads it once, at import) and removes it on exit, so a test run never touches your real `~/.gitbot`.
 
 ## Tech stack
 

@@ -185,7 +185,7 @@ For implementation details, see the [API reference](docs/API.md), [architecture 
 
 ## Contribute
 
-GitBot is open source. For more than a small fix, [open an issue](https://github.com/gitbot-hq/GitBot/issues) first. Keep the change focused, run the build and TypeScript checks, and describe the behavior you tested in your pull request.
+GitBot is open source. For more than a small fix, [open an issue](https://github.com/gitbot-hq/GitBot/issues) first. Keep the change focused, run the build, TypeScript checks and `npm test`, and describe the behavior you tested in your pull request.
 
 <br><br><br>
 
