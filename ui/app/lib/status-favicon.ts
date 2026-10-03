@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { titled, untitled } from "./tab-title";
 
 // Tab alerts for bot status: swaps <link rel="icon"> hrefs to pre-made
 // notification SVGs (mascot + colored dot) and sets a standout title
@@ -53,7 +54,7 @@ function restore() {
   }
   originals.clear();
   if (originalTitle !== null) {
-    document.title = originalTitle;
+    document.title = titled(originalTitle);
     originalTitle = null;
   }
 }
@@ -61,10 +62,10 @@ function restore() {
 function settleTitle(status: Status) {
   if (originalTitle === null) return;
   if (status === "idle" || !document.hidden) {
-    document.title = originalTitle;
+    document.title = titled(originalTitle);
     if (status === "idle") originalTitle = null;
   } else {
-    document.title = `● ${LABELS[status]} · ${originalTitle}`;
+    document.title = titled(`● ${LABELS[status]} · ${originalTitle}`);
   }
 }
 
@@ -109,7 +110,7 @@ export function useStatusFavicon(signal: FaviconSignal) {
       const variant = themeVariant(orig);
       link.href = NOTIF[effective][variant];
     }
-    if (originalTitle === null) originalTitle = document.title;
+    if (originalTitle === null) originalTitle = untitled(document.title);
     settleTitle(effective);
     const onVis = () => settleTitle(effective);
     document.addEventListener("visibilitychange", onVis);

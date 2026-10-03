@@ -47,6 +47,7 @@ import {
   getSessionStatus,
   getThread,
   getThreads,
+  markThreadSeen,
   postAbort,
 } from "../lib/api";
 import { getAvatarPref, setAvatarPref, resolveAvatar, defaultMascotFor, type AvatarPref } from "../lib/avatar-prefs";
@@ -55,6 +56,9 @@ import { setupPrompt, type SetupRunKind } from "../lib/setup";
 import { useScrollEdge } from "../lib/use-scroll-edge";
 import { useThreadSessions } from "../lib/use-thread-sessions";
 import { approvalRows, type ChildApproval } from "../lib/approvals";
+import { attentionRows, hasNews, needsYouCount, needsYouLabel } from "../lib/attention";
+import { useAttentionTitle } from "../lib/tab-title";
+import { useTabVisible } from "../lib/use-tab-visible";
 import "../v2-theme.css";
 import "../onboarding/onboarding.css";
 
@@ -423,11 +427,15 @@ export default function V2() {
     return () => cleanups.forEach((cleanup) => cleanup());
   }, [botsLoading, visibleBots.length, bot?.id, threadsLoading, visibleThreads.length]);
 
-  const refreshThreads = useCallback((botId: string) => {
+  /** Reloads a bot's threads. `quiet`: a background re-read for the
+   *  attention signals, with no loading state. */
+  const refreshThreads = useCallback((botId: string, quiet = false) => {
     const seq = ++threadsSeq.current;
     const current = () => seq === threadsSeq.current && selectedRef.current === botId;
-    setThreadsLoading(true);
-    setThreadsError(null);
+    if (!quiet) {
+      setThreadsLoading(true);
+      setThreadsError(null);
+    }
     getThreads(botId)
       .then(({ threads: loaded }) => {
         if (!current()) return;
@@ -451,9 +459,10 @@ export default function V2() {
         });
       })
       .catch((e) => {
-        if (current()) setThreadsError(e instanceof Error ? e.message : "Failed to load threads");
+        if (current() && !quiet) setThreadsError(e instanceof Error ? e.message : "Failed to load threads");
       })
       .finally(() => {
+        // Even a quiet one: it may have overtaken a loud one still loading.
         if (current()) setThreadsLoading(false);
       });
   }, []);
@@ -529,6 +538,51 @@ export default function V2() {
   const chatApprovals = isJarvis && approvalLog && approvalLog.threadId === activeThread?.id
     ? approvalRows(approvalLog.rows, jarvisPending)
     : undefined;
+
+  // Attention signals (lib/attention.ts), all derived. "Needs you" is the
+  // stream's approvals, by Jarvis thread. "Has news" is the thread list's
+  // lastActivityAt > lastSeenAt; the server stamps a Jarvis turn's end
+  // before it broadcasts, so the list is re-read, quietly, whenever the
+  // stream shows a listed Jarvis thread start or end a turn or its children's
+  // approvals change, and whenever someone comes back to the tab (another
+  // device may have viewed a thread meanwhile).
+  const needsYou = needsYouCount(threadSessions.pendingApprovals);
+  useAttentionTitle(needsYou);
+  const refreshOnReturn = useCallback(() => {
+    if (selectedRef.current === JARVIS_BOT_ID) refreshThreads(JARVIS_BOT_ID, true);
+  }, [refreshThreads]);
+  const tabVisible = useTabVisible(refreshOnReturn);
+  const attentionKey = isJarvis
+    ? workThreads
+        .map((t) => {
+          const status = threadSessions.statuses[t.id];
+          const live = status === "running" || status === "awaiting_permissions";
+          return `${t.id}:${live ? 1 : 0}:${threadSessions.pendingApprovals?.[t.id]?.join(",") ?? ""}`;
+        })
+        .join("|")
+    : null;
+  const lastAttentionKey = useRef<string | null>(null);
+  useEffect(() => {
+    const before = lastAttentionKey.current;
+    lastAttentionKey.current = attentionKey;
+    if (attentionKey === null || before === null || before === attentionKey || !bot) return;
+    refreshThreads(bot.id, true);
+    // Only the key decides; bot is Jarvis whenever it is set.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attentionKey]);
+  // The open Jarvis thread, while the tab is visible, is being looked at:
+  // whatever news it has (a turn there just ended, here or elsewhere) is
+  // marked seen, which clears it on every device.
+  const viewing = isJarvis && tabVisible ? activeThread?.id ?? null : null;
+  const viewingHasNews = !!(viewing && activeThread && hasNews(activeThread));
+  useEffect(() => {
+    if (!viewing || !viewingHasNews) return;
+    markThreadSeen(viewing).then(
+      ({ thread }) => setThreads((prev) => prev.map((t) => (t.id === thread.id ? { ...t, lastSeenAt: thread.lastSeenAt } : t))),
+      () => {},
+    );
+  }, [viewing, viewingHasNews]);
+  const threadRows = attentionRows(visibleThreads, isJarvis ? threadSessions.pendingApprovals : null, viewing);
 
   // When the selected bot also appears in the empty chat panel, both
   // renderings act as one character: same pose and same pointer gaze.
@@ -881,6 +935,8 @@ export default function V2() {
   function botRow(b: Bot, i: number) {
     const setupPending = needsSetup(b);
     const mirrored = !setupPending && b.id === mirroredEmptyBotId;
+    // Jarvis says how many of its threads need you, whichever bot is selected.
+    const attentionLabel = b.builtin === "jarvis" ? needsYouLabel(needsYou) : null;
     return (
       <div className="bot-row-wrap" key={b.id}>
         <button
@@ -911,9 +967,11 @@ export default function V2() {
           </span>
           <span className="bot-row-text">
             <b>{b.name}</b>
-            <small>
+            <small className={attentionLabel ? "needs-you" : undefined}>
               <i aria-hidden="true" />
-              {b.id === bot?.id && activeLabel
+              {attentionLabel
+                ? attentionLabel
+                : b.id === bot?.id && activeLabel
                 ? activeLabel
                 : setupPending
                   ? pausedSetupIds[b.id]
@@ -1341,10 +1399,10 @@ export default function V2() {
                   ) : (
                     <>
                       {threadsError && <p className="threads-empty">{threadsError}</p>}
-                      {visibleThreads.map((t) => (
+                      {threadRows.map(({ thread: t, needsYou: rowNeedsYou, hasNews: rowHasNews, preview }) => (
                         <div
                           key={t.id}
-                          className={`${t.id === activeThread?.id ? "thread-row active" : "thread-row"}${threadSearchText ? "" : " msg-in"}`}
+                          className={`${t.id === activeThread?.id ? "thread-row active" : "thread-row"}${threadSearchText ? "" : " msg-in"}${rowNeedsYou ? " needs-you" : ""}${rowHasNews ? " has-news" : ""}`}
                           aria-current={t.id === activeThread?.id ? "true" : undefined}
                         >
                           <button
@@ -1356,7 +1414,18 @@ export default function V2() {
                               bot && setThreadByBot((prev) => ({ ...prev, [bot.id]: t.id }))
                             }
                           >
-                            <span className="thread-row-title">{t.title}</span>
+                            {(rowNeedsYou || rowHasNews) && (
+                              <span
+                                className={rowNeedsYou ? "thread-attn thread-attn-needs" : "thread-attn thread-attn-news"}
+                                role="img"
+                                aria-label={rowNeedsYou ? "Needs you" : "New activity"}
+                                title={rowNeedsYou ? "Needs you" : "New activity"}
+                              />
+                            )}
+                            <span className="thread-row-copy">
+                              <span className="thread-row-title">{t.title}</span>
+                              {isJarvis && preview && <span className="thread-row-preview">{preview}</span>}
+                            </span>
                             {t.id === activeThread?.id && <AnimatedActionIcon icon={CheckIcon} className="thread-selected-mark" size={16} aria-hidden="true" />}
                           </button>
                           <button

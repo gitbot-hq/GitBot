@@ -32,6 +32,7 @@ import { watchChildReports } from "./reports";
 import { noteChildStopped } from "./child-lock";
 import { answerChildApproval, watchChildApprovals } from "./child-approvals";
 import { recoverInterruptedChildren, watchRunningMarks } from "./restart-recovery";
+import { watchJarvisActivity } from "./attention";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
 import { uiFileFor } from "./static-ui";
 
@@ -422,6 +423,8 @@ export async function start(network: string = "local", portOverride?: number, ca
   // approvals show as rows in that Jarvis thread meanwhile.
   watchChildReports(availableAgents);
   watchChildApprovals();
+  // A Jarvis turn ending is news on its thread until someone views it.
+  watchJarvisActivity();
 
   const { server, caffeinatePid } = await createHttpServer({
     portOverride,

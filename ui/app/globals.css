@@ -4481,3 +4481,51 @@ button.file-chip:hover {
 .approval-row-review:hover {
   text-decoration: underline;
 }
+
+/* Attention signals: an amber marker where a child waits on an approval,
+   a dot where a turn ended since the thread was last viewed. */
+.thread-row-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.thread-row-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.thread-row.needs-you .thread-row-preview {
+  color: var(--text);
+}
+
+.thread-attn {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.thread-attn-needs {
+  background: var(--brand-honey);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-honey) 25%, transparent);
+}
+
+.thread-attn-news {
+  background: var(--brand-sky);
+}
+
+.thread-row.has-news .thread-row-title {
+  font-weight: 600;
+}
+
+.bot-row-text small.needs-you {
+  color: var(--text);
+}
+
+.bot-row-text small.needs-you i {
+  background: var(--brand-honey);
+}

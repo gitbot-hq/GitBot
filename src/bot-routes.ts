@@ -20,6 +20,7 @@ import {
   createThread,
   updateThread,
   deleteThread,
+  markThreadSeen,
   botNeedsSetup,
   ensureSetupThread,
   setSetupStatus,
@@ -193,6 +194,16 @@ export async function handleBotRoutes(
     return true;
   }
 
+  // Viewed: clears "has news" on every device. Not an edit, so the thread
+  // keeps its place in the list.
+  const seenId = matchId(path, "/threads/", "/seen");
+  if (seenId && method === "POST") {
+    const thread = markThreadSeen(seenId);
+    if (!thread) { jsonError(res, 404, "Thread not found"); return true; }
+    jsonOk(res, { thread });
+    return true;
+  }
+
   const threadId = matchId(path, "/threads/");
   if (threadId) {
     if (method === "GET") {
@@ -206,9 +217,9 @@ export async function handleBotRoutes(
       // A Jarvis thread's folder, agent, kind and session are not the caller's
       // to change.
       const existing = getThread(threadId);
-      // Ownership, a Stop's note, the running marker and approval rows are
-      // gitbot's to set, on any thread.
-      for (const key of ["reportTo", "pendingNote", "runningFor", "approvals"]) delete body[key];
+      // Ownership, a Stop's note, the running marker, approval rows and the
+      // attention stamps are gitbot's to set, on any thread.
+      for (const key of ["reportTo", "pendingNote", "runningFor", "approvals", "lastActivityAt", "lastSeenAt"]) delete body[key];
       if (existing && isJarvisBot(getBot(existing.botId))) {
         for (const key of ["repoPath", "agent", "kind", "sdkSessionId"]) delete body[key];
       }

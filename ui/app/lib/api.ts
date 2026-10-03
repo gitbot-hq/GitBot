@@ -173,6 +173,13 @@ export function deleteThread(id: string) {
   });
 }
 
+/** Marks a thread viewed, clearing its "has news" on every device. */
+export function markThreadSeen(id: string) {
+  return req<{ thread: import("./gitbot").ThreadFull }>(`/threads/${encodeURIComponent(id)}/seen`, {
+    method: "POST",
+  });
+}
+
 export function botSetupAction(id: string, action: "complete" | "reset" | "fail") {
   return req<{ bot: import("./gitbot").Bot; setupThread?: unknown }>(
     `/bots/${encodeURIComponent(id)}/setup`,

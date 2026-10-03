@@ -52,6 +52,10 @@ export type ThreadFull = Thread & {
   reportTo?: string;
   // Jarvis threads: the approvals its children asked for, as gitbot's rows.
   approvals?: import("./approvals").ChildApproval[];
+  // Jarvis threads: when a turn last ended, and when it was last viewed.
+  // Has news while the first is later (lib/attention.ts).
+  lastActivityAt?: string;
+  lastSeenAt?: string;
   createdAt: string;
   updatedAt: string;
 };

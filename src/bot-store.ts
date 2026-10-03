@@ -102,6 +102,13 @@ export interface Thread {
    * interrupted (restart-recovery.ts).
    */
   runningFor?: RunningMark;
+  /**
+   * Jarvis threads only: when a turn here last ended. Not updatedAt, which
+   * renames and other edits bump too. Has news while it is past lastSeenAt.
+   */
+  lastActivityAt?: string;
+  /** When someone last viewed the thread (POST /threads/:id/seen), on any device. */
+  lastSeenAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -484,6 +491,30 @@ export function setThreadApprovals(id: string, edit: (rows: ChildApproval[]) => 
   if (!thread) return;
   thread.approvals = edit(thread.approvals ?? []);
   writeCollection(THREADS_FILE, threads);
+}
+
+/**
+ * Records that a turn on a thread ended: lastActivityAt, and the preview
+ * when the turn said something. Attention, not an edit: updatedAt stays.
+ */
+export function setThreadActivity(id: string, at: string, preview?: string): Thread | undefined {
+  const threads = readCollection<Thread>(THREADS_FILE);
+  const thread = threads.find((t) => t.id === id);
+  if (!thread) return undefined;
+  thread.lastActivityAt = at;
+  if (preview) thread.preview = preview;
+  writeCollection(THREADS_FILE, threads);
+  return thread;
+}
+
+/** Marks a thread viewed now. Not an edit: updatedAt stays. */
+export function markThreadSeen(id: string, at: string = now()): Thread | undefined {
+  const threads = readCollection<Thread>(THREADS_FILE);
+  const thread = threads.find((t) => t.id === id);
+  if (!thread) return undefined;
+  thread.lastSeenAt = at;
+  writeCollection(THREADS_FILE, threads);
+  return thread;
 }
 
 /**
