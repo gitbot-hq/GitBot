@@ -552,8 +552,8 @@ export function appendNote(existing: string | undefined, note: string): string {
 
 /**
  * Settles the marks a gone gitbot process left behind, in one write: each
- * one's Jarvis thread gets note(thread) appended to its pendingNote, and the
- * mark is cleared. A mark held by another live gitbot on the same data dir
+ * one's Jarvis thread gets note(thread) appended to its pendingNote and has
+ * news (lastActivityAt), and the mark is cleared. A mark held by another live gitbot on the same data dir
  * is still running, so it is left alone. Returns the threads settled.
  */
 export function settleRunningMarks(
@@ -568,7 +568,11 @@ export function settleRunningMarks(
     try {
       if (mark.pid !== process.pid && isAlive(mark.pid)) continue;
       const owner = threads.find((t) => t.id === mark.owner);
-      if (owner) owner.pendingNote = appendNote(owner.pendingNote, note(thread));
+      if (owner) {
+        owner.pendingNote = appendNote(owner.pendingNote, note(thread));
+        // News on the Jarvis thread: its child stopped, though no turn ended there.
+        owner.lastActivityAt = now();
+      }
       delete thread.runningFor;
       settled.push(thread.id);
     } catch (err: any) {

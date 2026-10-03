@@ -1,24 +1,37 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+
+/** Someone is looking at this tab: it is shown and its window has focus. */
+function lookedAt(): boolean {
+  return !document.hidden && document.hasFocus();
+}
 
 /**
- * Whether this tab is visible. `onReturn` runs each time someone comes back
- * to it: the tab shown again, or its window focused.
+ * Whether someone is looking at this tab: shown, and its window focused (a
+ * browser left open in the background is not being read). `onReturn` runs
+ * once each time that starts again, however many events say so.
  */
 export function useTabVisible(onReturn?: () => void): boolean {
   const [visible, setVisible] = useState(true);
+  const last = useRef<boolean | null>(null);
+  const returned = useRef(onReturn);
+  returned.current = onReturn;
   useEffect(() => {
     const update = () => {
-      const now = !document.hidden;
+      const now = lookedAt();
+      const before = last.current;
+      last.current = now;
       setVisible(now);
-      if (now) onReturn?.();
+      if (now && before === false) returned.current?.();
     };
-    setVisible(!document.hidden);
+    update();
     document.addEventListener("visibilitychange", update);
     window.addEventListener("focus", update);
+    window.addEventListener("blur", update);
     return () => {
       document.removeEventListener("visibilitychange", update);
       window.removeEventListener("focus", update);
+      window.removeEventListener("blur", update);
     };
-  }, [onReturn]);
+  }, []);
   return visible;
 }

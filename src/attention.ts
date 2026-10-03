@@ -13,7 +13,9 @@ import { isShuttingDown, onTurnEnd, type EndedTurn } from "./server-common";
 export function latestLine(message: string, cap = 140): string {
   const line = message
     .split("\n")
-    .map((l) => l.replace(/^\s*(?:#+|[-*>]|\d+\.)\s+/, "").replace(/[*_`]{2,}/g, "").trim())
+    // Code fences and horizontal rules say nothing on their own.
+    .filter((l) => !/^\s*(?:```|~~~)/.test(l) && !/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(l))
+    .map((l) => l.replace(/^\s*#+\s*/, "").replace(/^\s*(?:[-*>]|\d+\.)\s+/, "").replace(/[*_`]{2,}/g, "").trim())
     .find(Boolean);
   return line ? line.slice(0, cap) : "";
 }

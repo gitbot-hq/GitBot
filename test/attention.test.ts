@@ -4,7 +4,9 @@ import { EventEmitter } from "events";
 import { mkdtempSync, realpathSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { createBot, createThread, getThread, JARVIS_BOT_ID, jarvisDir } from "../src/bot-store";
+import { createBot, createThread, getThread, JARVIS_BOT_ID, jarvisDir, setRunningFor } from "../src/bot-store";
+import { recoverInterruptedChildren } from "../src/restart-recovery";
+import { coalesce } from "../ui/app/lib/coalesce";
 import { latestLine, watchJarvisActivity } from "../src/attention";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
@@ -108,6 +110,33 @@ test("a preview is the opening line of what the turn said", () => {
   assert.equal(latestLine("\n\n- **All green** on Trophy"), "All green on Trophy");
   assert.equal(latestLine(""), "");
   assert.equal(latestLine("x".repeat(300)).length, 140);
+  // Fences and rules are skipped; a heading marker goes, with or without a space.
+  assert.equal(latestLine("```ts\nconst a = 1;\n```"), "const a = 1;");
+  assert.equal(latestLine("---\n***\n___\n- - -\nTests pass."), "Tests pass.");
+  assert.equal(latestLine("~~~\n#Summary"), "Summary");
+  assert.equal(latestLine("```\n```\n---"), "");
+});
+
+test("quiet refreshes coalesce: one per burst, one trailing run while one is in flight", async () => {
+  let runs = 0;
+  let release: () => void = () => {};
+  const refresh = coalesce(() => {
+    runs++;
+    return new Promise<void>((r) => { release = r; });
+  }, 10);
+  // A burst (visibilitychange and focus together, a status change) is one run.
+  refresh(); refresh(); refresh();
+  await pause(25);
+  assert.equal(runs, 1);
+  // Calls while it is in flight make exactly one more run, after it ends.
+  refresh(); await pause(15); refresh(); await pause(15);
+  assert.equal(runs, 1);
+  release();
+  await pause(25);
+  assert.equal(runs, 2);
+  release();
+  await pause(25);
+  assert.equal(runs, 2);
 });
 
 // --- UI derivation from a fixed snapshot (pure) ---
@@ -224,6 +253,20 @@ test("a turn our shutdown killed is not news", async () => {
     setShuttingDown(false);
   }
   assert.equal(getThread(jarvis.id)!.lastActivityAt, undefined);
+});
+
+test("a child a restart interrupted is news on its Jarvis thread", () => {
+  const jarvis = createThread(JARVIS_BOT_ID, jarvisDir(), undefined, "chat", "claude-code");
+  const bot = createBot({ name: "Interrupted", agent: "claude-code" });
+  const child = createThread(bot.id, realpathSync(mkdtempSync(join(tmpdir(), "gitbot-int-"))), undefined, "chat", "claude-code");
+  setRunningFor(child.id, jarvis.id);
+  const listedAt = getThread(jarvis.id)!.updatedAt;
+  // (An earlier test may leave its own child marked too.)
+  assert.ok(recoverInterruptedChildren(() => false).includes(child.id));
+  const after = getThread(jarvis.id)!;
+  assert.ok(after.lastActivityAt);
+  assert.equal(hasNews(after), true);
+  assert.equal(after.updatedAt, listedAt);
 });
 
 test("seen clears has news, keeps the list order, and a client cannot forge either stamp", async () => {

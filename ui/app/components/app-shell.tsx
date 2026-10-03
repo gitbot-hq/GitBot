@@ -59,6 +59,7 @@ import { approvalRows, type ChildApproval } from "../lib/approvals";
 import { attentionRows, hasNews, needsYouCount, needsYouLabel } from "../lib/attention";
 import { useAttentionTitle } from "../lib/tab-title";
 import { useTabVisible } from "../lib/use-tab-visible";
+import { coalesce } from "../lib/coalesce";
 import "../v2-theme.css";
 import "../onboarding/onboarding.css";
 
@@ -144,6 +145,8 @@ export default function V2() {
   selectedRef.current = selectedId;
   // Thread-list loads: only the latest one for the selected bot lands.
   const threadsSeq = useRef(0);
+  // The seq of a loud (loading-state) load still in flight, if any.
+  const loudLoad = useRef<number | null>(null);
   // Threads made by a first send that a load may not include yet (it was
   // asked for before they existed); merged in until a load has them.
   const createdThreads = useRef<ThreadFull[]>([]);
@@ -429,14 +432,18 @@ export default function V2() {
 
   /** Reloads a bot's threads. `quiet`: a background re-read for the
    *  attention signals, with no loading state. */
-  const refreshThreads = useCallback((botId: string, quiet = false) => {
+  const refreshThreads = useCallback((botId: string, quiet = false): Promise<void> => {
+    // A loud load already on its way brings the list; a quiet one would
+    // only overtake it.
+    if (quiet && loudLoad.current !== null) return Promise.resolve();
     const seq = ++threadsSeq.current;
     const current = () => seq === threadsSeq.current && selectedRef.current === botId;
     if (!quiet) {
+      loudLoad.current = seq;
       setThreadsLoading(true);
       setThreadsError(null);
     }
-    getThreads(botId)
+    return getThreads(botId)
       .then(({ threads: loaded }) => {
         if (!current()) return;
         const has = (t: ThreadFull) => loaded.some((l) => l.id === t.id);
@@ -462,7 +469,7 @@ export default function V2() {
         if (current() && !quiet) setThreadsError(e instanceof Error ? e.message : "Failed to load threads");
       })
       .finally(() => {
-        // Even a quiet one: it may have overtaken a loud one still loading.
+        if (loudLoad.current === seq) loudLoad.current = null;
         if (current()) setThreadsLoading(false);
       });
   }, []);
@@ -548,10 +555,11 @@ export default function V2() {
   // device may have viewed a thread meanwhile).
   const needsYou = needsYouCount(threadSessions.pendingApprovals);
   useAttentionTitle(needsYou);
-  const refreshOnReturn = useCallback(() => {
-    if (selectedRef.current === JARVIS_BOT_ID) refreshThreads(JARVIS_BOT_ID, true);
-  }, [refreshThreads]);
-  const tabVisible = useTabVisible(refreshOnReturn);
+  // One quiet re-read at a time, however many reasons arrive together.
+  const [quietRefresh] = useState(() =>
+    coalesce(() => (selectedRef.current === JARVIS_BOT_ID ? refreshThreads(JARVIS_BOT_ID, true) : Promise.resolve())),
+  );
+  const tabVisible = useTabVisible(quietRefresh);
   const attentionKey = isJarvis
     ? workThreads
         .map((t) => {
@@ -565,23 +573,28 @@ export default function V2() {
   useEffect(() => {
     const before = lastAttentionKey.current;
     lastAttentionKey.current = attentionKey;
-    if (attentionKey === null || before === null || before === attentionKey || !bot) return;
-    refreshThreads(bot.id, true);
-    // Only the key decides; bot is Jarvis whenever it is set.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attentionKey]);
-  // The open Jarvis thread, while the tab is visible, is being looked at:
+    // Not on the list arriving (from nothing, or from no threads): that is
+    // a load, not news.
+    if (!attentionKey || !before || before === attentionKey) return;
+    quietRefresh();
+  }, [attentionKey, quietRefresh]);
+  // The open Jarvis thread, while the tab is shown and focused, is being looked at:
   // whatever news it has (a turn there just ended, here or elsewhere) is
   // marked seen, which clears it on every device.
   const viewing = isJarvis && tabVisible ? activeThread?.id ?? null : null;
-  const viewingHasNews = !!(viewing && activeThread && hasNews(activeThread));
+  const viewingNews = viewing && activeThread && hasNews(activeThread) ? `${viewing}@${activeThread.lastActivityAt}` : null;
+  // The news last marked seen, so it is sent once; cleared on failure, so
+  // the next re-read of the list (a new activeThread) tries again.
+  const seenSent = useRef<string | null>(null);
   useEffect(() => {
-    if (!viewing || !viewingHasNews) return;
+    if (!viewing || !viewingNews || seenSent.current === viewingNews) return;
+    const sent = viewingNews;
+    seenSent.current = sent;
     markThreadSeen(viewing).then(
       ({ thread }) => setThreads((prev) => prev.map((t) => (t.id === thread.id ? { ...t, lastSeenAt: thread.lastSeenAt } : t))),
-      () => {},
+      () => { if (seenSent.current === sent) seenSent.current = null; },
     );
-  }, [viewing, viewingHasNews]);
+  }, [viewing, viewingNews, activeThread]);
   const threadRows = attentionRows(visibleThreads, isJarvis ? threadSessions.pendingApprovals : null, viewing);
 
   // When the selected bot also appears in the empty chat panel, both
@@ -970,7 +983,7 @@ export default function V2() {
             <small className={attentionLabel ? "needs-you" : undefined}>
               <i aria-hidden="true" />
               {attentionLabel
-                ? attentionLabel
+                ? b.id === bot?.id && activeLabel ? `${activeLabel} · ${attentionLabel}` : attentionLabel
                 : b.id === bot?.id && activeLabel
                 ? activeLabel
                 : setupPending
