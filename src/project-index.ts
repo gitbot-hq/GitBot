@@ -510,14 +510,6 @@ export async function getProjects(ids: readonly string[]): Promise<ProjectLookup
   );
 }
 
-/** One project's name and folder, without the git peek; undefined for an unknown id. */
-export function findProject(id: string): { id: string; name: string; folder: string } | undefined {
-  const { projects } = syncedIndex();
-  const entry = projects.find((p) => p.id === id);
-  if (!entry) return undefined;
-  return { id, name: displayNames(projects).get(id)!, folder: entry.path };
-}
-
 export type AddProjectResult =
   | { ok: true; project: ProjectListing; alreadyListed: boolean }
   | { ok: false; error: string };

@@ -2,12 +2,12 @@
 
 import AnimatedActionIcon from "./animated-action-icon";
 import { ChevronDownIcon } from "@animateicons/react/lucide/chevron-down-icon";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getThreads } from "../lib/api";
 import type { Bot, ThreadFull } from "../lib/gitbot";
 
-/** How often the list is re-read while open: Jarvis starts children mid-turn. */
-const POLL_MS = 4000;
+/** How often the list is re-read while a Jarvis turn runs. */
+const POLL_MS = 3000;
 
 function folderName(path: string) {
   return path.split("/").filter(Boolean).pop() ?? path;
@@ -20,40 +20,56 @@ function folderName(path: string) {
 export default function JarvisChildren({
   jarvisThreadId,
   bots,
+  working,
   onOpen,
 }: {
   jarvisThreadId: string;
   bots: Bot[];
+  /** True while the Jarvis thread's turn is running. */
+  working: boolean;
   /** Switches the hub to the child, under its own bot. */
   onOpen: (botId: string, threadId: string) => void;
 }) {
   const [children, setChildren] = useState<ThreadFull[]>([]);
   const [open, setOpen] = useState(true);
+  const live = useRef(true);
 
+  const load = useCallback(() => {
+    if (document.visibilityState === "hidden") return;
+    getThreads().then(
+      ({ threads }) => {
+        if (!live.current) return;
+        setChildren(
+          threads
+            .filter((t) => t.reportTo === jarvisThreadId)
+            .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+        );
+      },
+      () => {},
+    );
+  }, [jarvisThreadId]);
+
+  // Once on mount, and whenever the tab comes back into view.
   useEffect(() => {
-    let live = true;
-    setChildren([]);
-    const load = () => {
-      if (document.visibilityState === "hidden") return;
-      getThreads().then(
-        ({ threads }) => {
-          if (!live) return;
-          setChildren(
-            threads
-              .filter((t) => t.reportTo === jarvisThreadId)
-              .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
-          );
-        },
-        () => {},
-      );
-    };
+    live.current = true;
     load();
+    document.addEventListener("visibilitychange", load);
+    return () => {
+      live.current = false;
+      document.removeEventListener("visibilitychange", load);
+    };
+  }, [load]);
+
+  // Children start mid-turn, so poll only while Jarvis is working, and read
+  // once more when its turn ends.
+  useEffect(() => {
+    if (!working) return;
     const timer = setInterval(load, POLL_MS);
     return () => {
-      live = false;
       clearInterval(timer);
+      load();
     };
-  }, [jarvisThreadId]);
+  }, [working, load]);
 
   if (children.length === 0) return null;
 

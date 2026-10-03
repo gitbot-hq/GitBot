@@ -344,12 +344,15 @@
   flex: 1;
   min-width: 0;
   height: 100%;
+  /* A column, so a Jarvis thread's started-threads card sits above the chat. */
+  flex-direction: column;
+  gap: 4px;
 }
 
 .v2 .tray-main > .chat-col > .chat {
   flex: 1;
   min-width: 0;
-  height: 100%;
+  min-height: 0;
 }
 
 /* Thread panel covers only the chat card — same slide as the studio. */

@@ -42,9 +42,9 @@ export type TurnResult =
  * turn can be started without spawning a real agent.
  */
 export const agentRunners: Record<SessionStore["agent"], (store: SessionStore) => Promise<void>> = {
-  "claude-code": runClaudeCode,
-  codex: runCodex,
-  opencode: runOpencode,
+  "claude-code": (s) => runClaudeCode(s),
+  codex: (s) => runCodex(s),
+  opencode: (s) => runOpencode(s),
 };
 
 /**
@@ -86,6 +86,14 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
   }
 
   let store = existingId ? sessions.get(existingId) : undefined;
+
+  // A thread's first-turn store is keyed by a random id, so the lookup above
+  // misses it. Refuse a second turn on a thread that is still running rather
+  // than start a parallel session (the root cause is parked:
+  // docs/issues/future/first-turn-parallel-session.md).
+  if (!store && threadId && [...sessions.values()].some((s) => s.threadId === threadId && s.status === "running")) {
+    return { ok: false, status: 409, message: "Session is already running" };
+  }
 
   if (store) {
     if (store.status === "running") {

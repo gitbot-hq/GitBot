@@ -1,4 +1,4 @@
-import { test, afterEach } from "node:test";
+import { test, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "events";
 import { mkdtempSync, realpathSync } from "fs";
@@ -12,9 +12,10 @@ import {
   jarvisDir,
   listThreads,
   setSetupStatus,
+  updateThread,
   type Bot,
 } from "../src/bot-store";
-import { childPermission, jarvisSystemPrompt, startChildThread } from "../src/jarvis";
+import { childPermission, JARVIS_SERVER, jarvisQueryOptions, jarvisSystemPrompt, startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
 import { sessions, type IRequest, type IResponse, type SessionStore } from "../src/server-common";
 import { handleRequest } from "../src/server";
@@ -33,7 +34,7 @@ for (const agent of Object.keys(agentRunners) as SessionStore["agent"][]) {
   };
 }
 afterEach(() => { runs = []; });
-process.on("exit", () => Object.assign(agentRunners, realRunners));
+after(() => { Object.assign(agentRunners, realRunners); });
 
 function project(): { id: string; folder: string } {
   const folder = realpathSync(mkdtempSync(join(tmpdir(), "gitbot-proj-")));
@@ -197,6 +198,49 @@ test("a child whose turn cannot start is not left behind", () => {
   assert.equal(listThreads().length, before);
 });
 
+test("the start_thread tool takes its owner from the server's closure, never from the args", async () => {
+  const owner = jarvisThread();
+  const other = jarvisThread();
+  const { id, folder } = project();
+  const server = jarvisQueryOptions({
+    id: JARVIS_BOT_ID, name: "Jarvis", instructions: "",
+    jarvis: { availableAgents: ALL_AGENTS, threadId: owner.id },
+  }).mcpServers![JARVIS_SERVER] as any;
+  const tool = server.instance._registeredTools.start_thread;
+  assert.ok(tool, "start_thread is registered on the Jarvis server");
+  // Keys a model might try are not in the schema, and change nothing.
+  const out = await tool.handler(
+    { agent: "claude-code", project: id, message: "make hello.txt", reportTo: other.id, jarvisThreadId: other.id },
+    {},
+  );
+  assert.ok(!out.isError, out.content[0].text);
+  const started = JSON.parse(out.content[0].text);
+  const child = getThread(started.threadId)!;
+  assert.equal(child.reportTo, owner.id);
+  assert.equal(child.repoPath, folder);
+  assert.equal(started.folder, folder);
+  for (const s of runs) sessions.delete(s.gitbotId);
+});
+
+test("a permission on a child's first turn can be answered by its SDK session id", async () => {
+  const thread = createThread("builtin-claude-code", tmpdir(), undefined, "chat", "claude-code");
+  const res = await chat({ threadId: thread.id, prompt: "ask me something" });
+  assert.equal(res.status, 200);
+  const store = sessions.get(res.body.sessionId)!;
+  // The agent reports its own session id; the thread and the UI know only that.
+  store.sdkSessionId = "sdk-first-turn";
+  store.status = "running";
+  let answer: any;
+  store.pendingPermissions.set("tu-1", {
+    resolve: (r: any) => { answer = r; }, input: { command: "ls" }, toolName: "Bash", toolUseID: "tu-1",
+  });
+  const reply = await serve("POST", "/sessions/sdk-first-turn/permission", { toolUseID: "tu-1", approved: true });
+  assert.equal(reply.status, 200);
+  assert.deepEqual(answer, { behavior: "allow", updatedInput: { command: "ls" } });
+  assert.equal(store.pendingPermissions.size, 0);
+  sessions.delete(store.gitbotId);
+});
+
 test("Jarvis's prompt offers start_thread and no longer says it is unavailable", () => {
   const prompt = jarvisSystemPrompt();
   assert.match(prompt, /start_thread/);
@@ -205,8 +249,10 @@ test("Jarvis's prompt offers start_thread and no longer says it is unavailable",
 
 // --- startTurn, and /chat going through it ---
 
-async function chat(body: unknown) {
-  const req = Object.assign(new EventEmitter(), { method: "POST", url: "/chat", headers: {} }) as unknown as IRequest;
+const chat = (body: unknown) => serve("POST", "/chat", body);
+
+async function serve(method: string, url: string, body: unknown) {
+  const req = Object.assign(new EventEmitter(), { method, url, headers: {} }) as unknown as IRequest;
   let status = 0;
   let out = "";
   const res: IResponse = {
@@ -238,6 +284,32 @@ test("/chat starts a hub thread's turn through startTurn", async () => {
   // A thread the user starts never reports to Jarvis.
   assert.equal(getThread(thread.id)!.reportTo, undefined);
   sessions.delete(runs[0].gitbotId);
+});
+
+test("a second /chat while a thread's first turn is still running gets 409 and no second session", async () => {
+  const stub = agentRunners["claude-code"];
+  agentRunners["claude-code"] = async (store) => { runs.push(store); }; // stays running
+  try {
+    const thread = createThread("builtin-claude-code", tmpdir(), undefined, "chat", "claude-code");
+    const first = await chat({ threadId: thread.id, prompt: "first" });
+    assert.equal(first.status, 200);
+    // The agent has reported its id and the thread is bound to it, as on a real first turn.
+    sessions.get(first.body.sessionId)!.sdkSessionId = `sdk-${thread.id}`;
+    updateThread(thread.id, { sdkSessionId: `sdk-${thread.id}` });
+    const before = sessions.size;
+    const second = await chat({ threadId: thread.id, prompt: "second" });
+    assert.deepEqual(second, { status: 409, body: { error: "Session is already running" } });
+    assert.equal(sessions.size, before);
+    assert.equal(runs.length, 1);
+    // Before the agent's init (no session id on the thread yet) it is refused too.
+    const fresh = createThread("builtin-claude-code", tmpdir(), undefined, "chat", "claude-code");
+    assert.equal((await chat({ threadId: fresh.id, prompt: "one" })).status, 200);
+    assert.equal((await chat({ threadId: fresh.id, prompt: "two" })).status, 409);
+    assert.equal(runs.length, 2);
+    for (const s of runs) sessions.delete(s.gitbotId);
+  } finally {
+    agentRunners["claude-code"] = stub;
+  }
 });
 
 test("/chat keeps its errors", async () => {

@@ -3485,6 +3485,7 @@ button.file-chip:hover {
   flex: 1;
   min-width: 0;
   display: flex;
+  flex-direction: column;
 }
 
 .page-body .chat-col > .chat {
@@ -4241,17 +4242,13 @@ button.file-chip:hover {
   transition: var(--transition-control);
 }
 
-/* Threads a Jarvis thread started: floats top-left over its chat. */
+/* Threads a Jarvis thread started: a card above its chat, in the flow. */
 .jarvis-children {
-  position: absolute;
-  top: var(--space-3);
-  left: var(--space-3);
-  z-index: 3;
-  max-width: min(320px, calc(100% - 96px));
+  flex: none;
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: 0 6px 20px rgb(0 0 0 / 0.12);
+  border-radius: 12px;
   font-size: var(--text-sm);
 }
 
@@ -4266,6 +4263,7 @@ button.file-chip:hover {
   color: var(--muted);
   font: inherit;
   font-weight: 550;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -4281,7 +4279,7 @@ button.file-chip:hover {
   list-style: none;
   margin: 0;
   padding: 0 var(--space-1) var(--space-1);
-  max-height: 40vh;
+  max-height: 25vh;
   overflow-y: auto;
 }
 

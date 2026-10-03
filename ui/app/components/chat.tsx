@@ -764,6 +764,15 @@ export default function Chat({
     if (thread.sdkSessionId) {
       const sid = thread.sdkSessionId;
       const tid = thread.id;
+      // A thread started elsewhere (Jarvis's children) runs in its session's
+      // mode, not the bot's default: adopt it unless one is remembered.
+      if (!permissionModesRef.current[tid]) {
+        getSessionConfig(sid)
+          .then(({ permissionMode, mode }) => {
+            if (threadRef.current === tid && !permissionModesRef.current[tid]) rememberMode(tid, mode === "plan" ? "plan" : permissionMode);
+          })
+          .catch(() => {});
+      }
       getSessionStatus(sid)
         .then(({ streaming }) => {
           if (!streaming || threadRef.current !== tid) return;

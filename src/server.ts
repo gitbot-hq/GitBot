@@ -192,7 +192,10 @@ export async function handleRequest(
     // POST /sessions/:id/permission
     const permBase = parsePathParam(path, "/sessions/")?.replace(/\/permission$/, "");
     if (method === "POST" && path.endsWith("/permission") && permBase) {
-      const store = sessions.get(permBase);
+      // A thread's first-turn store is keyed by a random id but the thread
+      // knows only the SDK id, so look that up too, as the other routes do.
+      const store = sessions.get(permBase)
+        ?? [...sessions.values()].find(s => s.sdkSessionId === permBase);
       if (!store) { jsonError(res, 404, "Session not found"); return; }
       const body = await readBody(req);
       const { toolUseID, approved, updatedInput } = body;

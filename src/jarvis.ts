@@ -1,4 +1,5 @@
 import { createSdkMcpServer, tool, type Options } from "@anthropic-ai/claude-agent-sdk";
+import { basename } from "path";
 import { z } from "zod";
 import {
   BOT_AGENTS,
@@ -234,24 +235,30 @@ export function startChildThread(
 
   const agent = threadAgent({}, bot);
   const permission = childPermission(bot, agent, args.permissionMode);
-  const child = createThread(bot.id, project.folder, undefined, "chat", agent, jarvisThreadId);
-  const turn = startTurn(
-    { threadId: child.id, prompt: args.message, permissionMode: permission.permissionMode, mode: permission.mode },
-    availableAgents,
-  );
-  if (!turn.ok) {
-    // A thread that never ran is noise in the bot's list.
-    deleteThread(child.id);
-    return { ok: false, error: turn.message };
+  const child = createThread(bot.id, project.path, undefined, "chat", agent, jarvisThreadId);
+  let error: string;
+  try {
+    const turn = startTurn(
+      { threadId: child.id, prompt: args.message, permissionMode: permission.permissionMode, mode: permission.mode },
+      availableAgents,
+    );
+    if (turn.ok) {
+      return {
+        ok: true,
+        threadId: child.id,
+        bot: bot.name,
+        project: basename(project.path),
+        folder: project.path,
+        permissionMode: permission.chosen,
+      };
+    }
+    error = turn.message;
+  } catch (err: any) {
+    error = err?.message ?? "the child's turn could not start";
   }
-  return {
-    ok: true,
-    threadId: child.id,
-    bot: bot.name,
-    project: project.name,
-    folder: project.folder,
-    permissionMode: permission.chosen,
-  };
+  // A thread that never ran is noise in the bot's list.
+  deleteThread(child.id);
+  return { ok: false, error };
 }
 
 // --- SDK wiring ---

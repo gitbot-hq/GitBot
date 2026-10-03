@@ -142,6 +142,7 @@ export default function V2() {
   const [threadByBot, setThreadByBot] = useState<Record<string, string>>({});
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [botActivity, setBotActivity] = useState<string | null>(null);
+  const [chatWorking, setChatWorking] = useState(false);
   const [modal, setModal] = useState<Modal>(null);
   const [learnMore, setLearnMore] = useState<LearnMoreKind | null>(null);
   const learnMoreTriggerRef = useRef<HTMLElement | null>(null);
@@ -924,6 +925,8 @@ export default function V2() {
 
   /** Opens a thread under its own bot, as picking the bot and then the thread would. */
   function openThread(botId: string, threadId: string) {
+    dismissLearnMore();
+    setUserOpen(false);
     setSelectedId(botId);
     setThreadByBot((prev) => ({ ...prev, [botId]: threadId }));
   }
@@ -1340,6 +1343,9 @@ export default function V2() {
               />
             </aside>
             <div className={threadPanel ? "chat-col panel-open" : "chat-col"}>
+              {isJarvis && activeThread && (
+                <JarvisChildren key={activeThread.id} jarvisThreadId={activeThread.id} bots={bots} working={chatWorking} onOpen={openThread} />
+              )}
               <Chat
                 thread={activeThread}
                 botId={bot?.id}
@@ -1351,6 +1357,7 @@ export default function V2() {
                 autoSend={autoSend && autoSend.botId === bot?.id ? autoSend.prompt : null}
                 onAutoSent={() => setAutoSend(null)}
                 onActivityChange={setBotActivity}
+                onWorkingChange={setChatWorking}
                 onTurnDone={refreshAfterTurn}
                 onShare={bot && !bot.builtin ? (view) => setModal({ kind: "share", bot, view }) : undefined}
                 onLearnMorePermissions={() => openLearnMore("permissions")}
@@ -1381,9 +1388,6 @@ export default function V2() {
                     : undefined
                 }
               />
-              {isJarvis && activeThread && (
-                <JarvisChildren jarvisThreadId={activeThread.id} bots={bots} onOpen={openThread} />
-              )}
               <div className="thread-overlay" aria-hidden={!threadPanel}>
                 {threadPanel && bot && (
                   <ThreadPanel
