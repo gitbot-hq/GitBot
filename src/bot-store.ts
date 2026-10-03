@@ -78,9 +78,9 @@ export interface Thread {
   preview: string;
   messageCount: number;
   /**
-   * The Jarvis thread this one reports to: set when Jarvis starts it. Threads
+   * The Jarvis thread this one reports to: set when Jarvis starts it or sends
+   * it a message (send_to_thread), cleared when the user types here. Threads
    * the user starts never have one.
-   * TODO(slice 11): pass ownership back to the user when they type here.
    */
   reportTo?: string;
   /**
@@ -422,6 +422,19 @@ export function deleteThread(id: string): boolean {
   if (remaining.length === threads.length) return false;
   writeCollection(THREADS_FILE, remaining);
   return true;
+}
+
+/**
+ * Sets or clears the Jarvis thread a thread reports to. Ownership is not
+ * activity: updatedAt stays, so the thread list keeps its order.
+ */
+export function setThreadOwner(id: string, reportTo: string | undefined): void {
+  const threads = readCollection<Thread>(THREADS_FILE);
+  const thread = threads.find((t) => t.id === id);
+  if (!thread || thread.reportTo === reportTo) return;
+  if (reportTo) thread.reportTo = reportTo;
+  else delete thread.reportTo;
+  writeCollection(THREADS_FILE, threads);
 }
 
 /**

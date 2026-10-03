@@ -17,7 +17,8 @@ export interface RunningChild {
 /**
  * The child of this Jarvis thread whose turn is running (awaiting approval
  * counts) and will report back, or undefined when the thread is not locked.
- * At most one: start_thread refuses a second.
+ * At most one: start_thread and send_to_thread refuse a second. A thread
+ * send_to_thread handed to Jarvis counts like one start_thread made.
  */
 export function runningChildOf(jarvisThreadId: string): RunningChild | undefined {
   for (const s of sessions.values()) {
@@ -32,6 +33,14 @@ export function childLabel(childThreadId: string): string {
   const child = getThread(childThreadId);
   if (!child) return "a child thread";
   return `${getBot(child.botId)?.name ?? "Bot"} on ${basename(child.repoPath)}`;
+}
+
+/**
+ * Why Jarvis cannot start or send to another child now: what start_thread
+ * and send_to_thread both say when refused.
+ */
+export function oneChildAtATime(running: RunningChild): string {
+  return `one child at a time: ${childLabel(running.threadId)} (thread ${running.threadId}) is still running. Tell the user: its report arrives when it finishes, or they can stop it.`;
 }
 
 /**

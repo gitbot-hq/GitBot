@@ -246,8 +246,8 @@ export interface SessionStore {
   // turn reports to the thread's Jarvis when it ends (Jarvis started it).
   abortRequested?: boolean;
   reportable?: boolean;
-  /** The Jarvis thread a reportable turn reports to, read from its thread when the turn starts. */
-  reportTo?: string;
+  /** The Jarvis thread a reportable turn reports to, fixed when it starts. */
+  reportOwner?: string;
 }
 
 /** The parts of a bot that shape the agent run. Mirrors fields on Bot in bot-store. */
@@ -327,7 +327,7 @@ export interface SessionSummaryItem {
 
 /** The Jarvis thread a store's current (or last) turn reports to, if any. */
 export function turnReportsTo(store: SessionStore): string | null {
-  return store.reportable && store.reportTo ? store.reportTo : null;
+  return store.reportable && store.reportOwner ? store.reportOwner : null;
 }
 
 export function buildSessionsDump(): SessionSummaryItem[] {
@@ -355,6 +355,7 @@ export interface EndedTurn {
   threadId?: string;
   abortRequested: boolean;
   reportable: boolean;
+  reportOwner?: string;
 }
 
 type TurnEndListener = (store: SessionStore, turn: EndedTurn) => void;
@@ -379,6 +380,7 @@ export function notifyPermissionsChanged(): void {
       threadId: store.threadId,
       abortRequested: !!store.abortRequested,
       reportable: !!store.reportable,
+      reportOwner: store.reportOwner,
     }]);
   }
   const broadcast = () => permissionsEmitter.emit("update", buildPermissionsDump(), buildSessionsDump());

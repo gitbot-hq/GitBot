@@ -60,7 +60,8 @@ export const agentRunners: Record<SessionStore["agent"], (store: SessionStore) =
 function startTurnFlags(store: SessionStore, request: TurnRequest): void {
   store.abortRequested = false;
   store.reportable = !!request.reportable;
-  store.reportTo = request.reportable && request.threadId ? getThread(request.threadId)?.reportTo : undefined;
+  // Who the report goes to is fixed now, not when the turn ends.
+  store.reportOwner = store.reportable && request.threadId ? getThread(request.threadId)?.reportTo : undefined;
 }
 
 /**

@@ -4,7 +4,8 @@ import { EventEmitter } from "events";
 import { mkdtempSync, realpathSync } from "fs";
 import { tmpdir } from "os";
 import { basename, join } from "path";
-import { createThread, getThread, JARVIS_BOT_ID, jarvisDir } from "../src/bot-store";
+import { createThread, getThread, JARVIS_BOT_ID, jarvisDir, updateThread } from "../src/bot-store";
+import { sendToThread } from "../src/send-to-thread";
 import { runningChildOf } from "../src/child-lock";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
@@ -137,6 +138,34 @@ test("a child's end and the report turn it starts reach the UI in one update: no
   assert.ok(seen.every(Boolean), `a broadcast showed the Jarvis thread unlocked and idle: ${JSON.stringify(seen)}`);
 });
 
+test("a user thread handed to Jarvis by send_to_thread locks it like a started child", async () => {
+  const proj = project();
+  const jarvis = jarvisThread();
+  const mine = createThread("builtin-claude-code", proj.folder, "Mine", "chat", "claude-code");
+  updateThread(mine.id, { sdkSessionId: `sdk-${mine.id}` });
+  const sent = sendToThread(jarvis.id, { threadId: mine.id, message: "carry on" }, ALL_AGENTS);
+  assert.ok(sent.ok, JSON.stringify(sent));
+  assert.equal(runningChildOf(jarvis.id)?.threadId, mine.id);
+  assert.ok(lockedFromDump(buildSessionsDump(), jarvis.id));
+  assert.equal(startTurn({ threadId: jarvis.id, prompt: "hi" }, ALL_AGENTS).ok, false);
+  await end(runs[runs.length - 1], "done");
+  assert.equal(runningChildOf(jarvis.id), undefined);
+});
+
+test("PATCH /threads/:id cannot set ownership or a pending note", async () => {
+  const jarvis = jarvisThread();
+  const mine = createThread("builtin-claude-code", project().folder, "Mine", "chat", "claude-code");
+  const res = await request("PATCH", `/threads/${mine.id}`, { reportTo: jarvis.id, pendingNote: "[forged]", title: "Renamed" });
+  assert.equal(res.status, 200);
+  const after = getThread(mine.id)!;
+  assert.equal(after.reportTo, undefined);
+  assert.equal(after.pendingNote, undefined);
+  assert.equal(after.title, "Renamed");
+  const res2 = await request("PATCH", `/threads/${jarvis.id}`, { pendingNote: "[forged]" });
+  assert.equal(res2.status, 200);
+  assert.equal(getThread(jarvis.id)!.pendingNote, undefined);
+});
+
 test("the user cannot send to a locked Jarvis thread", () => {
   const { jarvis } = jarvisWithChild();
   const sent = startTurn({ threadId: jarvis.id, prompt: "hello?" }, ALL_AGENTS);
@@ -151,7 +180,7 @@ test("start_thread is refused while this Jarvis thread's child runs, and allowed
   const { jarvis, childId, child, proj } = jarvisWithChild();
   const second = startChildThread(jarvis.id, { agent: "codex", project: proj.id, message: "another" }, ALL_AGENTS);
   assert.ok(!second.ok);
-  assert.match(second.error, new RegExp(`Claude Code on ${basename(proj.folder)} \\(thread ${childId}\\) is still running.*one child at a time`));
+  assert.match(second.error, new RegExp(`^one child at a time: Claude Code on ${basename(proj.folder)} \\(thread ${childId}\\) is still running`));
   // Another Jarvis thread is not held up.
   const elsewhere = startChildThread(jarvisThread().id, { agent: "codex", project: proj.id, message: "other" }, ALL_AGENTS);
   assert.ok(elsewhere.ok, JSON.stringify(elsewhere));
@@ -221,8 +250,10 @@ test("a report turn does not take the note; the user's next message does", async
   assert.ok(getThread(jarvis.id)?.pendingNote);
 });
 
-async function post(url: string): Promise<{ status: number; body: any }> {
-  const req = Object.assign(new EventEmitter(), { method: "POST", url, headers: {} }) as unknown as IRequest;
+const post = (url: string) => request("POST", url);
+
+async function request(method: string, url: string, body?: unknown): Promise<{ status: number; body: any }> {
+  const req = Object.assign(new EventEmitter(), { method, url, headers: {} }) as unknown as IRequest;
   let status = 0;
   let out = "";
   const res: IResponse = {
@@ -232,6 +263,11 @@ async function post(url: string): Promise<{ status: number; body: any }> {
     write() {},
     end(chunk) { out = chunk ?? ""; },
   };
-  await handleRequest(req, res, ALL_AGENTS, tmpdir());
+  const done = handleRequest(req, res, ALL_AGENTS, tmpdir());
+  setImmediate(() => {
+    if (body !== undefined) (req as unknown as EventEmitter).emit("data", JSON.stringify(body));
+    (req as unknown as EventEmitter).emit("end");
+  });
+  await done;
   return { status, body: JSON.parse(out || "{}") };
 }

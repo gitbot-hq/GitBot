@@ -27,6 +27,7 @@ import { initAgent as initOpencode, stopAgent as stopOpencode, listSessions as l
 import { initAgent as initCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
 import { handleBotRoutes } from "./bot-routes";
 import { startTurn } from "./turns";
+import { releaseToUser } from "./send-to-thread";
 import { watchChildReports } from "./reports";
 import { noteChildStopped } from "./child-lock";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
@@ -260,6 +261,8 @@ export async function handleRequest(
         availableAgents,
       );
       if (!turn.ok) { jsonError(res, turn.status, turn.message, turn.extra); return; }
+      // The user typed here themselves: the thread is theirs, not Jarvis's.
+      if (threadId) releaseToUser(threadId);
       jsonOk(res, { sessionId: turn.sessionId });
       return;
     }
