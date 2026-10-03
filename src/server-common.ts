@@ -241,6 +241,9 @@ export interface SessionStore {
   // Bot hub: the thread this session belongs to, and the preset driving it.
   threadId?: string;
   botPreset?: BotPreset;
+  /** The bot that owns threadId, set when a turn starts, so the status
+   *  broadcast need not read threads.json per session. */
+  botId?: string;
   // Per turn, reset by startTurn: the user asked to stop this turn (set
   // before any await in the abort route, so it is never seen late), and the
   // turn reports to the thread's Jarvis when it ends (Jarvis started it).
@@ -323,6 +326,8 @@ export interface SessionSummaryItem {
    * is locked; the UI derives the lock from this and the status.
    */
   reportTo: string | null;
+  /** The bot that owns threadId; null for a session with no thread. */
+  botId: string | null;
 }
 
 /** The Jarvis thread a store's current (or last) turn reports to, if any. */
@@ -337,6 +342,7 @@ export function buildSessionsDump(): SessionSummaryItem[] {
     status: store.pendingPermissions.size > 0 ? "awaiting_permissions" : store.status,
     threadId: store.threadId ?? null,
     reportTo: turnReportsTo(store),
+    botId: store.botId ?? null,
   }));
 }
 
@@ -406,7 +412,7 @@ export function createSession(
   model?: string,
   mode?: SessionStore["mode"],
   permissionMode?: PermissionMode,
-  bot?: { threadId?: string; preset?: BotPreset }
+  bot?: { threadId?: string; botId?: string; preset?: BotPreset }
 ): SessionStore {
   const store: SessionStore = {
     gitbotId,
@@ -424,6 +430,7 @@ export function createSession(
     pendingPermissions: new Map(),
     cleanupTimer: null,
     threadId: bot?.threadId,
+    botId: bot?.botId,
     botPreset: bot?.preset,
   };
   sessions.set(gitbotId, store);

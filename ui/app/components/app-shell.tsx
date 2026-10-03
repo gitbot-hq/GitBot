@@ -405,6 +405,16 @@ export default function V2() {
   // Server-side session status per thread: lets the open chat pick up a turn
   // gitbot started itself (a child's report to Jarvis).
   const threadSessions = useThreadSessions();
+  // A bot's status from its threads' sessions, whichever bot is selected.
+  // The selected bot's open chat says more (activeLabel) and wins while it
+  // is live; otherwise another of its threads may still be running. A bot
+  // still setting up keeps its setup status.
+  const liveLabel = (b: Bot) => {
+    const s = needsSetup(b) ? undefined : threadSessions.liveBots[b.id];
+    return s === "awaiting_permissions" ? "Waiting" : s === "running" ? "Working" : null;
+  };
+  const rowLabel = (b: Bot) => (b.id === bot?.id && activeLabel) || liveLabel(b);
+  const selectedLabel = bot ? rowLabel(bot) : null;
   const botsScrollEdge = useScrollEdge(
     botsScrollRef,
     `${collapsed}:${botsLoading}:${visibleBots.length}`,
@@ -950,11 +960,12 @@ export default function V2() {
     const mirrored = !setupPending && b.id === mirroredEmptyBotId;
     // Jarvis says how many of its threads need you, whichever bot is selected.
     const attentionLabel = b.builtin === "jarvis" ? needsYouLabel(needsYou) : null;
+    const statusLabel = rowLabel(b);
     return (
       <div className="bot-row-wrap" key={b.id}>
         <button
           type="button"
-          className={`${b.id === bot?.id ? "bot-row selected" : "bot-row"}${b.id === bot?.id && activeLabel ? " live" : ""}${setupPending ? " needs-setup" : ""}${searchText ? "" : " msg-in"}`}
+          className={`${b.id === bot?.id ? "bot-row selected" : "bot-row"}${statusLabel ? " live" : ""}${setupPending ? " needs-setup" : ""}${searchText ? "" : " msg-in"}`}
           onClick={() => botRowClick(b)}
           onMouseEnter={() => setHoverId(b.id)}
           onMouseLeave={() => setHoverId((prev) => (prev === b.id ? null : prev))}
@@ -983,9 +994,9 @@ export default function V2() {
             <small className={attentionLabel ? "needs-you" : undefined}>
               <i aria-hidden="true" />
               {attentionLabel
-                ? b.id === bot?.id && activeLabel ? `${activeLabel} · ${attentionLabel}` : attentionLabel
-                : b.id === bot?.id && activeLabel
-                ? activeLabel
+                ? statusLabel ? `${statusLabel} · ${attentionLabel}` : attentionLabel
+                : statusLabel
+                ? statusLabel
                 : setupPending
                   ? pausedSetupIds[b.id]
                     ? "Setup pending"
@@ -1333,11 +1344,11 @@ export default function V2() {
             >
               <div ref={threadsHeaderRef} className={`threads-scroll-header${threadsScrolled ? " is-scrolled" : ""}`}>
               <div className={collapsed ? "threads-bot-wrap open" : "threads-bot-wrap"}>
-              <div className={`${activeLabel ? "threads-bot live" : "threads-bot"}${setupRequired ? " needs-setup" : ""}`}>
+              <div className={`${selectedLabel ? "threads-bot live" : "threads-bot"}${setupRequired ? " needs-setup" : ""}`}>
                 <b>{bot?.name ?? ""}</b>
                 <small>
                   <i aria-hidden="true" />
-                  {activeLabel ??
+                  {selectedLabel ??
                     (setupRequired
                       ? bot && pausedSetupIds[bot.id]
                         ? "Setup pending"

@@ -8,6 +8,7 @@ import { createThread, getThread, JARVIS_BOT_ID, jarvisDir, updateThread } from 
 import { sendToThread } from "../src/send-to-thread";
 import { runningChildOf, withNote } from "../src/child-lock";
 import { stripGitbotNotes } from "../ui/app/lib/gitbot-note";
+import { liveByBot } from "../ui/app/lib/use-thread-sessions";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
 import { watchChildReports } from "../src/reports";
@@ -96,6 +97,52 @@ test("a running reportable child locks its Jarvis thread, in the helper and the 
   assert.ok(runningChildOf(jarvis.id));
   assert.ok(lockedFromDump(buildSessionsDump(), jarvis.id));
   child.pendingPermissions.clear();
+});
+
+test("each dump entry names its thread's bot, from the turn's first broadcast", async () => {
+  const { jarvis, childId, child } = jarvisWithChild();
+  const childBot = getThread(childId)!.botId;
+  assert.notEqual(childBot, JARVIS_BOT_ID);
+  // A Jarvis child belongs to the child's bot, not to Jarvis.
+  assert.equal(buildSessionsDump().find((s) => s.gitbotId === child.gitbotId)?.botId, childBot);
+  await end(child, "done");
+  const report = jarvisRuns(jarvis.id)[0];
+  assert.equal(buildSessionsDump().find((s) => s.gitbotId === report.gitbotId)?.botId, JARVIS_BOT_ID);
+  await end(report, "done");
+  // A turn on an existing session: its first broadcast already carries it.
+  updateThread(childId, { sdkSessionId: child.gitbotId });
+  child.botId = undefined;
+  let first: SessionSummaryItem[] | undefined;
+  const onUpdate = (_p: unknown, dump: SessionSummaryItem[]) => { first ??= dump; };
+  permissionsEmitter.on("update", onUpdate);
+  try {
+    const again = startTurn({ threadId: childId, prompt: "and more" }, ALL_AGENTS);
+    assert.ok(again.ok, JSON.stringify(again));
+    assert.equal(again.sessionId, child.gitbotId);
+  } finally {
+    permissionsEmitter.off("update", onUpdate);
+  }
+  assert.equal(first?.find((s) => s.gitbotId === child.gitbotId)?.botId, childBot);
+});
+
+test("a bot's live status: waiting beats running, idle bots and threadless sessions are left out", () => {
+  const s = (gitbotId: string, botId: string | null, status: SessionSummaryItem["status"], threadId: string | null = gitbotId) =>
+    ({ gitbotId, botId, status, threadId });
+  assert.deepEqual(
+    liveByBot([
+      s("a1", "a", "running"),
+      s("a2", "a", "awaiting_permissions"),
+      s("a3", "a", "running"),
+      s("b1", "b", "done"),
+      s("b2", "b", "running"),
+      s("c1", "c", "done"),
+      s("c2", "c", "error"),
+      s("d1", "d", "awaiting_permissions"),
+      s("x1", null, "running"),
+      s("x2", "e", "running", null),
+    ]),
+    { a: "awaiting_permissions", b: "running", d: "awaiting_permissions" },
+  );
 });
 
 test("a child that is done, a turn that is not reportable, or another thread's child: unlocked", async () => {

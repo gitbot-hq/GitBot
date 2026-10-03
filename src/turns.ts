@@ -79,9 +79,11 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
   // A threadId comes from the bot hub: it supplies the repo, the resume handle
   // and the bot preset, so the client need not repeat them.
   let botPreset: BotPreset | undefined;
+  let botId: string | undefined;
   if (threadId) {
     const thread = getThread(threadId);
     if (!thread) return { ok: false, status: 404, message: "Thread not found" };
+    botId = thread.botId;
     const bot = getBot(thread.botId);
     if (!bot) return { ok: false, status: 404, message: "Bot not found" };
     const turn = resolveThreadTurn(thread, bot, { model, permissionMode, mode }, availableAgents);
@@ -135,6 +137,8 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
       return { ok: false, status: 400, message: "Jarvis turns need a threadId" };
     }
     store.status = "running";
+    // Set before the broadcast below: the UI reads a bot's status from it.
+    if (threadId) store.botId = botId;
     startTurnFlags(store, request);
     notifyPermissionsChanged();
     // A turn's events start afresh, but seq keeps counting up across turns:
@@ -152,7 +156,7 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
     // by a random id. Known: later turns look it up by the SDK id and miss
     // (docs/issues/future/first-turn-parallel-session.md).
     const gitbotId = existingId ?? randomUUID();
-    store = createSession(gitbotId, agent, repoPath, model, mode, permissionMode as PermissionMode | undefined, { threadId, preset: botPreset });
+    store = createSession(gitbotId, agent, repoPath, model, mode, permissionMode as PermissionMode | undefined, { threadId, botId, preset: botPreset });
     if (existingId) {
       store.sdkSessionId = existingId;
     }

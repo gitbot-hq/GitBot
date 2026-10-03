@@ -12,6 +12,8 @@ type SessionSummary = {
   threadId: string | null;
   /** The Jarvis thread this session's turn reports to; null when Jarvis did not start it. */
   reportTo?: string | null;
+  /** The bot that owns threadId. */
+  botId?: string | null;
 };
 
 /** A Jarvis thread's running child: what locks its composer, and what Stop aborts. */
@@ -26,12 +28,17 @@ export type ThreadSessions = {
   /** By Jarvis thread id: the approvals its children wait on (toolUseIDs).
    *  Null until the stream is first heard from. */
   pendingApprovals: Record<string, string[]> | null;
+  /** By bot id: "awaiting_permissions" if any of its threads waits on an
+   *  approval, else "running" if any runs. Bots with nothing live are absent. */
+  liveBots: Record<string, BotLiveStatus>;
 };
+
+export type BotLiveStatus = "running" | "awaiting_permissions";
 
 const live = (s: ThreadSessionStatus) => s === "running" || s === "awaiting_permissions";
 
 /** A thread's status across its sessions: any live one wins, else the newest. */
-function byThread(sessions: SessionSummary[]): Omit<ThreadSessions, "pendingApprovals"> {
+function byThread(sessions: SessionSummary[]): Pick<ThreadSessions, "statuses" | "runningChildren"> {
   const statuses: Record<string, ThreadSessionStatus> = {};
   const runningChildren: Record<string, RunningChild> = {};
   for (const s of sessions) {
@@ -46,6 +53,17 @@ function byThread(sessions: SessionSummary[]): Omit<ThreadSessions, "pendingAppr
   return { statuses, runningChildren };
 }
 
+/** Each bot's live status across its threads' sessions: waiting beats
+ *  running. A Jarvis child's session belongs to the child's bot. */
+export function liveByBot(sessions: SessionSummary[]): Record<string, BotLiveStatus> {
+  const bots: Record<string, BotLiveStatus> = {};
+  for (const s of sessions) {
+    if (!s.botId || !s.threadId || !live(s.status)) continue;
+    if (bots[s.botId] !== "awaiting_permissions") bots[s.botId] = s.status as BotLiveStatus;
+  }
+  return bots;
+}
+
 /**
  * The app's one subscription to the server's session statuses, by thread id.
  * It is how an open thread notices a turn gitbot started on its own — a
@@ -54,7 +72,7 @@ function byThread(sessions: SessionSummary[]): Omit<ThreadSessions, "pendingAppr
  * report turn it starts land in one render.
  */
 export function useThreadSessions(): ThreadSessions {
-  const [state, setState] = useState<ThreadSessions>({ statuses: {}, runningChildren: {}, pendingApprovals: null });
+  const [state, setState] = useState<ThreadSessions>({ statuses: {}, runningChildren: {}, pendingApprovals: null, liveBots: {} });
   useEffect(() => {
     const es = new EventSource(sessionsStreamUrl());
     let last = "";
@@ -65,7 +83,8 @@ export function useThreadSessions(): ThreadSessions {
       } catch {
         return;
       }
-      const next = { ...byThread(snapshot.sessions ?? []), pendingApprovals: pendingByJarvis(snapshot) };
+      const sessions = snapshot.sessions ?? [];
+      const next = { ...byThread(sessions), pendingApprovals: pendingByJarvis(snapshot), liveBots: liveByBot(sessions) };
       const key = JSON.stringify(next);
       // Approvals change far more often than these: re-render only when they
       // do (only a Jarvis-owned child's approvals are kept).
