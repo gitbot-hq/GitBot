@@ -420,6 +420,19 @@ export function deleteThread(id: string): boolean {
 }
 
 /**
+ * Sets or clears the Jarvis thread a thread reports to. Ownership is not
+ * activity: updatedAt stays, so the thread list keeps its order.
+ */
+export function setThreadOwner(id: string, reportTo: string | undefined): void {
+  const threads = readCollection<Thread>(THREADS_FILE);
+  const thread = threads.find((t) => t.id === id);
+  if (!thread || thread.reportTo === reportTo) return;
+  if (reportTo) thread.reportTo = reportTo;
+  else delete thread.reportTo;
+  writeCollection(THREADS_FILE, threads);
+}
+
+/**
  * Binds a thread to the Claude Code session that backs it. Called once, when the
  * SDK reports its session id on the first turn; that id is the resume handle.
  */

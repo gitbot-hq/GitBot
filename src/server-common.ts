@@ -246,6 +246,8 @@ export interface SessionStore {
   // turn reports to the thread's Jarvis when it ends (Jarvis started it).
   abortRequested?: boolean;
   reportable?: boolean;
+  /** The Jarvis thread a reportable turn reports to, fixed when it starts. */
+  reportOwner?: string;
 }
 
 /** The parts of a bot that shape the agent run. Mirrors fields on Bot in bot-store. */
@@ -341,6 +343,7 @@ export interface EndedTurn {
   threadId?: string;
   abortRequested: boolean;
   reportable: boolean;
+  reportOwner?: string;
 }
 
 type TurnEndListener = (store: SessionStore, turn: EndedTurn) => void;
@@ -364,6 +367,7 @@ export function notifyPermissionsChanged(): void {
       threadId: store.threadId,
       abortRequested: !!store.abortRequested,
       reportable: !!store.reportable,
+      reportOwner: store.reportOwner,
     };
     // Deferred: a listener may start a turn of its own.
     setImmediate(() => {

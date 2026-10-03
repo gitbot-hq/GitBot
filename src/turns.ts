@@ -138,6 +138,8 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
   // only a turn Jarvis started reports back to it.
   s.abortRequested = false;
   s.reportable = !!request.reportable;
+  // Who the report goes to is fixed now, not when the turn ends.
+  s.reportOwner = s.reportable && threadId ? getThread(threadId)?.reportTo : undefined;
   // A report is not what the thread is about: it leaves preview and title be.
   if (threadId) touchThread(threadId, request.report ? '' : prompt ?? '');
 

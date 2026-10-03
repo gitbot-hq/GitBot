@@ -1,7 +1,7 @@
 import { basename } from "path";
-import { botNeedsSetup, getBot, getThread, isJarvisBot, threadAgent, updateThread, type Thread } from "./bot-store";
-import { sessions } from "./server-common";
-import { childPermission } from "./jarvis";
+import { botNeedsSetup, getBot, getThread, isJarvisBot, setThreadOwner, type Thread } from "./bot-store";
+import { sessions, type SessionStore } from "./server-common";
+import { liveStoreFor } from "./thread-tools";
 import { startTurn } from "./turns";
 
 // Continuing an existing thread for Jarvis, and who owns a thread. A thread
@@ -27,13 +27,18 @@ function threadIsRunning(thread: Thread): boolean {
   return [...sessions.values()].some((s) => s.threadId === thread.id && s.status === "running");
 }
 
+/** The thread's session as the server holds it: the one its next turn resumes, else its newest. */
+function storeOf(thread: Thread): SessionStore | undefined {
+  return (thread.sdkSessionId ? sessions.get(thread.sdkSessionId) : undefined) ?? liveStoreFor(thread.id);
+}
+
 /**
  * The user sent a message in this thread themselves: it is theirs now, and
  * no longer reports to Jarvis. Called for user sends only, never for a turn
  * Jarvis or a report started.
  */
 export function releaseToUser(threadId: string): void {
-  if (getThread(threadId)?.reportTo) updateThread(threadId, { reportTo: undefined });
+  setThreadOwner(threadId, undefined);
 }
 
 export type SendToThreadResult =
@@ -42,7 +47,8 @@ export type SendToThreadResult =
 
 /**
  * Sends Jarvis's message into an existing thread, resuming its session with
- * the thread's own bot, agent and folder. The calling Jarvis thread takes
+ * the thread's own bot, agent, folder and permission mode — never a more
+ * permissive one: the live session's mode, else the bot's own. The calling Jarvis thread takes
  * ownership, so the turn's end reports back to it. Returns once the turn runs.
  */
 export function sendToThread(
@@ -75,14 +81,15 @@ export function sendToThread(
     return { ok: false, error: `one child at a time: "${running.title}" (thread ${running.id}) is still working. Wait for its report.` };
   }
 
-  const permission = childPermission(bot, threadAgent(thread, bot));
-  // Ownership first: a turn that ends at once must still find its owner.
+  // The live session's own mode; without one, startTurn falls back to the bot's.
+  const live = storeOf(thread);
+  // Ownership first: startTurn reads the turn's report owner from the thread.
   const previousOwner = thread.reportTo;
-  updateThread(thread.id, { reportTo: jarvisThreadId });
+  setThreadOwner(thread.id, jarvisThreadId);
   let error: string;
   try {
     const turn = startTurn(
-      { threadId: thread.id, prompt: args.message, permissionMode: permission.permissionMode, mode: permission.mode, reportable: true },
+      { threadId: thread.id, prompt: args.message, permissionMode: live?.permissionMode, mode: live?.mode, reportable: true },
       availableAgents,
     );
     if (turn.ok) return { ok: true, threadId: thread.id, title: thread.title, bot: bot.name, project: basename(thread.repoPath) };
@@ -90,6 +97,6 @@ export function sendToThread(
   } catch (err: any) {
     error = err?.message ?? "the thread's turn could not start";
   }
-  updateThread(thread.id, { reportTo: previousOwner });
+  setThreadOwner(thread.id, previousOwner);
   return { ok: false, error };
 }

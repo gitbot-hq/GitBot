@@ -47,15 +47,17 @@ export function reportFor(turn: EndedTurn): { owner: string; prompt: string; chi
   if (status !== "done" && status !== "error") return null;
   // Stopped by the user: the sequence stops with it (slice 08 builds Stop).
   if (turn.abortRequested || events.some((e) => e.type === "aborted")) return null;
+  // The owner as the turn started: a later change of hands does not redirect it.
+  const owner = turn.reportOwner;
   const child = turn.threadId ? getThread(turn.threadId) : undefined;
-  if (!child?.reportTo) return null;
+  if (!owner || !child) return null;
   let message = lastAssistantMessage(events);
   if (!message && status === "error") {
     const err = [...events].reverse().find((e) => e.type === "error" || e.type === "agent_error");
     message = String((err as any)?.message ?? "");
   }
   const bot = getBot(child.botId)?.name ?? "Bot";
-  return { owner: child.reportTo, child: child.id, prompt: formatReport(bot, basename(child.repoPath), child.id, status, message) };
+  return { owner, child: child.id, prompt: formatReport(bot, basename(child.repoPath), child.id, status, message) };
 }
 
 /**
