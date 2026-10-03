@@ -138,7 +138,7 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
     }
     store.status = "running";
     // Set before the broadcast below: the UI reads a bot's status from it.
-    if (threadId) store.botId = botId;
+    if (threadId) { store.threadId = threadId; store.botId = botId; store.botPreset = botPreset; }
     startTurnFlags(store, request);
     notifyPermissionsChanged();
     // A turn's events start afresh, but seq keeps counting up across turns:
@@ -149,7 +149,6 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
     if (mode) store.mode = mode;
     if (permissionMode) store.permissionMode = permissionMode as PermissionMode;
     if (botPreset?.jarvis) { store.model = undefined; store.mode = undefined; }
-    if (threadId) { store.threadId = threadId; store.botPreset = botPreset; }
     emitEvent(store, 'user_prompt', { prompt: sent ?? '', ...(attachments?.length ? { attachments } : {}) });
   } else {
     // A thread's first turn has no SDK session id yet, so its store is keyed

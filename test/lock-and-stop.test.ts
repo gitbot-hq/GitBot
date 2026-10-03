@@ -8,7 +8,7 @@ import { createThread, getThread, JARVIS_BOT_ID, jarvisDir, updateThread } from 
 import { sendToThread } from "../src/send-to-thread";
 import { runningChildOf, withNote } from "../src/child-lock";
 import { stripGitbotNotes } from "../ui/app/lib/gitbot-note";
-import { liveByBot } from "../ui/app/lib/use-thread-sessions";
+import { liveByBot, rowLabel } from "../ui/app/lib/use-thread-sessions";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
 import { watchChildReports } from "../src/reports";
@@ -143,6 +143,24 @@ test("a bot's live status: waiting beats running, idle bots and threadless sessi
     ]),
     { a: "awaiting_permissions", b: "running", d: "awaiting_permissions" },
   );
+});
+
+test("a bot row's label: waiting wins, then the open chat, then another running thread", () => {
+  const live = { a: "running", w: "awaiting_permissions" } as const;
+  // Selected, open chat idle: another thread's status.
+  assert.equal(rowLabel(live, "a", "a", null, false), "Working");
+  assert.equal(rowLabel(live, "w", "w", null, false), "Waiting");
+  // Selected, open chat live: it says more, unless another thread waits.
+  assert.equal(rowLabel(live, "a", "a", "Reading", false), "Reading");
+  assert.equal(rowLabel(live, "w", "w", "Reading", false), "Waiting");
+  assert.equal(rowLabel({}, "a", "a", "Editing", false), "Editing");
+  // A bot still setting up keeps its setup label.
+  assert.equal(rowLabel(live, "a", "a", null, true), null);
+  assert.equal(rowLabel(live, "w", "x", null, true), null);
+  // Not selected: its own status, never the open chat's.
+  assert.equal(rowLabel(live, "a", "x", "Reading", false), "Working");
+  assert.equal(rowLabel(live, "w", "x", "Reading", false), "Waiting");
+  assert.equal(rowLabel(live, "z", "x", "Reading", false), null);
 });
 
 test("a child that is done, a turn that is not reportable, or another thread's child: unlocked", async () => {

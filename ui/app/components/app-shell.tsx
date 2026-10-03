@@ -54,7 +54,7 @@ import { getAvatarPref, setAvatarPref, resolveAvatar, defaultMascotFor, type Ava
 import { JARVIS_BOT_ID, type Bot, type ThreadFull } from "../lib/gitbot";
 import { setupPrompt, type SetupRunKind } from "../lib/setup";
 import { useScrollEdge } from "../lib/use-scroll-edge";
-import { useThreadSessions } from "../lib/use-thread-sessions";
+import { rowLabel, useThreadSessions } from "../lib/use-thread-sessions";
 import { approvalRows, type ChildApproval } from "../lib/approvals";
 import { attentionRows, hasNews, needsYouCount, needsYouLabel } from "../lib/attention";
 import { useAttentionTitle } from "../lib/tab-title";
@@ -406,15 +406,15 @@ export default function V2() {
   // gitbot started itself (a child's report to Jarvis).
   const threadSessions = useThreadSessions();
   // A bot's status from its threads' sessions, whichever bot is selected.
-  // The selected bot's open chat says more (activeLabel) and wins while it
-  // is live; otherwise another of its threads may still be running. A bot
-  // still setting up keeps its setup status.
-  const liveLabel = (b: Bot) => {
+  const statusLabelFor = (b: Bot) => rowLabel(threadSessions.liveBots, b.id, bot?.id, activeLabel, needsSetup(b));
+  const selectedLabel = bot ? statusLabelFor(bot) : null;
+  // The face moves with the label: the open chat's own activity, else a
+  // generic one from the bot's other threads (what chatMascotActivity gives
+  // an approval wait and an unknown tool).
+  const liveMascot = (b: Bot) => {
     const s = needsSetup(b) ? undefined : threadSessions.liveBots[b.id];
-    return s === "awaiting_permissions" ? "Waiting" : s === "running" ? "Working" : null;
+    return s === "awaiting_permissions" ? "listening" : s === "running" ? "working" : undefined;
   };
-  const rowLabel = (b: Bot) => (b.id === bot?.id && activeLabel) || liveLabel(b);
-  const selectedLabel = bot ? rowLabel(bot) : null;
   const botsScrollEdge = useScrollEdge(
     botsScrollRef,
     `${collapsed}:${botsLoading}:${visibleBots.length}`,
@@ -960,7 +960,7 @@ export default function V2() {
     const mirrored = !setupPending && b.id === mirroredEmptyBotId;
     // Jarvis says how many of its threads need you, whichever bot is selected.
     const attentionLabel = b.builtin === "jarvis" ? needsYouLabel(needsYou) : null;
-    const statusLabel = rowLabel(b);
+    const statusLabel = statusLabelFor(b);
     return (
       <div className="bot-row-wrap" key={b.id}>
         <button
@@ -978,7 +978,7 @@ export default function V2() {
             <BotFace
               mascot={avatarFor(b.id).mascot}
               size={44}
-              activity={!setupPending && b.id === bot?.id ? chatMascotActivity(botActivity) : undefined}
+              activity={setupPending ? undefined : (b.id === bot?.id && chatMascotActivity(botActivity)) || liveMascot(b)}
               color={avatarFor(b.id).color}
               cheer={!setupPending && !mirrored && (hoverId === b.id)}
               follow={mirrored}

@@ -65,6 +65,26 @@ export function liveByBot(sessions: SessionSummary[]): Record<string, BotLiveSta
 }
 
 /**
+ * A bot row's live label. A waiting thread wins over everything: it needs
+ * the user. Then the selected bot's open chat (activeLabel, which says more),
+ * then any other running thread. A bot still setting up keeps its setup
+ * status: null, unless its own open chat is live.
+ */
+export function rowLabel(
+  liveBots: Record<string, BotLiveStatus>,
+  botId: string,
+  selectedId: string | null | undefined,
+  activeLabel: string | null,
+  needsSetup: boolean,
+): string | null {
+  const open = botId === selectedId ? activeLabel : null;
+  if (needsSetup) return open;
+  const s = liveBots[botId];
+  if (s === "awaiting_permissions") return "Waiting";
+  return open ?? (s === "running" ? "Working" : null);
+}
+
+/**
  * The app's one subscription to the server's session statuses, by thread id.
  * It is how an open thread notices a turn gitbot started on its own — a
  * child's report waking Jarvis — and how a Jarvis thread knows it is waiting
