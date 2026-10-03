@@ -58,16 +58,24 @@ function normalise(note: string): string {
   return (note ?? "").replace(BULLET, "").replace(/\s+/g, " ").trim();
 }
 
+/** The shortest part of a note that may name it; shorter needs the full text. */
+export const MIN_PARTIAL = 8;
+
+/** The most of a memory file get_projects returns, in characters. */
+export const CONTENTS_MAX = 8 * 1024;
+
 type Match = { ok: true; line: number } | { ok: false; error: string };
 
 /**
  * The line of the bullet a note names: exact text first, else the one bullet
- * containing it (case-insensitive). Ambiguity is an error, never a guess.
+ * containing it (case-insensitive, and only for a part of at least
+ * MIN_PARTIAL characters). Ambiguity is an error, never a guess.
  */
 function findBullet(lines: string[], wanted: string): Match {
   const bullets = lines.map((l, i) => ({ i, text: BULLET.test(l) ? normalise(l) : null })).filter((b) => b.text !== null);
   const exact = bullets.find((b) => b.text === wanted);
   if (exact) return { ok: true, line: exact.i };
+  if (wanted.length < MIN_PARTIAL) return { ok: false, error: `no note is exactly "${wanted}"; quote the note in full` };
   const needle = wanted.toLowerCase();
   const partial = bullets.filter((b) => b.text!.toLowerCase().includes(needle));
   if (partial.length === 1) return { ok: true, line: partial[0].i };
@@ -76,7 +84,7 @@ function findBullet(lines: string[], wanted: string): Match {
 }
 
 export type MemoryResult =
-  | { ok: true; project: string; memory: string; notes: number }
+  | { ok: true; project: string; notes: number }
   | { ok: false; error: string; notes?: string[] };
 
 function checkProject(id: string): string | undefined {
@@ -104,9 +112,12 @@ export function remember(id: string, note: string, replaces?: string): MemoryRes
   if (replaces !== undefined && normalise(replaces)) {
     const match = findBullet(lines, normalise(replaces));
     if (!match.ok) return { ok: false, error: match.error, notes };
-    lines[match.line] = `- ${text}`;
+    const already = findBullet(lines, text);
+    // The new text is already another note: drop the old one, not a second copy.
+    if (already.ok && already.line !== match.line && normalise(lines[already.line]) === text) lines.splice(match.line, 1);
+    else lines[match.line] = `- ${text}`;
   } else if (notes.includes(text)) {
-    return { ok: true, project: id, memory: memoryPath(id), notes: notes.length };
+    return { ok: true, project: id, notes: notes.length };
   } else {
     if (notes.length >= MEMORY_CAP) {
       return {
@@ -122,7 +133,7 @@ export function remember(id: string, note: string, replaces?: string): MemoryRes
   }
   const contents = lines.join("\n") + "\n";
   writeMemory(id, contents);
-  return { ok: true, project: id, memory: memoryPath(id), notes: memoryNotes(contents).length };
+  return { ok: true, project: id, notes: memoryNotes(contents).length };
 }
 
 /** Removes the note `note` names (exact text, or a unique part of it). */
@@ -138,13 +149,19 @@ export function forget(id: string, note: string): MemoryResult {
   lines.splice(match.line, 1);
   const contents = lines.join("\n") + "\n";
   writeMemory(id, contents);
-  return { ok: true, project: id, memory: memoryPath(id), notes: memoryNotes(contents).length };
+  return { ok: true, project: id, notes: memoryNotes(contents).length };
 }
 
-export type ProjectWithMemory = ProjectLookup & { memory?: { path: string; contents: string } };
+export type ProjectWithMemory = ProjectLookup & { memory?: string };
 
-/** get_projects for Jarvis: each project's details plus its memory file. */
+/** A memory file's contents, cut at CONTENTS_MAX so a big hand edit cannot flood a turn. */
+export function memoryForJarvis(id: string): string {
+  const contents = readMemory(id);
+  return contents.length > CONTENTS_MAX ? `${contents.slice(0, CONTENTS_MAX)}\n[truncated]\n` : contents;
+}
+
+/** get_projects for Jarvis: each project's details plus its memory ("" when none). */
 export async function getProjectsWithMemory(ids: readonly string[]): Promise<ProjectWithMemory[]> {
   const projects = await getProjects(ids);
-  return projects.map((p) => ("error" in p ? p : { ...p, memory: { path: memoryPath(p.id), contents: readMemory(p.id) } }));
+  return projects.map((p) => ("error" in p ? p : { ...p, memory: memoryForJarvis(p.id) }));
 }
