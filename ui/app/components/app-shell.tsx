@@ -1067,7 +1067,7 @@ export default function V2() {
                 <div className="bot-list">
                   {visibleUserBots.map((b, i) => botRow(b, pinnedCount + i))}
                   {userBots.length === 0 && <p className="threads-empty">None of your own yet — make one with +.</p>}
-                  {userBots.length > 0 && visibleUserBots.length === 0 && (
+                  {userBots.length > 0 && visibleUserBots.length === 0 && !visibleJarvis && (
                     <p className="threads-empty">No bots match your search.</p>
                   )}
                 </div>
@@ -1250,6 +1250,7 @@ export default function V2() {
                 botId={bot?.id}
                 botName={bot?.name ?? "bot"}
                 botPermissionMode={bot?.permissionMode}
+                fixedPermissions={bot?.builtin === "jarvis"}
                 botAgent={bot?.agent}
                 botAvatar={bot ? avatarFor(bot.id) : undefined}
                 autoSend={autoSend && autoSend.botId === bot?.id ? autoSend.prompt : null}

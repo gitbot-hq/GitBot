@@ -96,10 +96,16 @@ export type BotLookup = BotDetails | { id: string; error: string };
  * Details for each id asked for, in order. Instructions only with the flag:
  * they are long, and Jarvis needs them only when the user asks about them.
  */
-export function getBotsForJarvis(ids: readonly string[], includeInstructions = false): BotLookup[] {
+export function getBotsForJarvis(
+  ids: readonly string[],
+  includeInstructions: boolean,
+  availableAgents: readonly string[],
+): BotLookup[] {
   return ids.map((id) => {
     const bot = getBot(id);
     if (!bot || isJarvisBot(bot)) return { id, error: "no bot with this id" };
+    // A plain agent bot is only an ability while its agent is installed here.
+    if (bot.builtin && !availableAgents.includes(bot.builtin)) return { id, error: "agent not installed" };
     const details: BotDetails = {
       id: bot.id,
       name: bot.name,
@@ -137,7 +143,7 @@ export function jarvisToolServer(availableAgents: readonly string[]) {
           ids: z.array(z.string()).min(1).describe("Bot ids from list_bots"),
           includeInstructions: z.boolean().optional().describe("Also return each bot's instructions. Only when the user asks."),
         },
-        async ({ ids, includeInstructions }) => asText({ bots: getBotsForJarvis(ids, includeInstructions ?? false) }),
+        async ({ ids, includeInstructions }) => asText({ bots: getBotsForJarvis(ids, includeInstructions ?? false, availableAgents) }),
       ),
     ],
   });

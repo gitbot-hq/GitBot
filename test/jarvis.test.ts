@@ -6,15 +6,18 @@ import { tmpdir } from "os";
 import { join } from "path";
 import {
   createBot,
+  createThread,
   dataDir,
   getBot,
+  getThread,
   JARVIS_BOT_ID,
   jarvisDir,
   listBots,
   setSetupStatus,
   threadAgent,
+  type Thread,
 } from "../src/bot-store";
-import { handleBotRoutes } from "../src/bot-routes";
+import { handleBotRoutes, resolveThreadTurn } from "../src/bot-routes";
 import { presetSystemPrompt } from "../src/bot-prompt";
 import {
   getBotsForJarvis,
@@ -23,7 +26,8 @@ import {
   jarvisQueryOptions,
   listBotsForJarvis,
 } from "../src/jarvis";
-import type { IRequest, IResponse } from "../src/server-common";
+import { createSession, sessions, type IRequest, type IResponse } from "../src/server-common";
+import { handleRequest } from "../src/server";
 
 const ALL_AGENTS = ["claude-code", "opencode", "codex"];
 
@@ -140,7 +144,7 @@ test("get_bots: several ids in one call, instructions only with the flag", () =>
   const a = createBot({ name: "Alpha", description: "Reviews PRs", instructions: "Review hard", agent: "codex", repoPath: "/work/alpha" });
   const b = createBot({ name: "Beta", instructions: "Write tests", setupInstructions: "npm i" });
 
-  const plain = getBotsForJarvis([a.id, b.id, "builtin-opencode", "nope", JARVIS_BOT_ID]);
+  const plain = getBotsForJarvis([a.id, b.id, "builtin-opencode", "nope", JARVIS_BOT_ID], false, ALL_AGENTS);
   assert.equal(plain.length, 5);
   assert.deepEqual(plain[0], {
     id: a.id, name: "Alpha", description: "Reviews PRs", agent: "codex", defaultFolder: "/work/alpha", setup: "not needed",
@@ -153,10 +157,96 @@ test("get_bots: several ids in one call, instructions only with the flag", () =>
   assert.ok("error" in plain[4], "Jarvis is not one of its own abilities");
   for (const d of plain) assert.ok(!("instructions" in d));
 
-  const full = getBotsForJarvis([a.id, b.id], true);
+  const full = getBotsForJarvis([a.id, b.id], true, ALL_AGENTS);
   assert.equal((full[0] as any).instructions, "Review hard");
   assert.equal((full[1] as any).instructions, "Write tests");
-  assert.ok(getBotsForJarvis([a.id], false).every((d) => !("instructions" in d)));
+  assert.ok(getBotsForJarvis([a.id], false, ALL_AGENTS).every((d) => !("instructions" in d)));
+});
+
+test("get_bots: a plain bot whose agent is not installed is not offered", () => {
+  const [codex, claude] = getBotsForJarvis(["builtin-codex", "builtin-claude-code"], false, ["claude-code"]);
+  assert.deepEqual(codex, { id: "builtin-codex", error: "agent not installed" });
+  assert.equal((claude as any).name, "Claude Code");
+});
+
+// --- /chat's resolution of a thread's turn ---
+
+function jarvisThread(): Thread {
+  return createThread(JARVIS_BOT_ID, jarvisDir(), undefined, "chat", "claude-code");
+}
+
+test("resolveThreadTurn: a Jarvis thread is forced to its folder, default model and auto-approve", () => {
+  const stale = { ...jarvisThread(), repoPath: tmpdir(), agent: "codex" as const };
+  const turn = resolveThreadTurn(stale, getBot(JARVIS_BOT_ID)!, {
+    model: "claude-haiku-4-5", permissionMode: "ask-permissions", mode: "plan",
+  }, ALL_AGENTS);
+  assert.ok(turn.ok);
+  assert.equal(turn.repoPath, jarvisDir());
+  assert.equal(turn.agent, "claude-code");
+  assert.equal(turn.model, undefined);
+  assert.equal(turn.permissionMode, "yolo");
+  assert.equal(turn.mode, undefined);
+  assert.deepEqual(turn.preset.jarvis, { availableAgents: ALL_AGENTS });
+});
+
+test("resolveThreadTurn: a plain bot thread gets no jarvis key", () => {
+  const thread = createThread("builtin-claude-code", tmpdir(), undefined, "chat", "claude-code");
+  const turn = resolveThreadTurn(thread, getBot("builtin-claude-code")!, {}, ALL_AGENTS);
+  assert.ok(turn.ok);
+  assert.ok(!("jarvis" in turn.preset));
+  assert.equal(turn.repoPath, tmpdir());
+  assert.equal(turn.permissionMode, "ask-permissions");
+});
+
+test("resolveThreadTurn: a user bot keeps its own settings, and the request may override them", () => {
+  const bot = createBot({ name: "Planner", instructions: "Plan", model: "claude-opus-4-1", permissionMode: "plan", allowedTools: ["Read"] });
+  const thread = createThread(bot.id, tmpdir());
+  const turn = resolveThreadTurn(thread, bot, {}, ALL_AGENTS);
+  assert.ok(turn.ok);
+  assert.ok(!("jarvis" in turn.preset));
+  assert.equal(turn.repoPath, tmpdir());
+  assert.equal(turn.model, "claude-opus-4-1");
+  assert.equal(turn.permissionMode, "yolo");
+  assert.equal(turn.mode, "plan");
+  assert.deepEqual(turn.preset.allowedTools, ["Read"]);
+
+  const overridden = resolveThreadTurn(thread, bot, { model: "m", permissionMode: "ask-permissions", mode: "build" }, ALL_AGENTS);
+  assert.ok(overridden.ok);
+  assert.equal(overridden.model, "m");
+  assert.equal(overridden.permissionMode, "ask-permissions");
+  assert.equal(overridden.mode, "build");
+});
+
+test("resolveThreadTurn: a setup thread is never Jarvis, and setup and missing agents refuse", () => {
+  const bot = createBot({ name: "Needs ffmpeg", setupInstructions: "install ffmpeg", allowedTools: ["Read"] });
+  const setup = resolveThreadTurn(createThread(bot.id, tmpdir(), "Set up", "setup"), bot, {}, ALL_AGENTS);
+  assert.ok(setup.ok);
+  assert.ok(!("jarvis" in setup.preset));
+  assert.equal(setup.preset.setup, true);
+  assert.equal(setup.preset.allowedTools, undefined);
+
+  const work = resolveThreadTurn(createThread(bot.id, tmpdir()), bot, {}, ALL_AGENTS);
+  assert.ok(!work.ok);
+  assert.equal(work.status, 409);
+
+  const missing = resolveThreadTurn(jarvisThread(), getBot(JARVIS_BOT_ID)!, {}, ["codex"]);
+  assert.ok(!missing.ok);
+  assert.equal(missing.status, 400);
+  assert.deepEqual(missing.extra, { agentUnavailable: "claude-code" });
+});
+
+test("PATCH on a Jarvis thread cannot change its folder, agent, kind or session", async () => {
+  const thread = jarvisThread();
+  const res = await call("PATCH", `/threads/${thread.id}`, {
+    repoPath: tmpdir(), agent: "codex", kind: "setup", sdkSessionId: "hijack", title: "Kept",
+  });
+  assert.equal(res.status, 200);
+  const after = getThread(thread.id)!;
+  assert.equal(after.repoPath, jarvisDir());
+  assert.equal(after.agent, "claude-code");
+  assert.equal(after.kind, "chat");
+  assert.equal(after.sdkSessionId, null);
+  assert.equal(after.title, "Kept");
 });
 
 // --- Wiring ---
@@ -186,4 +276,60 @@ test("Jarvis's prompt replaces the bot framing, and only its own tools are auto-
   assert.ok(isJarvisTool("mcp__gitbot__get_bots"));
   assert.ok(!isJarvisTool("mcp__other__list_bots"));
   assert.ok(!isJarvisTool("Bash"));
+});
+
+// --- A live Jarvis session's settings ---
+
+/** Drives the full request handler, as the HTTP server does. */
+async function serve(method: string, url: string, body?: unknown) {
+  const req = Object.assign(new EventEmitter(), { method, url, headers: {} }) as unknown as IRequest;
+  let status = 0;
+  let out = "";
+  const res: IResponse = {
+    headersSent: false,
+    writableEnded: false,
+    writeHead(code) { status = code; },
+    write() {},
+    end(chunk) { out = chunk ?? ""; },
+  };
+  const done = handleRequest(req, res, ALL_AGENTS, tmpdir());
+  setImmediate(() => {
+    if (body !== undefined) (req as unknown as EventEmitter).emit("data", JSON.stringify(body));
+    (req as unknown as EventEmitter).emit("end");
+  });
+  await done;
+  return { status, body: JSON.parse(out) };
+}
+
+function idleJarvisSession() {
+  const store = createSession(`jarvis-${Date.now()}-${Math.random()}`, "claude-code", jarvisDir(), undefined, undefined, "yolo", {
+    threadId: "t",
+    preset: { id: JARVIS_BOT_ID, name: "Jarvis", instructions: "", jarvis: { availableAgents: ALL_AGENTS } },
+  });
+  store.status = "done";
+  return store;
+}
+
+test("a Jarvis session's permission mode cannot be changed mid-thread", async () => {
+  const store = idleJarvisSession();
+  const res = await serve("PATCH", `/sessions/${store.gitbotId}`, { permissionMode: "ask-permissions" });
+  assert.equal(res.status, 409);
+  assert.match(res.body.error, /auto-approve/);
+  assert.equal(store.permissionMode, "yolo");
+  sessions.delete(store.gitbotId);
+});
+
+test("a bare /chat cannot reuse a Jarvis session to change its settings", async () => {
+  const store = idleJarvisSession();
+  const res = await serve("POST", "/chat", {
+    sessionId: store.gitbotId, agent: "claude-code", repoPath: tmpdir(), prompt: "hi",
+    model: "claude-haiku-4-5", permissionMode: "ask-permissions", mode: "plan",
+  });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error, "Jarvis turns need a threadId");
+  assert.equal(store.model, undefined);
+  assert.equal(store.mode, undefined);
+  assert.equal(store.permissionMode, "yolo");
+  assert.equal(store.status, "done");
+  sessions.delete(store.gitbotId);
 });
