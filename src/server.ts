@@ -146,10 +146,22 @@ export async function handleRequest(
     // GET /sessions/:id/status
     const statusId = parsePathParam(path, "/sessions/")?.replace(/\/status$/, "");
     if (method === "GET" && path.endsWith("/status") && statusId) {
+      // A thread id finds the thread's live session too: a turn gitbot started
+      // (a Jarvis child) may not have bound its session id to the thread yet.
+      const all = [...sessions.values()];
       const store = sessions.get(statusId)
-        ?? [...sessions.values()].find(s => s.sdkSessionId === statusId);
+        ?? all.find(s => s.sdkSessionId === statusId)
+        ?? all.find(s => s.threadId === statusId && s.status === "running")
+        ?? all.reverse().find(s => s.threadId === statusId);
       if (!store) { jsonError(res, 404, "Session not found"); return; }
-      jsonOk(res, { streaming: store.status === "running", sdkSessionId: store.sdkSessionId ?? null });
+      // gitbotId names the session for every later call; seq is how far the
+      // event log has got, so a rejoining client knows what is replay.
+      jsonOk(res, {
+        streaming: store.status === "running",
+        sdkSessionId: store.sdkSessionId ?? null,
+        gitbotId: store.gitbotId,
+        seq: store.seq,
+      });
       return;
     }
 

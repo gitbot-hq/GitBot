@@ -503,6 +503,10 @@ export default function Chat({
   // still-pending set), status, and terminal events are honored.
   const catchupRef = useRef(false);
   const pendingFilter = useRef<string[] | null>(null);
+  // While rejoining: events up to this seq are a replay of what happened
+  // before, and whether the loaded history already shows them.
+  const replaySeqRef = useRef(0);
+  const historyCoversRef = useRef(false);
   // Drafts are per thread: switching stashes, returning restores.
   const drafts = useRef<Record<string, string>>({});
   const draftRef = useRef("");
@@ -759,45 +763,59 @@ export default function Chat({
       }
     });
     if (!thread) return;
-    loadHistory(thread.id, true);
-    // Rejoin a turn still running server-side (e.g. after a reload).
-    if (thread.sdkSessionId) {
-      const sid = thread.sdkSessionId;
-      const tid = thread.id;
-      // A thread started elsewhere (Jarvis's children) runs in its session's
-      // mode, not the bot's default: adopt it unless one is remembered.
-      if (!permissionModesRef.current[tid]) {
-        getSessionConfig(sid)
-          .then(({ permissionMode, mode }) => {
-            if (threadRef.current === tid && !permissionModesRef.current[tid]) rememberMode(tid, mode === "plan" ? "plan" : permissionMode);
-          })
-          .catch(() => {});
-      }
-      getSessionStatus(sid)
-        .then(({ streaming }) => {
-          if (!streaming || threadRef.current !== tid) return;
+    // A thread with no session id yet has no transcript: its history is
+    // either nothing, or a running turn's replay (below) — read only once
+    // its status says which, so the two never overlap.
+    const awaitStatus = !thread.sdkSessionId && thread.messageCount > 0;
+    if (!awaitStatus) loadHistory(thread.id, true);
+    else setLoading(true);
+    // Rejoin a turn still running server-side: after a reload, or a turn
+    // gitbot started itself (a Jarvis child), whose session may not be bound
+    // to the thread yet — then the thread id finds it.
+    const tid = thread.id;
+    const lookup = thread.sdkSessionId ?? (thread.messageCount > 0 ? tid : null);
+    // With a session id, history comes from the transcript; without one there
+    // is none yet, and the replayed events are all there is to show.
+    const historyCovers = !!thread.sdkSessionId;
+    if (lookup) {
+      getSessionStatus(lookup)
+        .then(({ streaming, gitbotId, seq }) => {
+          if (threadRef.current !== tid) return;
+          const sid = gitbotId ?? lookup;
+          // The session's mode is the truth: a child Jarvis started runs in
+          // its own, not the bot's default.
+          const adoptMode = () =>
+            getSessionConfig(sid)
+              .then(({ permissionMode, mode }) => {
+                if (threadRef.current !== tid) return;
+                rememberMode(tid, mode === "plan" ? "plan" : permissionMode);
+              })
+              .catch(() => {});
+          if (!streaming) {
+            if (awaitStatus) loadHistory(tid, true);
+            if (!permissionModesRef.current[tid]) adoptMode();
+            return;
+          }
           return getPendingPermissions(sid)
             .catch(() => ({ pending: [] as string[] }))
             .then(({ pending }) => {
               if (threadRef.current !== tid) return;
               pendingFilter.current = pending;
               catchupRef.current = true;
+              replaySeqRef.current = seq ?? Number.MAX_SAFE_INTEGER;
+              historyCoversRef.current = historyCovers;
               sessionRef.current = sid;
               turnActiveRef.current = true;
               setStreaming(true);
               setActivity("Thinking…");
+              if (awaitStatus) setLoading(false);
               openStream(sid);
-              // The running turn may be in a mode picked earlier (or from
-              // another tab); mirror it so the menu and cards tell the truth.
-              getSessionConfig(sid)
-                .then(({ permissionMode, mode }) => {
-                  if (threadRef.current !== tid) return;
-                  rememberMode(tid, mode === "plan" ? "plan" : permissionMode);
-                })
-                .catch(() => {});
+              adoptMode();
             });
         })
-        .catch(() => {});
+        .catch(() => {
+          if (awaitStatus && threadRef.current === tid) loadHistory(tid, true);
+        });
     }
     return () => {
       closeStream();
@@ -1022,6 +1040,11 @@ export default function Chat({
     }
   }
 
+  /** True for an event a rejoin replays: it happened before this client joined. */
+  function replayed(ev: Event) {
+    return catchupRef.current && Number((ev as MessageEvent).lastEventId) <= replaySeqRef.current;
+  }
+
   function openStream(sid: string) {
     closeStream();
     const es = new EventSource(streamUrl(sid));
@@ -1033,14 +1056,23 @@ export default function Chat({
         return {};
       }
     };
+    // A replayed event the loaded history already shows.
+    const shown = (ev: Event) => replayed(ev) && historyCoversRef.current;
+    es.addEventListener("user_prompt", (ev) => {
+      // Live prompts are this client's own, already on screen; a replayed one
+      // is shown only when no history covers it (a turn gitbot started).
+      if (!replayed(ev) || historyCoversRef.current) return;
+      const text = String(data(ev).prompt ?? "");
+      if (text) setMsgs((prev) => [...prev, { id: nid(), role: "user", segs: [{ kind: "text", text }] }]);
+    });
     es.addEventListener("assistant", (ev) => {
-      if (catchupRef.current) return;
+      if (shown(ev)) return;
       ensureLive();
       const chunk = String(data(ev).content ?? "");
       if (chunk) { setActivity("Writing…"); appendLiveText(chunk); }
     });
     es.addEventListener("tool_use", (ev) => {
-      if (catchupRef.current) return;
+      if (shown(ev)) return;
       ensureLive();
       const d = data(ev);
       setActivity(`Running ${d.tool_name || "tool"}…`);
@@ -1056,7 +1088,7 @@ export default function Chat({
       const d = data(ev);
       if (!d.toolUseID) return;
       // On rejoin, only still-pending approvals are offered again.
-      if (catchupRef.current && pendingFilter.current && pendingFilter.current.indexOf(d.toolUseID) === -1) return;
+      if (replayed(ev) && pendingFilter.current && pendingFilter.current.indexOf(d.toolUseID) === -1) return;
       setPerms((prev) =>
         prev.some((p) => p.toolUseID === d.toolUseID)
           ? prev
@@ -1068,7 +1100,7 @@ export default function Chat({
     // retry). Not terminal on its own, so the reason is kept only until the
     // turn ends: `done` clears it, `error` replaces it with the real cause.
     es.addEventListener("agent_error", (ev) => {
-      if (catchupRef.current) return;
+      if (shown(ev)) return;
       setTurnError(String(data(ev).message ?? "The agent reported an error"));
     });
     es.addEventListener("aborted", () => {

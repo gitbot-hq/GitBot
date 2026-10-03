@@ -241,6 +241,21 @@ test("a permission on a child's first turn can be answered by its SDK session id
   sessions.delete(store.gitbotId);
 });
 
+test("a running turn not yet bound to its thread is found by the thread id, with its seq", async () => {
+  const stub = agentRunners["claude-code"];
+  agentRunners["claude-code"] = async (store) => { runs.push(store); }; // stays running, never binds
+  try {
+    const thread = createThread("builtin-claude-code", tmpdir(), undefined, "chat", "claude-code");
+    const started = await chat({ threadId: thread.id, prompt: "go" });
+    const status = await serve("GET", `/sessions/${thread.id}/status`, undefined);
+    assert.equal(status.status, 200);
+    assert.deepEqual(status.body, { streaming: true, sdkSessionId: null, gitbotId: started.body.sessionId, seq: 1 });
+    sessions.delete(started.body.sessionId);
+  } finally {
+    agentRunners["claude-code"] = stub;
+  }
+});
+
 test("Jarvis's prompt offers start_thread and no longer says it is unavailable", () => {
   const prompt = jarvisSystemPrompt();
   assert.match(prompt, /start_thread/);

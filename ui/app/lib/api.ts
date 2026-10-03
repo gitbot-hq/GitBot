@@ -177,7 +177,7 @@ export function botSetupAction(id: string, action: "complete" | "reset" | "fail"
 }
 
 export function getSessionStatus(sessionId: string) {
-  return req<{ streaming: boolean; sdkSessionId: string | null }>(
+  return req<{ streaming: boolean; sdkSessionId: string | null; gitbotId?: string; seq?: number }>(
     `/sessions/${encodeURIComponent(sessionId)}/status`,
   );
 }
