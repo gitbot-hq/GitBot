@@ -1,6 +1,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, symlinkSync } from "fs";
+import { EventEmitter } from "events";
+import { existsSync, mkdtempSync, realpathSync, symlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -12,7 +13,8 @@ import {
   updateThread,
 } from "../src/bot-store";
 import { addProject } from "../src/project-index";
-import { createSession, emitEvent, sessions } from "../src/server-common";
+import { handleBotRoutes } from "../src/bot-routes";
+import { createSession, emitEvent, sessions, type IRequest, type IResponse } from "../src/server-common";
 import {
   LIST_THREADS_CAP,
   listThreadsForJarvis,
@@ -118,6 +120,19 @@ test("list_threads caps its output, newest first, and marks threads this Jarvis 
   assert.equal(listed.threads[1].startedByYou, undefined);
 });
 
+test("list_threads matches a folder reached with different letter case to its project", async (t) => {
+  const a = project();
+  const parent = a.folder.slice(0, a.folder.lastIndexOf("/"));
+  const name = a.folder.slice(parent.length + 1);
+  const shouted = `${parent}/${name.toUpperCase()}`;
+  if (!existsSync(shouted)) { t.skip("case-sensitive filesystem"); return; }
+  const bot = createBot({ name: "Cased" });
+  const thread = createThread(bot.id, shouted, "shouted");
+  const listed = await listThreadsForJarvis({ project: a.id });
+  assert.ok(listed.ok);
+  assert.deepEqual(listed.threads.map((x) => x.id), [thread.id]);
+});
+
 // --- thread_status ---
 
 function threadWithSession(sdkId: string, agent: "claude-code" | "codex" | "opencode" = "claude-code") {
@@ -166,6 +181,32 @@ test("thread_status prefers a running session over an older finished one", async
   const status = await threadStatus(thread.id);
   assert.ok(status.ok);
   assert.equal(status.status, "running");
+});
+
+test("thread_status: of two finished sessions the newest wins, and a failed one says so", async () => {
+  const thread = threadWithSession("sdk-two-done");
+  const old = createSession("g-two-old", "claude-code", thread.repoPath, undefined, undefined, undefined, { threadId: thread.id });
+  old.status = "done";
+  const newer = createSession("g-two-new", "claude-code", thread.repoPath, undefined, undefined, undefined, { threadId: thread.id });
+  emitEvent(newer, "error", { message: "crashed" });
+  newer.status = "error";
+  const status = await threadStatus(thread.id);
+  assert.ok(status.ok);
+  assert.equal(status.status, "failed");
+  assert.equal(status.error, "crashed");
+});
+
+test("thread_status of a running turn never passes off the previous reply as its last message", async () => {
+  const sdk = "sdk-running-quiet";
+  transcripts.set(sdk, [text("assistant", "an answer from the turn before")]);
+  const thread = threadWithSession(sdk);
+  createSession("g-running-quiet", "claude-code", thread.repoPath, undefined, undefined, undefined, { threadId: thread.id });
+  loaded.length = 0;
+  const status = await threadStatus(thread.id);
+  assert.ok(status.ok);
+  assert.equal(status.status, "running");
+  assert.equal(status.lastMessage, undefined);
+  assert.deepEqual(loaded, []);
 });
 
 test("thread_status with no live session is idle, with the last message from the transcript", async () => {
@@ -234,6 +275,16 @@ test("read_thread_tail renders tool calls, and a thread with no turn yet has no 
 
 // --- Jarvis threads are off limits ---
 
+test("thread_status and read_thread_tail refuse setup threads", async () => {
+  const bot = createBot({ name: "Needs setup", setupInstructions: "install ffmpeg" });
+  const setup = ensureSetupThread(bot.id, project().folder);
+  assert.ok(setup);
+  for (const result of [await threadStatus(setup.id), await readThreadTail(setup.id, 5)]) {
+    assert.equal(result.ok, false);
+    assert.match((result as { error: string }).error, /setup/);
+  }
+});
+
 test("thread_status and read_thread_tail refuse Jarvis threads and unknown ids", async () => {
   const jarvis = createThread(JARVIS_BOT_ID, jarvisDir());
   updateThread(jarvis.id, { sdkSessionId: "sdk-jarvis" });
@@ -246,4 +297,40 @@ test("thread_status and read_thread_tail refuse Jarvis threads and unknown ids",
   assert.deepEqual(loaded, []);
   assert.equal((await threadStatus("nope")).ok, false);
   assert.equal((await readThreadTail("nope", 1)).ok, false);
+});
+
+// --- The thread view reads through the same loader ---
+
+async function getMessages(id: string) {
+  const req = Object.assign(new EventEmitter(), { method: "GET", url: `/threads/${id}/messages`, headers: {} }) as unknown as IRequest;
+  let status = 0;
+  let out = "";
+  const res: IResponse = {
+    headersSent: false,
+    writableEnded: false,
+    writeHead(code) { status = code; },
+    write() {},
+    end(chunk) { out = chunk ?? ""; },
+  };
+  assert.equal(await handleBotRoutes(req, res, tmpdir(), ["claude-code", "codex", "opencode"]), true);
+  return { status, body: JSON.parse(out) };
+}
+
+test("GET /threads/:id/messages: 404 for no thread, empty before a turn, the transcript after", async () => {
+  assert.equal((await getMessages("nope")).status, 404);
+
+  const bot = createBot({ name: "Route" });
+  const thread = createThread(bot.id, project().folder);
+  loaded.length = 0;
+  const empty = await getMessages(thread.id);
+  assert.equal(empty.status, 200);
+  assert.deepEqual(empty.body.messages, []);
+  assert.deepEqual(loaded, []);
+
+  transcripts.set("sdk-route", [text("user", "hi")]);
+  // An agent this build does not know reads as Claude Code, as it always has.
+  updateThread(thread.id, { sdkSessionId: "sdk-route", agent: "mystery" as any });
+  const full = await getMessages(thread.id);
+  assert.deepEqual(full.body.messages, [text("user", "hi")]);
+  assert.deepEqual(loaded, ["claude-code:sdk-route"]);
 });

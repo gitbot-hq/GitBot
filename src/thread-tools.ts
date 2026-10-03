@@ -1,7 +1,6 @@
-import { realpathSync } from "fs";
 import { basename } from "path";
-import { getBot, getThread, isJarvisBot, listThreads, type BotAgent, type Thread } from "./bot-store";
-import { findProject, listProjects, projectId } from "./project-index";
+import { BOT_AGENTS, getBot, getThread, isJarvisBot, listBots, listThreads, type Bot, type BotAgent, type Thread } from "./bot-store";
+import { projectId, projectIdForFolder, projectNames } from "./project-index";
 import { sessions, type SessionStore } from "./server-common";
 import { loadTranscript as loadClaudeTranscript } from "./start-claude-code";
 import { loadTranscript as loadCodexTranscript } from "./start-codex";
@@ -29,7 +28,9 @@ export const transcriptLoaders: Record<BotAgent, (sdkSessionId: string, repoPath
 /** A thread's messages from its agent's own transcript; none before its first turn. */
 export async function loadThreadMessages(thread: Thread): Promise<TranscriptMessage[]> {
   if (!thread.sdkSessionId) return [];
-  return transcriptLoaders[thread.agent ?? "claude-code"](thread.sdkSessionId, thread.repoPath);
+  // Older threads, or an agent this build does not know: Claude Code, as ever.
+  const load = transcriptLoaders[thread.agent as BotAgent] ?? transcriptLoaders["claude-code"];
+  return load(thread.sdkSessionId, thread.repoPath);
 }
 
 // --- Caps ---
@@ -73,22 +74,14 @@ function lastAssistantText(messages: TranscriptMessage[]): string | undefined {
 
 type Readable = { ok: true; thread: Thread } | { ok: false; error: string };
 
-/** A thread Jarvis may read: it exists and is not a Jarvis thread. */
+/** A thread Jarvis may read: it exists, and is neither a Jarvis nor a setup thread. */
 function readableThread(threadId: string): Readable {
   const thread = getThread(threadId);
   const bot = thread && getBot(thread.botId);
   if (!thread) return { ok: false, error: `no thread with id "${threadId}": use list_threads` };
   if (isJarvisBot(bot)) return { ok: false, error: "that is a Jarvis thread; you cannot read Jarvis threads" };
+  if (thread.kind === "setup") return { ok: false, error: "that is a bot's setup thread, which is not yours to read" };
   return { ok: true, thread };
-}
-
-/** A folder's project id, by its resolved path, as the project index makes it. */
-function folderProjectId(folder: string): string {
-  try {
-    return projectId(realpathSync(folder));
-  } catch {
-    return projectId(folder);
-  }
 }
 
 // --- list_threads ---
@@ -113,31 +106,36 @@ export type ListThreadsResult =
  * gitbot's chat threads, newest first, without Jarvis or setup threads.
  * Filtered by project id and bot id when given; at most LIST_THREADS_CAP.
  */
-export async function listThreadsForJarvis(
+export function listThreadsForJarvis(
   filter: { project?: string; bot?: string },
   jarvisThreadId?: string,
-): Promise<ListThreadsResult> {
-  if (filter.project && !findProject(filter.project)) {
+): ListThreadsResult {
+  // One index read per call, and no workspace scan: every thread's folder is
+  // in the index already, since syncing it merges them in.
+  const names = projectNames();
+  if (filter.project && !names.has(filter.project)) {
     return { ok: false, error: `no project with id "${filter.project}": use list_projects` };
   }
+  const bots = new Map<string, Bot>(listBots(BOT_AGENTS).map((b) => [b.id, b]));
   if (filter.bot) {
-    const bot = getBot(filter.bot);
+    const bot = bots.get(filter.bot);
     if (!bot || isJarvisBot(bot)) return { ok: false, error: `no bot with id "${filter.bot}": use list_bots` };
   }
 
-  const names = new Map<string, string>();
-  try {
-    for (const p of (await listProjects()).projects) names.set(p.id, p.name);
-  } catch {
-    // Names are a nicety: fall back to folder names.
-  }
+  const folderIds = new Map<string, string>();
+  const projectOf = (folder: string) => {
+    let id = folderIds.get(folder);
+    // A folder that is gone keeps an id of its own, so it matches no project.
+    if (id === undefined) folderIds.set(folder, (id = projectIdForFolder(folder) ?? projectId(folder)));
+    return id;
+  };
 
   const matching: ThreadListing[] = [];
   for (const thread of listThreads(filter.bot)) {
     if (thread.kind === "setup") continue;
-    const bot = getBot(thread.botId);
+    const bot = bots.get(thread.botId);
     if (!bot || isJarvisBot(bot)) continue;
-    const pid = folderProjectId(thread.repoPath);
+    const pid = projectOf(thread.repoPath);
     if (filter.project && pid !== filter.project) continue;
     matching.push({
       id: thread.id,
@@ -204,6 +202,7 @@ export type ThreadStatusResult =
       waitingOn?: string[];
       /** The failure, when the turn failed. */
       error?: string;
+      /** The last top-level reply. While a turn runs, only one from that turn. */
       lastMessage?: string;
     }
   | { ok: false; error: string };
@@ -214,9 +213,13 @@ export async function threadStatus(threadId: string): Promise<ThreadStatusResult
   const { thread } = found;
   const bot = getBot(thread.botId);
   const store = liveStoreFor(thread.id);
+  const status: ThreadState = store ? sessionState(store) : "idle";
 
+  // A running turn's previous reply is not its last message: only the turn's
+  // own events count then. A finished turn that said nothing in its events,
+  // or one from before gitbot started, is read from the transcript.
   let lastMessage = store && lastEventText(store);
-  if (!lastMessage) {
+  if (!lastMessage && (status === "idle" || status === "done")) {
     try {
       lastMessage = lastAssistantText(await loadThreadMessages(thread));
     } catch {
@@ -234,7 +237,6 @@ export async function threadStatus(threadId: string): Promise<ThreadStatusResult
       ...last,
     };
   }
-  const status = sessionState(store);
   const waitingOn = status === "waiting on approval" ? [...store.pendingPermissions.values()].map((p) => p.toolName) : undefined;
   const errorEvent = status === "failed" ? [...store.events].reverse().find((e) => e.type === "error") : undefined;
   return {
@@ -265,8 +267,9 @@ export async function readThreadTail(threadId: string, n: number = TAIL_DEFAULT)
     return { ok: false, error: `could not read the thread's transcript: ${err?.message ?? err}` };
   }
   const messages = all
-    .map((m) => ({ role: m.role, text: cap(messageText(m), MESSAGE_CHARS) }))
+    .map((m) => ({ role: m.role, text: messageText(m) }))
     .filter((m) => m.text)
-    .slice(-count);
+    .slice(-count)
+    .map((m) => ({ ...m, text: cap(m.text, MESSAGE_CHARS) }));
   return { ok: true, threadId: thread.id, title: thread.title, messages, total: all.length };
 }
