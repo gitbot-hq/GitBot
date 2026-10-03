@@ -5,7 +5,19 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { homedir, tmpdir } from "os";
 import { join } from "path";
 import { createThread, dataDir, JARVIS_BOT_ID, jarvisDir } from "../src/bot-store";
-import { addProject, getProjects, listProjects, projectId, scrubRemote, workspaceScanCount } from "../src/project-index";
+import { readdir } from "fs/promises";
+import {
+  addProject,
+  findProject,
+  getProjects,
+  listProjects,
+  projectId,
+  type ScanOptions,
+  scanWorkspace,
+  scrubRemote,
+  setScanOptionsForTests,
+  workspaceScanCount,
+} from "../src/project-index";
 import { jarvisSystemPrompt } from "../src/jarvis";
 
 // git here — the tests' own and the index's — must not depend on this
@@ -65,7 +77,7 @@ test("the index is built on the first list_projects, from the folders threads ra
   createThread(JARVIS_BOT_ID, jarvisDir());
   assert.equal(existsSync(PROJECTS_FILE), false, "nothing is built before Jarvis asks");
 
-  const projects = await listProjects();
+  const { projects } = await listProjects();
   assert.equal(existsSync(PROJECTS_FILE), true);
   assert.deepEqual(projects.map((p) => p.name).sort(), ["alpha", "beta"], "deduped, and Jarvis's folder left out");
   assert.deepEqual(Object.keys(projects[0]).sort(), ["id", "name"], "the list stays light");
@@ -78,9 +90,9 @@ test("the index is built on the first list_projects, from the folders threads ra
 
 test("a thread started in a new folder joins the index", async () => {
   createThread("some-bot", tempFolder("first"));
-  assert.deepEqual((await listProjects()).map((p) => p.name), ["first"]);
+  assert.deepEqual((await listProjects()).projects.map((p) => p.name), ["first"]);
   createThread("some-bot", tempFolder("second"));
-  assert.deepEqual((await listProjects()).map((p) => p.name), ["first", "second"]);
+  assert.deepEqual((await listProjects()).projects.map((p) => p.name), ["first", "second"]);
 });
 
 test("folders that no longer exist are dropped when listed", async () => {
@@ -88,10 +100,10 @@ test("folders that no longer exist are dropped when listed", async () => {
   const gone = tempFolder("gone");
   createThread("some-bot", keep);
   createThread("some-bot", gone);
-  assert.equal((await listProjects()).length, 2);
+  assert.equal((await listProjects()).projects.length, 2);
 
   rmSync(gone, { recursive: true });
-  assert.deepEqual((await listProjects()).map((p) => p.name), ["keep"]);
+  assert.deepEqual((await listProjects()).projects.map((p) => p.name), ["keep"]);
   const stored = JSON.parse(readFileSync(PROJECTS_FILE, "utf-8"));
   assert.deepEqual(stored.projects.map((p: { path: string }) => p.path), [keep]);
 });
@@ -114,7 +126,7 @@ test("colliding names carry their parent folder", async () => {
   createThread("some-bot", work);
   createThread("some-bot", personal);
   createThread("some-bot", solo);
-  assert.deepEqual((await listProjects()).map((p) => p.name), ["personal/api", "web", "work/api"]);
+  assert.deepEqual((await listProjects()).projects.map((p) => p.name), ["personal/api", "web", "work/api"]);
 });
 
 test("add_project rejects bad paths and dedupes by folder", async () => {
@@ -148,7 +160,7 @@ test("add_project rejects bad paths and dedupes by folder", async () => {
   const fromThread = addProject(threaded);
   assert.ok(fromThread.ok && fromThread.alreadyListed);
 
-  assert.deepEqual((await listProjects()).map((p) => p.name), ["found", "threaded"]);
+  assert.deepEqual((await listProjects()).projects.map((p) => p.name), ["found", "threaded"]);
   const stored = JSON.parse(readFileSync(PROJECTS_FILE, "utf-8"));
   assert.equal(stored.projects.find((p: { id: string }) => p.id === first.project.id).source, "added");
 });
@@ -200,7 +212,7 @@ test("a thread folder reached through a symlink is one project, at its real path
   symlinkSync(real, link);
   createThread("some-bot", link);
   createThread("some-bot", real);
-  assert.deepEqual(await listProjects(), [{ id: projectId(real), name: "real" }]);
+  assert.deepEqual((await listProjects()).projects, [{ id: projectId(real), name: "real" }]);
 });
 
 test("a folder reached in another letter case is one project on a case-insensitive disk", async (t) => {
@@ -209,14 +221,14 @@ test("a folder reached in another letter case is one project on a case-insensiti
   if (!existsSync(upper)) return t.skip("case-sensitive filesystem");
   createThread("some-bot", real);
   createThread("some-bot", upper);
-  assert.deepEqual(await listProjects(), [{ id: projectId(real), name: "Mixed" }]);
+  assert.deepEqual((await listProjects()).projects, [{ id: projectId(real), name: "Mixed" }]);
 });
 
 test("a corrupt projects.json is set aside and the tools still work", async () => {
   writeFileSync(PROJECTS_FILE, "{ not json", "utf-8");
   const dir = tempFolder("survivor");
   createThread("some-bot", dir);
-  assert.deepEqual((await listProjects()).map((p) => p.name), ["survivor"]);
+  assert.deepEqual((await listProjects()).projects.map((p) => p.name), ["survivor"]);
   const aside = readdirSync(dataDir()).filter((f) => f.startsWith("projects.json.corrupt-"));
   assert.ok(aside.length >= 1, "the unreadable file is kept beside the new one");
   assert.equal(readFileSync(join(dataDir(), aside[aside.length - 1]), "utf-8"), "{ not json");
@@ -235,7 +247,7 @@ test("malformed entries are skipped, not fatal", async () => {
     }),
     "utf-8",
   );
-  assert.deepEqual(await listProjects(), [{ id: projectId(good), name: "good" }]);
+  assert.deepEqual((await listProjects()).projects, [{ id: projectId(good), name: "good" }]);
 });
 
 test("a detached HEAD reports the commit it sits on", async () => {
@@ -312,7 +324,6 @@ test("the scan finds repos at depths 1 to 4, and only those it should", async ()
   fakeRepo(join(ws, "wt"), true);
   fakeRepo(join(ws, "node_modules", "pkg"));
   fakeRepo(join(ws, "app", "node_modules", "dep"));
-  fakeRepo(join(ws, "dist", "built"));
   fakeRepo(join(ws, ".hidden", "secret"));
   // Links are not followed: a loop back to the top, and a repo outside.
   const outside = fakeRepo(join(tempRoot(), "outside"));
@@ -320,7 +331,7 @@ test("the scan finds repos at depths 1 to 4, and only those it should", async ()
   symlinkSync(outside, join(ws, "linked"));
   process.chdir(ws);
 
-  assert.deepEqual((await listProjects()).map((p) => p.name), ["a", "b", "d4", "outer", "solo", "wt"]);
+  assert.deepEqual((await listProjects()).projects.map((p) => p.name), ["a", "b", "d4", "outer", "solo", "wt"]);
   const stored = storedProjects();
   assert.ok(stored.every((p) => p.source === "scan"));
   assert.ok(!stored.some((p) => p.path === join(ws, "group")), "a folder of repos is not itself a project");
@@ -331,7 +342,7 @@ test("a workspace that is itself a repo is one project; the scan stops there", a
   const ws = fakeRepo(join(tempRoot(), "mono"));
   fakeRepo(join(ws, "sub"));
   process.chdir(ws);
-  assert.deepEqual(await listProjects(), [{ id: projectId(ws), name: "mono" }]);
+  assert.deepEqual((await listProjects()).projects, [{ id: projectId(ws), name: "mono" }]);
 });
 
 test("scanned repos merge with thread and added folders without duplicates; colliding names carry their parent", async () => {
@@ -343,7 +354,7 @@ test("scanned repos merge with thread and added folders without duplicates; coll
   assert.ok(addProject(web).ok);
   process.chdir(ws);
 
-  assert.deepEqual((await listProjects()).map((p) => p.name), ["personal/api", "web", "work/api"]);
+  assert.deepEqual((await listProjects()).projects.map((p) => p.name), ["personal/api", "web", "work/api"]);
   const sources = Object.fromEntries(storedProjects().map((p) => [p.path, p.source]));
   assert.deepEqual(sources, { [work]: "thread", [web]: "added", [personal]: "scan" });
 });
@@ -353,11 +364,11 @@ test("a fresh scan is reused; a day-old one, or one of another folder, is redone
   fakeRepo(join(ws, "first"));
   process.chdir(ws);
   const before = workspaceScanCount();
-  assert.deepEqual((await listProjects()).map((p) => p.name), ["first"]);
+  assert.deepEqual((await listProjects()).projects.map((p) => p.name), ["first"]);
   assert.equal(workspaceScanCount(), before + 1);
 
   fakeRepo(join(ws, "second"));
-  assert.deepEqual((await listProjects()).map((p) => p.name), ["first"], "fresh: not rescanned");
+  assert.deepEqual((await listProjects()).projects.map((p) => p.name), ["first"], "fresh: not rescanned");
   await getProjects(["p-nope"]);
   assert.equal(workspaceScanCount(), before + 1);
 
@@ -365,13 +376,13 @@ test("a fresh scan is reused; a day-old one, or one of another folder, is redone
   assert.equal(stored.scan.root, ws);
   stored.scan.at = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
   writeFileSync(PROJECTS_FILE, JSON.stringify(stored), "utf-8");
-  assert.deepEqual((await listProjects()).map((p) => p.name), ["first", "second"], "stale: rescanned");
+  assert.deepEqual((await listProjects()).projects.map((p) => p.name), ["first", "second"], "stale: rescanned");
   assert.equal(workspaceScanCount(), before + 2);
 
   const other = tempRoot();
   fakeRepo(join(other, "third"));
   process.chdir(other);
-  assert.deepEqual((await listProjects()).map((p) => p.name), ["first", "second", "third"]);
+  assert.deepEqual((await listProjects()).projects.map((p) => p.name), ["first", "second", "third"]);
   assert.equal(workspaceScanCount(), before + 3);
 });
 
@@ -380,11 +391,63 @@ test("concurrent calls share one scan", async () => {
   for (let i = 0; i < 30; i++) fakeRepo(join(ws, `group${i % 3}`, `repo${i}`));
   process.chdir(ws);
   const before = workspaceScanCount();
-  const [a, b, c] = await Promise.all([listProjects(), listProjects(), listProjects(), getProjects(["p-nope"])]);
+  const [a, b, c] = await Promise.all([listProjects(), listProjects(), listProjects()]);
   assert.equal(workspaceScanCount(), before + 1);
-  assert.equal(a.length, 30);
+  assert.equal(a.projects.length, 30);
+  assert.equal(a.partial, undefined);
   assert.deepEqual(a, b);
   assert.deepEqual(a, c);
+});
+
+test("dependency folders are skipped; build, out and dist are walked; Library only under home", async () => {
+  const ws = tempRoot();
+  fakeRepo(join(ws, "build", "myrepo"));
+  fakeRepo(join(ws, "out"));
+  fakeRepo(join(ws, "Documents", "Library", "x"));
+  for (const skip of ["node_modules", "bower_components", "__pycache__", "venv", "Pods", "DerivedData"]) {
+    fakeRepo(join(ws, "deps", skip, "inside"));
+  }
+  process.chdir(ws);
+  assert.deepEqual((await listProjects()).projects.map((p) => p.name), ["myrepo", "out", "x"]);
+});
+
+test("a hung read is abandoned: the scan keeps what it found and is marked partial", async () => {
+  const ws = tempRoot();
+  fakeRepo(join(ws, "fine"));
+  const stuck = join(ws, "stuck");
+  fakeRepo(join(stuck, "never"));
+  const hung: ScanOptions["readdir"] = (dir) =>
+    dir === stuck ? new Promise(() => {}) : readdir(dir, { withFileTypes: true });
+
+  const direct = await scanWorkspace(ws, { readdir: hung, readdirTimeoutMs: 50 });
+  assert.deepEqual(direct, { repos: [join(ws, "fine")], partial: true });
+
+  // The whole walk has a deadline too, and list_projects is not held by it.
+  setScanOptionsForTests({ readdir: hung, readdirTimeoutMs: 10_000, deadlineMs: 100 });
+  process.chdir(ws);
+  try {
+    const started = Date.now();
+    const listed = await listProjects();
+    assert.ok(Date.now() - started < 2_000);
+    assert.deepEqual(listed.projects.map((p) => p.name), ["fine"]);
+    assert.equal(listed.partial, true);
+    assert.equal(JSON.parse(readFileSync(PROJECTS_FILE, "utf-8")).scan.partial, true);
+    // The next call is not held by the abandoned read.
+    assert.deepEqual((await listProjects()).projects.map((p) => p.name), ["fine"]);
+  } finally {
+    setScanOptionsForTests({});
+  }
+});
+
+test("findProject looks a folder up by id without scanning", async () => {
+  const ws = tempRoot();
+  const repo = fakeRepo(join(ws, "found"));
+  createThread("some-bot", repo);
+  process.chdir(ws);
+  const before = workspaceScanCount();
+  assert.deepEqual(findProject(projectId(repo)), { id: projectId(repo), path: repo });
+  assert.equal(findProject("p-nope"), undefined);
+  assert.equal(workspaceScanCount(), before);
 });
 
 test("a scanned repo that is deleted is dropped", async () => {
@@ -392,9 +455,9 @@ test("a scanned repo that is deleted is dropped", async () => {
   fakeRepo(join(ws, "stays"));
   const gone = fakeRepo(join(ws, "goes"));
   process.chdir(ws);
-  assert.equal((await listProjects()).length, 2);
+  assert.equal((await listProjects()).projects.length, 2);
   rmSync(gone, { recursive: true });
-  assert.deepEqual((await listProjects()).map((p) => p.name), ["stays"]);
+  assert.deepEqual((await listProjects()).projects.map((p) => p.name), ["stays"]);
 });
 
 test("a workspace that cannot be scanned leaves list_projects working", async () => {
@@ -403,5 +466,5 @@ test("a workspace that cannot be scanned leaves list_projects working", async ()
   const ws = tempRoot();
   process.chdir(ws);
   rmSync(ws, { recursive: true });
-  assert.deepEqual((await listProjects()).map((p) => p.name), ["kept"]);
+  assert.deepEqual((await listProjects()).projects.map((p) => p.name), ["kept"]);
 });
