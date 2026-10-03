@@ -379,19 +379,19 @@ export default function BotForm({
           </div>
         </div>
         <div className="studio-main">
-        <Field label="Name">
+        <Field label="Name" tip="say what it does — often all that's seen when picking a bot">
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Doc Spot"
+            placeholder="PR Validator"
             aria-label="Name"
           />
         </Field>
-          <Field label="Description" tip="one line, shown on the card">
+          <Field label="Description" tip="one line on when to use it: what it does and what it won't touch">
             <input
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Keeps documentation in sync with the code"
+              placeholder="Checks out a PR, runs tests and lint, reports if it's ready to merge"
             />
           </Field>
           <Field label="Agent" tip="the coding harness that runs this bot">

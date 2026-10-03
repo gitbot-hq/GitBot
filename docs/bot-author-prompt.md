@@ -180,9 +180,13 @@ tools the bot may use, so an incomplete list will silently cripple it. Use it fo
 (`["Read", "Grep", "Glob"]`) and leave it unset otherwise. Not enforced on `codex`, and never
 applied to the setup run.
 
-**Name, description, emoji** — a short name I would recognise in a list, one line saying what it
-does and what it does not touch, and a single emoji. The description is one of only two things
-shown when someone imports this bot, so make it honest about scope and risk.
+**Name, description, emoji** — a short name that says what the bot does, a "when to use me"
+description, and a single emoji. Often the name is all anyone sees when picking a bot — me in a
+list, or an agent choosing which bot to hand a task to — so make it plain, not a mascot: "PR
+Validator", not "Ghosty". The description is one line saying when to use the bot, what it does and
+what it does not touch: "Checks out a PR, runs tests and lint, reports if it's ready to merge.
+Never pushes." It is also one of only two things shown when someone imports this bot, so make it
+honest about scope and risk.
 
 ---
 
