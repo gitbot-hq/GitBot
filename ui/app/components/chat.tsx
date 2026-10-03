@@ -46,6 +46,7 @@ import { groupTools, type ToolChip } from "../lib/tool-ui";
 import { parseMarketplaceListing, type MarketplaceListing } from "../lib/marketplace-publish";
 import { presentSetupText, readSetupNeedsInput } from "../lib/setup";
 import { parseReport, type Report } from "../lib/report";
+import type { ApprovalRow } from "../lib/approvals";
 import { stripGitbotNotes } from "../lib/gitbot-note";
 import type { ThreadSessionStatus } from "../lib/use-thread-sessions";
 import RunSummary, { ActionRow } from "./run-summary";
@@ -296,6 +297,8 @@ export type ChildLock = {
   sessionId: string;
   /** Switches the hub to the child; absent until the child is known. */
   onOpen?: () => void;
+  /** The open button's label: "Review" while the child waits on an approval. */
+  openLabel?: string;
   /** Aborts the child's turn. Jarvis is not woken. */
   onStop: () => Promise<unknown>;
 };
@@ -396,6 +399,41 @@ function ReportRow({ report, botColor }: { report: Report; botColor?: string }) 
   );
 }
 
+/**
+ * A Jarvis-owned child's approval: a row gitbot places in the Jarvis thread.
+ * Jarvis never answers it; Review takes the user to the child's card.
+ */
+function ApprovalRowView({ row, onReview }: { row: ApprovalRow; onReview?: (row: ApprovalRow) => void }) {
+  const tool = <code>{row.tool}</code>;
+  return (
+    <div className={`approval-row ${row.state}`} role={row.state === "pending" ? "status" : undefined}>
+      {row.state === "pending" ? (
+        <>
+          <span className="approval-row-glyph" aria-hidden="true">⏸</span>
+          <span className="approval-row-label">
+            <b>{row.bot}</b> needs permission to run {tool}
+          </span>
+          {onReview && (
+            <>
+              <span aria-hidden="true">·</span>
+              <button type="button" className="approval-row-review" onClick={() => onReview(row)}>
+                Review
+              </button>
+            </>
+          )}
+        </>
+      ) : (
+        <>
+          <span className="approval-row-dot" aria-hidden="true" />
+          <span className="approval-row-label">
+            {row.state === "approved" ? "Approved" : row.state === "denied" ? "Denied" : "Not answered"}: {tool}
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
 /** The report a history or live message carries, if it is one. */
 function msgReport(m: Msg): Report | null {
   return m.role === "user" ? parseReport(msgText(m)) : null;
@@ -425,8 +463,15 @@ export default function Chat({
   booting,
   setup,
   lock,
+  approvals,
+  onReviewApproval,
 }: {
   thread: ThreadFull | null;
+  /** Jarvis threads: its children's approvals, each a row after the turn it
+   *  came in (ChildApproval.after counts turns, i.e. user messages). */
+  approvals?: ApprovalRow[];
+  /** Switches the hub to the child whose approval this is. */
+  onReviewApproval?: (row: ApprovalRow) => void;
   /** Set while a Jarvis thread waits on its running child: the composer is
    *  replaced by the child's status, a way into it, and Stop. */
   lock?: ChildLock;
@@ -953,6 +998,14 @@ export default function Chat({
     sendPrompt(autoSend);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread?.id, autoSend, loading, streaming, msgs.length]);
+
+  // A new or answered approval row follows the conversation down, as a
+  // message would (only while the reader is at the bottom).
+  const approvalsKey = approvals?.map((r) => `${r.id}:${r.state}`).join(",") ?? "";
+  useEffect(() => {
+    if (approvalsKey) requestAnimationFrame(scrollDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approvalsKey]);
 
   // Report turn activity upward so avatars can react to work.
   useEffect(() => {
@@ -1552,7 +1605,26 @@ export default function Chat({
     readSetupNeedsInput(liveTextRef.current) ||
     (!!latestAssistant && readSetupNeedsInput(msgText(latestAssistant)))
   );
-  const showThreadEmpty = !loading && visibleMsgs.length === 0 && !historyError && !setup;
+  const showThreadEmpty = !loading && visibleMsgs.length === 0 && !historyError && !setup && !approvals?.length;
+  // Approval rows by the message they precede: a row asked during turn n sits
+  // after that turn's replies, before the next user message (or a report).
+  // Rows past the last message trail the conversation.
+  const rowsBefore = new Map<number, ApprovalRow[]>();
+  let trailingRows: ApprovalRow[] = [];
+  if (approvals?.length) {
+    let turns = 0;
+    let rest = approvals;
+    visibleMsgs.forEach((m, i) => {
+      if (m.role !== "user") return;
+      const here = rest.filter((r) => r.after <= turns);
+      if (here.length) rowsBefore.set(i, here);
+      rest = rest.filter((r) => r.after > turns);
+      turns++;
+    });
+    trailingRows = rest;
+  }
+  const approvalRowsOf = (list: ApprovalRow[] | undefined) =>
+    list?.map((r) => <ApprovalRowView key={`ap-${r.id}`} row={r} onReview={onReviewApproval} />);
   const permissionMode = thread
     ? permissionModes[thread.id] ?? safePermissionMode(botPermissionMode, agent)
     : safePermissionMode(botPermissionMode, agent);
@@ -1709,10 +1781,13 @@ export default function Chat({
           </p>
         )}
         {!loading &&
-          visibleMsgs.map((m) => {
+          visibleMsgs.map((m, i) => {
             const report = msgReport(m);
-            if (report) return <ReportRow key={m.id} report={report} botColor={botAvatar?.color} />;
+            const before = approvalRowsOf(rowsBefore.get(i));
+            if (report) return <Fragment key={m.id}>{before}<ReportRow report={report} botColor={botAvatar?.color} /></Fragment>;
             return (
+            <Fragment key={m.id}>
+            {before}
             <article
               key={m.id}
               className={`${m.role === "user" ? "bubble user" : "bubble assistant"}${m.id.startsWith("m") ? " msg-in" : ""}`}
@@ -1760,6 +1835,7 @@ export default function Chat({
                 </span>
               )}
             </article>
+            </Fragment>
             );
           })}
         {live && (liveTextLen(live.segs) > 0 || streaming) && (
@@ -1787,6 +1863,7 @@ export default function Chat({
             )}
           </article>
         )}
+        {!loading && approvalRowsOf(trailingRows)}
         {loading && (thread?.messageCount === 0 && !setup
           ? <ConversationEmptySkeleton />
           : <ChatSkeleton label="Loading history" />)}
@@ -1912,7 +1989,7 @@ export default function Chat({
               <LoadingState label={lock.status} variant="Drive" />
               {lock.onOpen && (
                 <button type="button" className="composer-locked-open" onClick={lock.onOpen}>
-                  Open thread
+                  {lock.openLabel ?? "Open thread"}
                 </button>
               )}
             </span>

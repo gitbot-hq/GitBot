@@ -88,8 +88,30 @@ export interface Thread {
    * ("[you stopped PR Validator on Trophy]"). Prepended once, then cleared.
    */
   pendingNote?: string;
+  /**
+   * Jarvis threads only: the approvals its children asked for, shown as rows
+   * in its conversation. Stored, not derived: once answered, an approval
+   * leaves the live stream, and how it was answered is known nowhere else.
+   */
+  approvals?: ChildApproval[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** One approval a Jarvis-owned child asked for: a row gitbot places in the Jarvis thread. */
+export interface ChildApproval {
+  /** The tool request's id (toolUseID), unique per approval. */
+  id: string;
+  childThreadId: string;
+  childBotId: string;
+  /** The child's bot name when it asked. */
+  bot: string;
+  /** What it asked to run: the command, the file, or the tool's name. */
+  tool: string;
+  /** The Jarvis thread's messageCount when it asked: the row follows that many turns. */
+  after: number;
+  /** Unset while it waits. "dropped": the turn ended or stopped before an answer. */
+  outcome?: "approved" | "denied" | "dropped";
 }
 
 export type NewBot = Partial<Bot> & Pick<Bot, "name">;
@@ -434,6 +456,18 @@ export function setThreadOwner(id: string, reportTo: string | undefined): void {
   if (!thread || thread.reportTo === reportTo) return;
   if (reportTo) thread.reportTo = reportTo;
   else delete thread.reportTo;
+  writeCollection(THREADS_FILE, threads);
+}
+
+/**
+ * Rewrites a thread's approval rows. Like ownership, not activity: updatedAt
+ * stays, so the thread list keeps its order.
+ */
+export function setThreadApprovals(id: string, edit: (rows: ChildApproval[]) => ChildApproval[]): void {
+  const threads = readCollection<Thread>(THREADS_FILE);
+  const thread = threads.find((t) => t.id === id);
+  if (!thread) return;
+  thread.approvals = edit(thread.approvals ?? []);
   writeCollection(THREADS_FILE, threads);
 }
 

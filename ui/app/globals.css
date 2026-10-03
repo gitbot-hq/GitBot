@@ -4414,3 +4414,70 @@ button.file-chip:hover {
   border-left: 2px solid var(--border);
   color: var(--text);
 }
+
+/* A Jarvis-owned child's approval: a row gitbot places in the Jarvis
+   thread, like a report row. Review takes the user to the child. */
+.approval-row {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 65ch;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.approval-row-glyph {
+  flex: none;
+  color: var(--pending, var(--brand-honey));
+}
+
+.approval-row-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.approval-row.approved .approval-row-dot {
+  background: var(--ok);
+}
+
+.approval-row.denied .approval-row-dot {
+  background: var(--danger);
+}
+
+.approval-row-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-row-label b {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.approval-row-label code {
+  font-size: 0.95em;
+  color: var(--text);
+}
+
+.approval-row-review {
+  flex: none;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--brand-sky);
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.approval-row-review:hover {
+  text-decoration: underline;
+}

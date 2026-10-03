@@ -30,6 +30,7 @@ import { startTurn } from "./turns";
 import { releaseToUser } from "./send-to-thread";
 import { watchChildReports } from "./reports";
 import { noteChildStopped } from "./child-lock";
+import { answerChildApproval, watchChildApprovals } from "./child-approvals";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
 import { uiFileFor } from "./static-ui";
 
@@ -236,6 +237,7 @@ export async function handleRequest(
       if (store.agent === "claude-code") {
         const pending = store.pendingPermissions.get(toolUseID);
         if (pending) {
+          answerChildApproval(store, toolUseID, !!approved);
           store.pendingPermissions.delete(toolUseID);
           notifyPermissionsChanged();
           pending.resolve(approved
@@ -246,6 +248,7 @@ export async function handleRequest(
       } else if (store.agent === "opencode" && store.sdkSessionId) {
         const pending = store.pendingPermissions.get(toolUseID);
         if (pending) {
+          answerChildApproval(store, toolUseID, !!approved);
           store.pendingPermissions.delete(toolUseID);
           notifyPermissionsChanged();
           // For subagent permissions, respond on the child sdkSessionId that actually raised the request.
@@ -355,6 +358,7 @@ export async function handleRequest(
         if (store.agent === "claude-code") {
           for (const [id, perm] of store.pendingPermissions) {
             if (shouldAutoApprove(store.agent, perm.toolName, store.permissionMode)) {
+              answerChildApproval(store, id, true);
               store.pendingPermissions.delete(id);
               perm.resolve({ behavior: "allow", updatedInput: perm.input });
             }
@@ -365,6 +369,7 @@ export async function handleRequest(
         } else if (store.agent === "opencode" && store.sdkSessionId) {
           for (const [id, perm] of store.pendingPermissions) {
             if (shouldAutoApprove(store.agent, perm.toolName, store.permissionMode)) {
+              answerChildApproval(store, id, true);
               store.pendingPermissions.delete(id);
               const respondSdkId = perm.askedBySdkSessionId ?? store.sdkSessionId;
               await opencodePermission(respondSdkId, id, true, store.repoPath).catch(() => {});
@@ -408,8 +413,10 @@ export async function start(network: string = "local", portOverride?: number, ca
     ...(codexAvailable ? ["codex"] : []),
   ];
   console.log(`  available agents: ${availableAgents.join(", ") || "none"}`);
-  // A child Jarvis started reports back to it when its turn ends.
+  // A child Jarvis started reports back to it when its turn ends, and its
+  // approvals show as rows in that Jarvis thread meanwhile.
   watchChildReports(availableAgents);
+  watchChildApprovals();
 
   const { server, caffeinatePid } = await createHttpServer({
     portOverride,

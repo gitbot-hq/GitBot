@@ -54,6 +54,7 @@ import { JARVIS_BOT_ID, type Bot, type ThreadFull } from "../lib/gitbot";
 import { setupPrompt, type SetupRunKind } from "../lib/setup";
 import { useScrollEdge } from "../lib/use-scroll-edge";
 import { useThreadSessions } from "../lib/use-thread-sessions";
+import { approvalRows, type ChildApproval } from "../lib/approvals";
 import "../v2-theme.css";
 import "../onboarding/onboarding.css";
 
@@ -494,15 +495,39 @@ export default function V2() {
   }, [runningChild?.threadId]);
   const childInfo = runningChild && lockedChild?.id === runningChild.threadId ? lockedChild : null;
   const childBotName = childInfo ? bots.find((b) => b.id === childInfo.botId)?.name ?? "Bot" : null;
+  const childAsks = runningChild?.status === "awaiting_permissions";
   const chatLock: ChildLock | undefined = runningChild
     ? {
         status: childInfo
-          ? `${childBotName} is working on ${childInfo.repoPath.split("/").filter(Boolean).pop() ?? childInfo.repoPath}`
-          : "A child thread is working",
+          ? childAsks
+            ? `${childBotName} is waiting on your approval`
+            : `${childBotName} is working on ${childInfo.repoPath.split("/").filter(Boolean).pop() ?? childInfo.repoPath}`
+          : childAsks ? "A child thread is waiting on your approval" : "A child thread is working",
         onOpen: childInfo ? () => openThread(childInfo.botId, childInfo.id) : undefined,
+        openLabel: childAsks ? "Review" : undefined,
         sessionId: runningChild.sessionId,
         onStop: () => postAbort(runningChild.sessionId),
       }
+    : undefined;
+
+  // Approvals in Jarvis: the open Jarvis thread's stored rows, read again
+  // whenever the approvals its children wait on change (the server writes a
+  // row, or its answer, before it broadcasts the change). Whether each still
+  // waits comes from the stream itself.
+  const jarvisPending = isJarvis && activeThread && threadSessions.pendingApprovals
+    ? threadSessions.pendingApprovals[activeThread.id] ?? []
+    : null;
+  const pendingKey = jarvisPending?.join(",") ?? "";
+  const [approvalLog, setApprovalLog] = useState<{ threadId: string; rows: ChildApproval[] } | null>(null);
+  useEffect(() => {
+    const id = isJarvis ? activeThread?.id : undefined;
+    if (!id) return;
+    let live = true;
+    getThread(id).then(({ thread }) => live && setApprovalLog({ threadId: id, rows: thread.approvals ?? [] }), () => {});
+    return () => { live = false; };
+  }, [isJarvis, activeThread?.id, pendingKey]);
+  const chatApprovals = isJarvis && approvalLog && approvalLog.threadId === activeThread?.id
+    ? approvalRows(approvalLog.rows, jarvisPending)
     : undefined;
 
   // When the selected bot also appears in the empty chat panel, both
@@ -1381,6 +1406,8 @@ export default function V2() {
                 thread={activeThread}
                 serverStatus={activeThread ? threadSessions.statuses[activeThread.id] : undefined}
                 lock={chatLock}
+                approvals={chatApprovals}
+                onReviewApproval={(row) => openThread(row.childBotId, row.childThreadId)}
                 botId={bot?.id}
                 botName={bot?.name ?? "bot"}
                 botPermissionMode={bot?.permissionMode}

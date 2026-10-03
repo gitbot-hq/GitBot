@@ -50,6 +50,8 @@ export type ThreadFull = Thread & {
   messageCount: number;
   // The Jarvis thread that started this one, while it reports to it.
   reportTo?: string;
+  // Jarvis threads: the approvals its children asked for, as gitbot's rows.
+  approvals?: import("./approvals").ChildApproval[];
   createdAt: string;
   updatedAt: string;
 };
