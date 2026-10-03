@@ -1,11 +1,13 @@
 import { execFile } from "child_process";
 import { createHash } from "crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "fs";
+import { type Dirent, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "fs";
+import { readdir } from "fs/promises";
 import { homedir } from "os";
 import { basename, isAbsolute, join, relative, sep } from "path";
 import { dataDir, listThreads } from "./bot-store";
 
 // The project index Jarvis resolves folders against. A project is a folder:
+// a git repo found under the workspace (the folder gitbot was started in),
 // one a gitbot thread has run in, or one Jarvis added after finding it with
 // its shell. Stored in projects.json under the data dir, and built the first
 // time Jarvis asks for it — never at server start.
@@ -17,7 +19,7 @@ import { dataDir, listThreads } from "./bot-store";
 // Agents' own histories (~/.claude/projects and the like) are deliberately not
 // a source: gitbot does not own those formats.
 
-export type ProjectSource = "thread" | "added";
+export type ProjectSource = "scan" | "thread" | "added";
 
 export interface ProjectEntry {
   /** Stable for a folder: derived from its path, so it survives rebuilds. */
@@ -30,6 +32,8 @@ export interface ProjectEntry {
 interface ProjectIndex {
   version: 1;
   builtAt: string;
+  /** The last workspace scan: which folder, and when. Absent until the first. */
+  scan?: { root: string; at: string; partial?: true };
   projects: ProjectEntry[];
 }
 
@@ -192,6 +196,181 @@ function displayNames(entries: readonly ProjectEntry[]): Map<string, string> {
   }
 }
 
+// --- Workspace scan ---
+// Repos under the workspace, found by their .git (a folder, or the file a
+// worktree or submodule has). Run on the first list_projects, and again when
+// the last scan is over a day old or was of another folder — never at server
+// start. A big or slow tree must not stall the server: the walk is async,
+// bounded in depth, in entries read and in time, and never follows symlinks.
+// A scan cut short keeps what it found and is marked partial.
+
+/** How far below the workspace repos are looked for. */
+const SCAN_DEPTH = 4;
+/** Directory entries read before the walk leaves the rest of the tree alone. */
+const SCAN_ENTRY_CAP = 50_000;
+/** One folder's read; a hung mount must not hold the walk. */
+const READDIR_TIMEOUT_MS = 2_000;
+/** The whole walk. */
+const SCAN_DEADLINE_MS = 10_000;
+const SCAN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Heavy dependency and cache folders: never entered. Hidden ones are skipped
+ * too. Names a real repo might have (build, out, dist) are walked as usual —
+ * the walk stops at repo roots anyway.
+ */
+const SCAN_SKIP = new Set(["node_modules", "bower_components", "__pycache__", "venv", "Pods", "DerivedData"]);
+/** Skipped only directly under home: macOS's Library, and folders that raise privacy prompts. */
+const HOME_SKIP = new Set(["Library", "Pictures", "Music", "Movies"]);
+
+/**
+ * The workspace: the folder gitbot was started in. The server never changes
+ * directory, so that is the process's working directory.
+ */
+function workspaceRoot(): string | null {
+  return resolveFolder(process.cwd());
+}
+
+const isFsRoot = (folder: string) => folder === resolveFolder("/");
+
+function scanStale(index: ProjectIndex | null, root: string, now = Date.now()): boolean {
+  if (!index?.scan || index.scan.root !== root) return true;
+  const at = Date.parse(index.scan.at);
+  return !Number.isFinite(at) || at > now || now - at > SCAN_MAX_AGE_MS;
+}
+
+type ReadDir = (dir: string) => Promise<Dirent[]>;
+
+export interface ScanOptions {
+  readdir?: ReadDir;
+  readdirTimeoutMs?: number;
+  deadlineMs?: number;
+}
+
+export interface ScanResult {
+  repos: string[];
+  /** True when the walk was cut short — by the entry cap, a deadline or a hung read. */
+  partial: boolean;
+}
+
+/** The promise's value, or "timeout" once `ms` has passed; never rejects. */
+function within<T>(promise: Promise<T>, ms: number): Promise<T | "timeout" | "error"> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), Math.max(0, ms));
+  });
+  return Promise.race([promise.catch(() => "error" as const), timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Git repos at `root` or up to SCAN_DEPTH folders below it, breadth first.
+ * The walk stops at a repo, so a repo's nested repos and submodules are not
+ * listed separately. A folder that cannot be read is passed over.
+ */
+export async function scanWorkspace(root: string, opts: ScanOptions = {}): Promise<ScanResult> {
+  const read1: ReadDir = opts.readdir ?? ((dir) => readdir(dir, { withFileTypes: true }));
+  const perRead = opts.readdirTimeoutMs ?? READDIR_TIMEOUT_MS;
+  const deadline = Date.now() + (opts.deadlineMs ?? SCAN_DEADLINE_MS);
+  const repos: string[] = [];
+  const own = ownFolder();
+  // Resolved once, not once per folder.
+  const home = resolveFolder(homedir()) ?? homedir();
+  const fsRoot = resolveFolder("/");
+  let read = 0;
+  let partial = false;
+  let level = [root];
+  for (let depth = 0; depth <= SCAN_DEPTH && level.length; depth++) {
+    const next: string[] = [];
+    for (const dir of level) {
+      const left = deadline - Date.now();
+      if (read >= SCAN_ENTRY_CAP || left <= 0) return { repos, partial: true };
+      if (isWithin(own, dir)) continue;
+      const entries = await within(read1(dir), Math.min(perRead, left));
+      if (entries === "timeout") {
+        partial = true;
+        continue;
+      }
+      if (entries === "error") continue;
+      read += entries.length;
+      const isRepo = entries.some((e) => e.name === ".git" && (e.isDirectory() || e.isFile()));
+      // A home folder kept in git (dotfiles) is not a project: look inside it.
+      if (isRepo && dir !== home && dir !== fsRoot) {
+        repos.push(dir);
+        continue;
+      }
+      if (depth === SCAN_DEPTH) continue;
+      for (const e of entries) {
+        // A Dirent for a symlink is never isDirectory(), so links are not followed.
+        if (!e.isDirectory() || e.name.startsWith(".") || SCAN_SKIP.has(e.name)) continue;
+        if (HOME_SKIP.has(e.name) && dir === home) continue;
+        next.push(join(dir, e.name));
+      }
+    }
+    level = next;
+  }
+  return { repos, partial };
+}
+
+let scansStarted = 0;
+/** How many workspace scans this process has started. For tests. */
+export function workspaceScanCount(): number {
+  return scansStarted;
+}
+
+let inFlight: Promise<void> | null = null;
+let loggedRootSkip = false;
+let scanOverrides: ScanOptions = {};
+
+/** Swaps in a readdir or shorter deadlines for the scans list_projects runs. For tests. */
+export function setScanOptionsForTests(opts: ScanOptions): void {
+  scanOverrides = opts;
+}
+
+/**
+ * Rescans the workspace when the last scan is stale or was of another folder,
+ * merging what it finds into the index. Concurrent callers share one scan.
+ * Never throws: a failed scan leaves the index as it was.
+ */
+function ensureScanned(): Promise<void> {
+  if (inFlight) return inFlight;
+  let root: string | null;
+  try {
+    root = workspaceRoot();
+    if (!root) return Promise.resolve();
+    // The filesystem root is no one's workspace; walking it finds nothing useful.
+    if (isFsRoot(root)) {
+      if (!loggedRootSkip) console.log("[projects] not scanning: gitbot was started in /, which is too broad a workspace");
+      loggedRootSkip = true;
+      return Promise.resolve();
+    }
+    if (!scanStale(readIndex(), root)) return Promise.resolve();
+  } catch {
+    return Promise.resolve();
+  }
+  const scanRoot = root;
+  scansStarted++;
+  console.log(`[projects] scanning ${scanRoot}`);
+  inFlight = (async () => {
+    try {
+      const { repos, partial } = await scanWorkspace(scanRoot, scanOverrides);
+      if (partial) console.warn(`[projects] scan of ${scanRoot} was cut short; the project list may be incomplete`);
+      // Read afresh: the index may have changed while the walk was out.
+      const index = syncedIndex();
+      const own = ownFolder();
+      for (const folder of repos) {
+        if (isDirectory(folder)) addEntry(index, folder, "scan", own);
+      }
+      index.scan = { root: scanRoot, at: new Date().toISOString(), ...(partial ? { partial: true } : {}) };
+      writeIndex(index);
+    } catch (err: any) {
+      console.error(`[projects] workspace scan of ${scanRoot} failed: ${err?.message ?? err}`);
+    } finally {
+      inFlight = null;
+    }
+  })();
+  return inFlight;
+}
+
 // --- Tool handlers ---
 // Plain functions, so they can be tested without the SDK.
 
@@ -200,13 +379,28 @@ export interface ProjectListing {
   name: string;
 }
 
-/** Every project's id and name, by name. Builds the index the first time. */
-export function listProjects(): ProjectListing[] {
-  const { projects } = syncedIndex();
+/**
+ * Every project's id and name, by name. Builds the index the first time, and
+ * rescans the workspace when the last scan is stale.
+ */
+export async function listProjects(): Promise<{ projects: ProjectListing[]; partial?: true }> {
+  await ensureScanned();
+  const { projects, scan } = syncedIndex();
   const names = displayNames(projects);
-  return projects
+  const listing = projects
     .map((p) => ({ id: p.id, name: names.get(p.id)! }))
     .sort((a, b) => a.name.localeCompare(b.name));
+  // The last workspace scan was cut short: some repos may be missing.
+  return scan?.partial ? { projects: listing, partial: true } : { projects: listing };
+}
+
+/**
+ * A project's folder by id, from the index as it stands — no workspace scan.
+ * Ids come from list_projects or add_project.
+ */
+export function findProject(id: string): { id: string; path: string } | undefined {
+  const entry = syncedIndex().projects.find((p) => p.id === id);
+  return entry && { id: entry.id, path: entry.path };
 }
 
 export interface GitDetails {
