@@ -78,9 +78,9 @@ export interface Thread {
   preview: string;
   messageCount: number;
   /**
-   * The Jarvis thread this one reports to: set when Jarvis starts it. Threads
+   * The Jarvis thread this one reports to: set when Jarvis starts it or sends
+   * it a message (send_to_thread), cleared when the user types here. Threads
    * the user starts never have one.
-   * TODO(slice 11): pass ownership back to the user when they type here.
    */
   reportTo?: string;
   createdAt: string;
