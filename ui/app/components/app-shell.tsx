@@ -12,6 +12,8 @@ import { PencilIcon } from "@animateicons/react/lucide/pencil-icon";
 import { CodeIcon } from "@animateicons/react/lucide/code-icon";
 import { SearchIcon } from "@animateicons/react/lucide/search-icon";
 import { TrashIcon } from "@animateicons/react/lucide/trash-icon";
+import { UsersRoundIcon } from "@animateicons/react/lucide/users-round-icon";
+import { MessageSquareIcon } from "@animateicons/react/lucide/message-square-icon";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "./page-link";
@@ -109,6 +111,13 @@ function avatarFor(id: string): AvatarPref {
   });
 }
 
+/** Focuses the first control a keyboard can reach inside `root`. */
+function focusFirst(root: Element | null | undefined) {
+  const first = Array.from(root?.querySelectorAll<HTMLElement>("button:not([disabled]), input, textarea, a[href]") ?? [])
+    .find((el) => el.tabIndex >= 0 && el.getClientRects().length > 0);
+  first?.focus({ preventScroll: true });
+}
+
 function needsSetup(bot: Bot) {
   return !!bot.setupInstructions && bot.setupStatus !== "complete";
 }
@@ -176,6 +185,13 @@ export default function V2() {
   const { user, saveUser: savedUser } = useUserProfile();
   const [userOpen, setUserOpen] = useState(false);
   const { toast, view: toastView } = useToast();
+  // Narrow screens (≤900px): the Bots and Threads columns become slide-in
+  // panels, opened from the chat's header row. Never set on desktop.
+  const [mobilePanel, setMobilePanel] = useState<"bots" | "threads" | null>(null);
+  const botsToggleRef = useRef<HTMLButtonElement | null>(null);
+  const threadsToggleRef = useRef<HTMLButtonElement | null>(null);
+  // Where focus goes once a closing panel has let go of the page.
+  const afterPanelClose = useRef<(() => void) | null>(null);
 
   const [width, setWidth] = useState<number | null>(null);
   const [threadsWidth, setThreadsWidth] = useState<number | null>(null);
@@ -354,6 +370,13 @@ export default function V2() {
   // The profile stays mounted under the studio: opening edit slides the
   // studio over it, closing slides back to it.
   const showProfile = profileBot != null;
+  // The narrow-screen Bots panel always shows the full list; the desktop
+  // rail's collapsed state is left as it was.
+  const railFull = mobilePanel === "bots";
+  const railCollapsed = collapsed && !railFull;
+  const railSettled = settled && !railFull;
+  const railIcons = railFull ? "full" : iconSet;
+  const railDim = iconsDim && !railFull;
 
   // Live rail status: the chat's activity sentence shortened to one word.
   // Anything unrecognized is honestly just "Working".
@@ -701,6 +724,90 @@ export default function V2() {
     [],
   );
 
+  function openMobilePanel(panel: "bots" | "threads") {
+    setCreateMenuOpen(false);
+    setMobilePanel(panel);
+  }
+
+  /** Closes the open panel; focus goes to `target` (by default the button
+   *  that opens the panel) once the page behind is no longer inert. */
+  function closeMobilePanel(target?: () => HTMLElement | null | undefined) {
+    if (!mobilePanel) return;
+    const toggle = (mobilePanel === "bots" ? botsToggleRef : threadsToggleRef).current;
+    afterPanelClose.current = () => {
+      const el = target?.() ?? toggle;
+      el?.focus({ preventScroll: true });
+      if (el && document.activeElement !== el) toggle?.focus({ preventScroll: true });
+    };
+    setMobilePanel(null);
+  }
+
+  // An open panel is modal: it takes focus, and everything around it (the
+  // top bar, the chat, the other column) is inert until it closes.
+  useEffect(() => {
+    if (!mobilePanel) return;
+    const panel = mobilePanel === "bots" ? sideRef.current : threadsAsideRef.current;
+    const made: HTMLElement[] = [];
+    for (let el: HTMLElement | null = panel; el && el !== document.body; el = el.parentElement) {
+      for (const sibling of Array.from(el.parentElement?.children ?? [])) {
+        if (sibling === el || !(sibling instanceof HTMLElement) || sibling.inert) continue;
+        if (sibling.classList.contains("mobile-scrim")) continue;
+        sibling.inert = true;
+        made.push(sibling);
+      }
+    }
+    const frame = requestAnimationFrame(() => focusFirst(panel));
+    return () => {
+      cancelAnimationFrame(frame);
+      made.forEach((el) => { el.inert = false; });
+      // Focus can land behind the panel only now that it is no longer inert.
+      const after = afterPanelClose.current;
+      afterPanelClose.current = null;
+      after?.();
+    };
+  }, [mobilePanel]);
+
+  // Escape closes the panel. Caught first, so the chat's own Escape (stop
+  // the running turn) never sees it — but a search box or the create menu
+  // inside the panel keeps its Escape.
+  useEffect(() => {
+    if (!mobilePanel || createMenuOpen) return;
+    function escape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      if ((event.target as HTMLElement | null)?.closest?.(".search-box")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeMobilePanel();
+    }
+    window.addEventListener("keydown", escape, true);
+    return () => window.removeEventListener("keydown", escape, true);
+    // closeMobilePanel only reads mobilePanel.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mobilePanel, createMenuOpen]);
+
+  // Anything that slides over the chat (picker, profile, studio, user
+  // panel, modals) takes over from a panel. Focus left in the panel would
+  // fall to the page, so it moves into the overlay; modals place their own.
+  useEffect(() => {
+    if (!mobilePanel || !(threadPanel || editing || showProfile || userOpen || modal || learnMore)) return;
+    const panel = mobilePanel === "bots" ? sideRef.current : threadsAsideRef.current;
+    const cover = threadPanel ? ".thread-overlay" : editing ? ".form-overlay" : showProfile ? ".profile-overlay" : userOpen ? ".tray .user-overlay" : null;
+    if (cover && panel?.contains(document.activeElement)) {
+      afterPanelClose.current = () => focusFirst(document.querySelector(`.page-body ${cover}`));
+    }
+    setMobilePanel(null);
+  }, [mobilePanel, threadPanel, editing, showProfile, userOpen, modal, learnMore]);
+
+  // Widening past the breakpoint puts the columns back in place.
+  useEffect(() => {
+    const narrow = matchMedia("(max-width: 900px)");
+    const change = () => {
+      if (!narrow.matches) setMobilePanel(null);
+    };
+    narrow.addEventListener("change", change);
+    return () => narrow.removeEventListener("change", change);
+  }, []);
+
   const onHandleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
@@ -808,6 +915,7 @@ export default function V2() {
       if (jarvisBlocked) return;
       const id = bot.id;
       setThreadByBot(({ [id]: _left, ...rest }) => rest);
+      closeMobilePanel();
       return;
     }
     setThreadPanel(true);
@@ -936,6 +1044,15 @@ export default function V2() {
     if (editing) {
       if (editing !== "new" && editing.id === b.id) return; // already editing it
       setSwitchTo(b);
+      return;
+    }
+    // From the narrow-screen panel a pick goes on to that bot's threads —
+    // or, for Jarvis and a bot still setting up, straight to the chat.
+    if (mobilePanel === "bots") {
+      setSelectedId(b.id);
+      setUserOpen(false);
+      if (b.builtin === "jarvis" || needsSetup(b)) closeMobilePanel();
+      else setMobilePanel("threads");
       return;
     }
     setSelectedId(b.id);
@@ -1185,24 +1302,27 @@ export default function V2() {
       <div className="page-body">
         <aside
           ref={sideRef}
-          className={`side${collapsed ? " closing" : ""}${settled ? " settled" : ""}`}
+          id="bots-panel"
+          role={railFull ? "dialog" : undefined}
+          aria-modal={railFull || undefined}
+          className={`side${railCollapsed ? " closing" : ""}${railSettled ? " settled" : ""}${railFull ? " mobile-open" : ""}`}
           style={{
-            width: collapsed ? COLLAPSED_WIDTH : (width ?? undefined),
+            width: railCollapsed ? COLLAPSED_WIDTH : (width ?? undefined),
             transition: dragging ? "none" : undefined,
           }}
           aria-label="Bots"
         >
-          <div ref={botsHeaderRef} className={`side-head bots-panel-header${searchOpen ? " searching" : ""}${iconSet === "solo" ? " solo" : ""}${botsScrolled ? " is-scrolled" : ""}${createMenuOpen ? " menu-open" : ""}`}>
-            {iconSet === "full" && (
+          <div ref={botsHeaderRef} className={`side-head bots-panel-header${searchOpen ? " searching" : ""}${railIcons === "solo" ? " solo" : ""}${botsScrolled ? " is-scrolled" : ""}${createMenuOpen ? " menu-open" : ""}`}>
+            {railIcons === "full" && (
               <h2 className="side-title">Your bots</h2>
             )}
-            <span className={iconsDim ? "head-icons dim" : "head-icons"}>
-            {iconSet === "solo" ? (
+            <span className={railDim ? "head-icons dim" : "head-icons"}>
+            {railIcons === "solo" ? (
               <button
                 type="button"
                 className="collapse-btn fade-in-slow"
                 onClick={toggleCollapse}
-                aria-expanded={!collapsed}
+                aria-expanded={!railCollapsed}
                 aria-label="Expand sidebar"
                 data-tip="Expand sidebar"
               >
@@ -1214,7 +1334,7 @@ export default function V2() {
                 type="button"
                 className="collapse-btn fades"
                 onClick={toggleCollapse}
-                aria-expanded={!collapsed}
+                aria-expanded={!railCollapsed}
                 aria-label="Collapse sidebar"
                 data-tip="Collapse sidebar"
               >
@@ -1318,7 +1438,7 @@ export default function V2() {
             </div>
             <div className={`side-scroll-edge side-scroll-edge-bottom${botsScrollEdge === "bottom" ? " is-visible" : ""}`} aria-hidden="true" />
           </div>
-          {collapsed && settled && (
+          {railCollapsed && railSettled && (
             <div ref={collapsedCreateRef} className="collapsed-create-action">
               <NewBotButton onClick={() => setCreateMenuOpen((open) => !open)} />
               {createBotMenu()}
@@ -1331,11 +1451,17 @@ export default function V2() {
             aria-hidden="true"
           />
         </aside>
+        {mobilePanel === "bots" && (
+          <button type="button" className="mobile-scrim" onClick={() => closeMobilePanel()} aria-label="Close bots" tabIndex={-1} />
+        )}
         <div className={`tray${editing ? " open" : ""}${showProfile ? " profile-open" : ""}`}>
           <div className="tray-main">
             <aside
               ref={threadsAsideRef}
-              className="threads"
+              id="threads-panel"
+              role={mobilePanel === "threads" ? "dialog" : undefined}
+              aria-modal={mobilePanel === "threads" || undefined}
+              className={mobilePanel === "threads" ? "threads mobile-open" : "threads"}
               style={{
                 width: threadsWidth ?? undefined,
                 transition: threadsDragging ? "none" : undefined,
@@ -1434,9 +1560,10 @@ export default function V2() {
                             className="thread-open"
                             disabled={setupRequired}
                             title={setupRequired ? "Available after setup" : undefined}
-                            onClick={() =>
-                              bot && setThreadByBot((prev) => ({ ...prev, [bot.id]: t.id }))
-                            }
+                            onClick={() => {
+                              if (bot) setThreadByBot((prev) => ({ ...prev, [bot.id]: t.id }));
+                              closeMobilePanel(() => document.querySelector<HTMLElement>(".chat-col .composer textarea"));
+                            }}
                           >
                             {(rowNeedsYou || rowHasNews) && (
                               <span
@@ -1491,7 +1618,37 @@ export default function V2() {
                 aria-hidden="true"
               />
             </aside>
+            {mobilePanel === "threads" && (
+              <button type="button" className="mobile-scrim" onClick={() => closeMobilePanel()} aria-label="Close threads" tabIndex={-1} />
+            )}
             <div className={threadPanel ? "chat-col panel-open" : "chat-col"}>
+              <div className="mobile-chat-head" inert={!!(threadPanel || editing || showProfile || userOpen)}>
+                <button
+                  ref={botsToggleRef}
+                  type="button"
+                  className="mobile-panel-btn"
+                  aria-expanded={mobilePanel === "bots"}
+                  aria-controls="bots-panel"
+                  onClick={() => openMobilePanel("bots")}
+                >
+                  <AnimatedActionIcon icon={UsersRoundIcon} size={16} aria-hidden="true" />
+                  <span>Bots</span>
+                  {needsYou > 0 && <span className="mobile-attn" role="img" aria-label={needsYouLabel(needsYou) ?? undefined} />}
+                </button>
+                <b className="mobile-chat-bot">{bot?.name ?? ""}</b>
+                <button
+                  ref={threadsToggleRef}
+                  type="button"
+                  className="mobile-panel-btn"
+                  aria-expanded={mobilePanel === "threads"}
+                  aria-controls="threads-panel"
+                  onClick={() => openMobilePanel("threads")}
+                >
+                  <AnimatedActionIcon icon={MessageSquareIcon} size={16} aria-hidden="true" />
+                  <span>Threads</span>
+                  {isJarvis && needsYou > 0 && <span className="mobile-attn" role="img" aria-label={needsYouLabel(needsYou) ?? undefined} />}
+                </button>
+              </div>
               {isJarvis && activeThread && (
                 <JarvisChildren key={activeThread.id} jarvisThreadId={activeThread.id} bots={bots} working={chatWorking} onOpen={openThread} />
               )}
