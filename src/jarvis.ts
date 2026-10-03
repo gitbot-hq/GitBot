@@ -1,6 +1,7 @@
 import { createSdkMcpServer, tool, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { botNeedsSetup, getBot, isJarvisBot, listBots, type Bot } from "./bot-store";
+import { addProject, getProjects, listProjects } from "./project-index";
 import type { BotPreset } from "./server-common";
 
 // Jarvis, the built-in manager bot: its fixed prompt and its tools. The tools
@@ -37,17 +38,26 @@ export function jarvisSystemPrompt(): string {
     "- get_bots: details for one or more bots at once — description, agent, default",
     "  folder, setup status. Pass includeInstructions only when the user asks to see",
     "  or discuss a bot's instructions.",
-    "A bot's name is often all you see; call get_bots when the name is not enough.",
+    "- list_projects: every known project's id and name. A project is a folder:",
+    "  one a gitbot thread has run in, or one you added.",
+    "- get_projects: details for one or more projects at once — folder, git remote,",
+    "  current branch (no git details for a folder that is not a repo).",
+    "- add_project: add a folder by absolute path. Use it when the user names a",
+    "  project the list lacks and you found its folder with your shell.",
+    "A bot's or project's name is often all you see; call get_bots or get_projects",
+    "when the name is not enough.",
     "Starting threads is not available yet: when work should go to a bot or agent,",
     "say which one you would use and in what folder, and the user can start it.",
     "",
     "RULES:",
     "- A bot that is not set up on this machine: say so. Do not start its setup.",
-    "- Choosing a folder: a project the user names (earlier in this thread counts);",
-    "  else the default folder of a bot the user names; otherwise ask.",
+    "- Choosing a folder: a project the user names (earlier in this thread counts),",
+    "  resolved with list_projects and get_projects; else the default folder of a",
+    "  bot the user names; otherwise ask. Never guess a folder.",
     "- Your working directory is your own scratch folder, not a project. Do not",
     "  treat it as the user's code.",
-    "- Be brief. Answer from the tools rather than guessing about the user's bots.",
+    "- Be brief. Answer from the tools rather than guessing about the user's bots",
+    "  and projects.",
   ].join("\n");
 }
 
@@ -144,6 +154,29 @@ export function jarvisToolServer(availableAgents: readonly string[]) {
           includeInstructions: z.boolean().optional().describe("Also return each bot's instructions. Only when the user asks."),
         },
         async ({ ids, includeInstructions }) => asText({ bots: getBotsForJarvis(ids, includeInstructions ?? false, availableAgents) }),
+      ),
+      tool(
+        "list_projects",
+        "List the projects gitbot knows (ids and names only): folders gitbot threads have run in, and folders added with add_project. Colliding names carry their parent folder.",
+        {},
+        async () => asText({ projects: listProjects() }),
+      ),
+      tool(
+        "get_projects",
+        "Details for one or more projects by id: folder, git remote and current branch. git is null for a folder that is not a git repo.",
+        { ids: z.array(z.string()).min(1).describe("Project ids from list_projects") },
+        async ({ ids }) => asText({ projects: await getProjects(ids) }),
+      ),
+      tool(
+        "add_project",
+        "Add a folder to the project index, by absolute path. The folder must exist; one already listed is not added twice.",
+        { path: z.string().describe("Absolute path of the project's folder") },
+        async ({ path }) => {
+          const result = addProject(path);
+          return result.ok
+            ? asText({ project: result.project, alreadyListed: result.alreadyListed })
+            : { ...asText({ error: result.error }), isError: true };
+        },
       ),
     ],
   });
