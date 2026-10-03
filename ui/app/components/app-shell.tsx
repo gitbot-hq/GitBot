@@ -39,13 +39,15 @@ import TopBar from "./top-bar";
 import {
   botSetupAction,
   createBot,
+  createThread,
   deleteThread,
+  getAgents,
   getBots,
   getSessionStatus,
   getThreads,
 } from "../lib/api";
 import { getAvatarPref, setAvatarPref, resolveAvatar, defaultMascotFor, type AvatarPref } from "../lib/avatar-prefs";
-import type { Bot, ThreadFull } from "../lib/gitbot";
+import { JARVIS_BOT_ID, type Bot, type ThreadFull } from "../lib/gitbot";
 import { setupPrompt, type SetupRunKind } from "../lib/setup";
 import { useScrollEdge } from "../lib/use-scroll-edge";
 import "../v2-theme.css";
@@ -63,6 +65,7 @@ const THREADS_MAX = 480;
 const SIDE_WIDTH_KEY = "gitbot-v2-side-width";
 const THREADS_WIDTH_KEY = "gitbot-v2-threads-width";
 // Set once the user skips onboarding to use a plain agent bot directly.
+// Onboarding only shows while Jarvis cannot run (no Claude Code).
 const ONBOARDING_SKIPPED_KEY = "gitbot-onboarding-skipped";
 
 function readOnboardingSkipped(): boolean {
@@ -100,10 +103,25 @@ function needsSetup(bot: Bot) {
   return !!bot.setupInstructions && bot.setupStatus !== "complete";
 }
 
+/** Jarvis runs on Claude Code. An unknown agent list counts as installed:
+ *  the server has the last word when a thread is made. */
+function claudeCodeMissing(agents: string[] | null) {
+  return agents !== null && !agents.includes("claude-code");
+}
+
+/** The bot the app opens on: Jarvis, unless it cannot run here — then the
+ *  first bot that can. */
+function openingBot(bots: Bot[], agents: string[] | null) {
+  if (!claudeCodeMissing(agents)) return bots[0] ?? null;
+  return bots.find((b) => b.builtin !== "jarvis") ?? bots[0] ?? null;
+}
+
 type Modal = { kind: "share"; bot: Bot; view?: "options" | "code" | "publish" } | { kind: "import" } | { kind: "create-agent" } | null;
 
 export default function V2() {
   const [bots, setBots] = useState<Bot[]>([]);
+  // Installed agents; null until known (or when the list could not be read).
+  const [agents, setAgents] = useState<string[] | null>(null);
   const [botsLoading, setBotsLoading] = useState(true);
   const [botsError, setBotsError] = useState<string | null>(null);
   // Any thread at all, under any bot: someone with history never sees onboarding.
@@ -113,6 +131,13 @@ export default function V2() {
   const [threadsError, setThreadsError] = useState<string | null>(null);
   const [threadsLoading, setThreadsLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedRef = useRef<string | null>(null);
+  selectedRef.current = selectedId;
+  // Thread-list loads: only the latest one for the selected bot lands.
+  const threadsSeq = useRef(0);
+  // Threads made by a first send that a load may not include yet (it was
+  // asked for before they existed); merged in until a load has them.
+  const createdThreads = useRef<ThreadFull[]>([]);
   const [threadByBot, setThreadByBot] = useState<Record<string, string>>({});
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [botActivity, setBotActivity] = useState<string | null>(null);
@@ -231,17 +256,33 @@ export default function V2() {
     setBotsLoading(true);
     // Threads are only asked for to decide on onboarding; failing that
     // must not fail the bot list.
-    Promise.all([getBots(), getThreads().catch(() => ({ threads: [] }))])
-      .then(([{ bots }, { threads: allThreads }]) => {
+    Promise.all([
+      getBots(),
+      getThreads().catch(() => ({ threads: [] })),
+      getAgents().then(({ agents }) => agents, () => null),
+    ])
+      .then(([{ bots }, { threads: allThreads }, installed]) => {
         setBots(bots);
+        setAgents(installed);
         setHasThreads(allThreads.length > 0);
-        setSelectedId((prev) => prev ?? bots[0]?.id ?? null);
+        setSelectedId((prev) => prev ?? openingBot(bots, installed)?.id ?? null);
       })
       .catch((e) => setBotsError(e instanceof Error ? e.message : "Failed to load bots"))
       .finally(() => setBotsLoading(false));
   }, []);
 
   useEffect(loadBots, [loadBots]);
+
+  /** Re-reads the installed agents. A failed read keeps what was known. */
+  const refreshAgents = useCallback(() => {
+    getAgents().then(({ agents }) => setAgents(agents), () => {});
+  }, []);
+
+  // Installing Claude Code while gitbot is open should unblock Jarvis.
+  useEffect(() => {
+    window.addEventListener("focus", refreshAgents);
+    return () => window.removeEventListener("focus", refreshAgents);
+  }, [refreshAgents]);
 
   // Read after mount: the page is prerendered, where there is no storage.
   useEffect(() => {
@@ -292,6 +333,11 @@ export default function V2() {
 
   const bot = bots.find((b) => b.id === selectedId) ?? null;
   const profileBot = bots.find((b) => b.id === profileId) ?? null;
+  const jarvisMissing = claudeCodeMissing(agents);
+  const isJarvis = bot?.builtin === "jarvis";
+  // Selected Jarvis without Claude Code: listed, its threads readable, but
+  // nothing new can start.
+  const jarvisBlocked = isJarvis && jarvisMissing;
   // The profile stays mounted under the studio: opening edit slides the
   // studio over it, closing slides back to it.
   const showProfile = profileBot != null;
@@ -320,9 +366,12 @@ export default function V2() {
     return "Working";
   }
   const activeLabel = bot ? shortActivity(botActivity) : null;
+  const idleLabel = (b: Bot | null) => (b?.builtin === "jarvis" && jarvisMissing ? "Needs Claude Code" : "Idle");
   const setupRequired = !!bot && needsSetup(bot);
-  const setupThread = threads.find((t) => t.kind === "setup") ?? null;
-  const workThreads = threads.filter((t) => t.kind !== "setup");
+  // The list can still hold the previous bot's threads while this one's load.
+  const botThreads = threads.filter((t) => t.botId === bot?.id);
+  const setupThread = botThreads.find((t) => t.kind === "setup") ?? null;
+  const workThreads = botThreads.filter((t) => t.kind !== "setup");
 
   const searchText = query.trim().toLowerCase();
   const visibleBots = searchText
@@ -366,10 +415,17 @@ export default function V2() {
   }, [botsLoading, visibleBots.length, bot?.id, threadsLoading, visibleThreads.length]);
 
   const refreshThreads = useCallback((botId: string) => {
+    const seq = ++threadsSeq.current;
+    const current = () => seq === threadsSeq.current && selectedRef.current === botId;
     setThreadsLoading(true);
     setThreadsError(null);
     getThreads(botId)
-      .then(({ threads }) => {
+      .then(({ threads: loaded }) => {
+        if (!current()) return;
+        const has = (t: ThreadFull) => loaded.some((l) => l.id === t.id);
+        const missing = createdThreads.current.filter((t) => t.botId === botId && !has(t));
+        createdThreads.current = createdThreads.current.filter((t) => !has(t));
+        const threads = [...missing, ...loaded];
         setThreads(threads);
         setThreadByBot((prev) => {
           if (
@@ -378,16 +434,19 @@ export default function V2() {
           ) {
             return prev;
           }
-          const firstWorkThread = threads.find((t) => t.kind !== "setup");
+          // Jarvis opens on a new thread, not its latest one.
+          const firstWorkThread = botId === JARVIS_BOT_ID ? undefined : threads.find((t) => t.kind !== "setup");
           if (firstWorkThread) return { ...prev, [botId]: firstWorkThread.id };
           const { [botId]: _removed, ...rest } = prev;
           return rest;
         });
       })
-      .catch((e) =>
-        setThreadsError(e instanceof Error ? e.message : "Failed to load threads"),
-      )
-      .finally(() => setThreadsLoading(false));
+      .catch((e) => {
+        if (current()) setThreadsError(e instanceof Error ? e.message : "Failed to load threads");
+      })
+      .finally(() => {
+        if (current()) setThreadsLoading(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -405,15 +464,18 @@ export default function V2() {
     setAutoSend((prev) => (prev && prev.botId !== bot?.id ? null : prev));
   }, [bot?.id]);
 
+  const pickedThread = workThreads.find((t) => t.id === (bot ? threadByBot[bot.id] : undefined));
   const activeThread = setupRequired
     ? setupThread
-    : workThreads.find((t) => t.id === (bot ? threadByBot[bot.id] : undefined)) ??
-      workThreads[0] ??
-      null;
+    : pickedThread ?? (isJarvis ? null : workThreads[0]) ?? null;
+  // Jarvis with no thread picked is a new thread, open to type into and
+  // stored on the first send. A picked one still loading is not new.
+  const jarvisNewThread =
+    isJarvis && !jarvisBlocked && !activeThread && !(bot && threadByBot[bot.id] && threadsLoading);
   // When the selected bot also appears in the empty chat panel, both
   // renderings act as one character: same pose and same pointer gaze.
   const mirroredEmptyBotId =
-    bot && !setupRequired && !threadsLoading && workThreads.length === 0
+    bot && !setupRequired && !threadsLoading && !activeThread
       ? bot.id
       : null;
 
@@ -606,6 +668,13 @@ export default function V2() {
     }
     setUserOpen(false);
     setProfileId(null);
+    // Jarvis has nothing to choose: a new thread is just its open composer.
+    if (bot.builtin === "jarvis") {
+      if (jarvisBlocked) return;
+      const id = bot.id;
+      setThreadByBot(({ [id]: _left, ...rest }) => rest);
+      return;
+    }
     setThreadPanel(true);
   }
 
@@ -740,7 +809,8 @@ export default function V2() {
     if (showProfile) {
       openBotProfile(b.id);
     } else if (threadPanel) {
-      if (needsSetup(b)) {
+      // Jarvis has no picker: its new thread is the chat itself.
+      if (needsSetup(b) || b.builtin === "jarvis") {
         setThreadPanel(false);
       }
       // else: the picker stays open and re-targets via key={bot.id}
@@ -793,7 +863,7 @@ export default function V2() {
                     : b.setupStatus === "failed"
                     ? "Setup paused"
                     : "Setup pending"
-                  : "Idle"}
+                  : idleLabel(b)}
             </small>
           </span>
         </button>
@@ -816,6 +886,7 @@ export default function V2() {
     if (!bot) return;
     const current = bot;
     refreshThreads(current.id);
+    refreshAgents();
     // A turn may change bot metadata server-side. In particular a setup
     // run's verdict is recorded by the server from the agent's own reply
     // (never from sub-agent output), so the bot is re-read rather than
@@ -834,6 +905,20 @@ export default function V2() {
       },
       () => {},
     );
+  }
+
+  /** A Jarvis thread stored by its first send. `opened`: the chat is in it;
+   *  otherwise the user moved on, so it only joins the list. */
+  function newThreadStored(thread: ThreadFull, opened: boolean) {
+    setHasThreads(true);
+    createdThreads.current = [...createdThreads.current, thread];
+    const add = (prev: ThreadFull[]) => (prev.some((t) => t.id === thread.id) ? prev : [thread, ...prev]);
+    if (!opened) {
+      if (selectedRef.current === thread.botId) setThreads(add);
+      return;
+    }
+    setThreads(add);
+    setThreadByBot((prev) => ({ ...prev, [thread.botId]: thread.id }));
   }
 
   function threadCreated(thread: ThreadFull) {
@@ -858,6 +943,7 @@ export default function V2() {
     if (!confirm(`Delete "${thread.title}"? The agent's transcript stays on disk.`)) return;
     deleteThread(thread.id).then(
       () => {
+        createdThreads.current = createdThreads.current.filter((candidate) => candidate.id !== thread.id);
         setThreads((current) => current.filter((candidate) => candidate.id !== thread.id));
         setThreadByBot((current) => {
           if (current[bot.id] !== thread.id) return current;
@@ -881,13 +967,13 @@ export default function V2() {
     toast(message);
   }
 
-  // No bots yet (and done loading, no error): first run. The onboarding
-  // flow takes the whole page; creating or importing reloads bots and
-  // lands in the app with the new bot selected.
-  // The built-in agent bots don't count: onboarding is about the user's own.
+  // First run lands on Jarvis: making bots is optional. Only when Jarvis
+  // cannot run here (no Claude Code) and there are no bots of the user's own
+  // yet does the onboarding flow take the whole page; creating or importing
+  // reloads bots and lands in the app with the new bot selected.
   // It never hides existing threads, and it can be skipped for a plain agent.
   const skipTo = bots.find((b) => b.builtin && b.builtin !== "jarvis") ?? null;
-  if (!botsLoading && !botsError && userBots.length === 0 && !hasThreads && !onboardingSkipped) {
+  if (!botsLoading && !botsError && jarvisMissing && userBots.length === 0 && !hasThreads && !onboardingSkipped) {
     return (
       <div className="page v2">
         <TopBar
@@ -1121,7 +1207,7 @@ export default function V2() {
                         : bot?.setupStatus === "failed"
                         ? "Setup paused"
                         : "Setup pending"
-                      : "Idle")}
+                      : idleLabel(bot))}
                 </small>
               </div>
               </div>
@@ -1164,9 +1250,11 @@ export default function V2() {
                       ? "Close search"
                       : setupRequired
                         ? "Available after setup"
-                        : "New thread"
+                        : jarvisBlocked
+                          ? "Needs Claude Code"
+                          : "New thread"
                   }
-                  disabled={setupRequired && !threadSearchOpen}
+                  disabled={(setupRequired || jarvisBlocked) && !threadSearchOpen}
                   onClick={() => (threadSearchOpen ? closeThreadSearch() : newThread())}
                 >
                   <AnimatedActionIcon icon={PlusIcon} size={18} aria-hidden="true" />
@@ -1260,7 +1348,18 @@ export default function V2() {
                 onShare={bot && !bot.builtin ? (view) => setModal({ kind: "share", bot, view }) : undefined}
                 onLearnMorePermissions={() => openLearnMore("permissions")}
                 onOpenBot={bot ? () => openBotProfile(bot.id) : undefined}
-                onNewThread={bot && !setupRequired ? newThread : undefined}
+                onNewThread={bot && !setupRequired && !jarvisBlocked ? newThread : undefined}
+                newThread={jarvisNewThread && bot ? {
+                  create: () => createThread(bot.id).then(({ thread }) => thread),
+                  onCreated: newThreadStored,
+                } : undefined}
+                emptyHint={isJarvis ? <p>Or make a bot of your own with + in Your bots.</p> : undefined}
+                emptyCopy={jarvisBlocked && bot ? (
+                  <p>
+                    <BotName color={avatarFor(bot.id).color}>{bot.name}</BotName> runs on Claude Code,
+                    which is not installed on this machine. Install it to start a thread.
+                  </p>
+                ) : undefined}
                 booting={botsLoading || threadsLoading}
                 setup={
                   setupRequired && bot?.setupInstructions

@@ -30,6 +30,9 @@ export type Bot = {
   builtin?: string;
 };
 
+/** Jarvis's fixed id (see src/bot-store.ts). */
+export const JARVIS_BOT_ID = "builtin-jarvis";
+
 export type Thread = {
   id: string;
   botId: string;

@@ -54,14 +54,23 @@ async function call(method: string, url: string, body?: unknown, agents: string[
 
 // --- Jarvis as a built-in bot ---
 
-test("Jarvis is listed first while Claude Code is installed, and not otherwise", () => {
+test("Jarvis is listed first, whether or not Claude Code is installed", () => {
   const bots = listBots(ALL_AGENTS);
   assert.equal(bots[0].id, JARVIS_BOT_ID);
   assert.equal(bots[0].builtin, "jarvis");
   assert.equal(bots.filter((b) => b.builtin === "jarvis").length, 1);
-  assert.ok(!listBots(["codex"]).some((b) => b.id === JARVIS_BOT_ID));
-  // Still found by id, so its threads resolve.
+  // Jarvis always exists: without Claude Code it stays listed (the UI shows
+  // it cannot run), so its threads keep their place in the sidebar.
+  const withoutClaude = listBots(["codex"]);
+  assert.equal(withoutClaude[0].id, JARVIS_BOT_ID);
+  assert.ok(!withoutClaude.some((b) => b.id === "builtin-claude-code"));
   assert.equal(getBot(JARVIS_BOT_ID)?.name, "Jarvis");
+});
+
+test("GET /bots lists Jarvis without Claude Code", async () => {
+  const listed = await call("GET", "/bots", undefined, ["codex"]);
+  assert.equal(listed.status, 200);
+  assert.equal(listed.body.bots[0].id, JARVIS_BOT_ID);
 });
 
 test("Jarvis runs Claude Code in auto-approve on the default model", () => {

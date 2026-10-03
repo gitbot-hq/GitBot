@@ -45,7 +45,7 @@ and stores machine-local state in `~/.gitbot` (`bots.json`, `threads.json`).
   + standout `document.title` while hidden). Driven from `chat.tsx` signal
   (attention > error > working > done flash > idle). SVGs live in
   `public/notif/` (8 files: 4 states × light/dark).
-- Routes: `/` is the app (onboarding empty state when no bots);
+- Routes: `/` is the app, opening on a new Jarvis thread (onboarding only when Claude Code is missing and there are no bots or threads);
   `/onboarding`, `/bot-maker`, `/mascot-lab`, `/cta`
   are standalone/internal demos, not public. `scripts/build-ui.mjs` strips
   `/bot-maker`, `/mascot-lab` and `/cta` from the shipped export.

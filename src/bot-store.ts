@@ -236,13 +236,14 @@ function readStoredBots(): Bot[] {
 }
 
 /**
- * Jarvis first (while Claude Code, which it runs on, is installed), then the
- * user's bots by name, then the built-in bots for the installed agents.
+ * Jarvis first, then the user's bots by name, then the built-in bots for the
+ * installed agents. Jarvis is listed even while Claude Code, which it runs
+ * on, is missing: it always exists, and its threads keep their place. The UI
+ * reads the agent list to show that it cannot run yet.
  */
 export function listBots(installedAgents: readonly string[]): Bot[] {
   const stored = readStoredBots().sort((a, b) => a.name.localeCompare(b.name));
-  const jarvis = installedAgents.includes("claude-code") ? [jarvisBot()] : [];
-  return [...jarvis, ...stored, ...plainAgentBots(installedAgents)];
+  return [jarvisBot(), ...stored, ...plainAgentBots(installedAgents)];
 }
 
 /**

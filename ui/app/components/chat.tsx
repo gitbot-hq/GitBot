@@ -378,6 +378,9 @@ export default function Chat({
   onLearnMorePermissions,
   onOpenBot,
   onNewThread,
+  newThread,
+  emptyCopy,
+  emptyHint,
   booting,
   setup,
 }: {
@@ -401,6 +404,18 @@ export default function Chat({
   onLearnMorePermissions?: () => void;
   onOpenBot?: () => void;
   onNewThread?: () => void;
+  /** A new thread that is not stored yet: with no `thread`, the composer is
+   *  open anyway, and the first send creates the thread and runs in it — so
+   *  opening one and walking away leaves nothing behind. `onCreated` hears of
+   *  every thread made, with `opened` false if the user had moved on. */
+  newThread?: {
+    create: () => Promise<ThreadFull>;
+    onCreated: (thread: ThreadFull, opened: boolean) => void;
+  };
+  /** Replaces the no-thread empty-state copy (and its button). */
+  emptyCopy?: ReactNode;
+  /** An extra line under a new, still-empty thread's greeting. */
+  emptyHint?: ReactNode;
   /** True while the app is still loading bots/threads on boot. Shows a
    *  skeleton instead of the empty-thread copy, so the first paint never
    *  flashes placeholder text. Defaults to false (old behavior). */
@@ -463,6 +478,17 @@ export default function Chat({
   const pendingTools = useRef<ToolChip[]>([]);
   const liveKey = useRef(0);
   const threadRef = useRef<string | null>(null);
+  // What the chat shows: the thread's id, or a key for an unsaved new thread.
+  // Drafts are stashed under it; each switch bumps the epoch.
+  const viewKey = thread?.id ?? (newThread ? `new:${botId ?? ""}` : "");
+  const viewRef = useRef("");
+  const viewEpoch = useRef(0);
+  // A thread just created from a new-thread view: the chat is already in it
+  // (its turn is starting), so arriving there must not reset anything.
+  const adoptedRef = useRef<string | null>(null);
+  // Stop pressed before the turn's session exists (a new thread still being
+  // made, or POST /chat in flight): honored once the request returns.
+  const stopRequestedRef = useRef(false);
   const lastPrompt = useRef("");
   const scrollRef = useRef<HTMLElement | null>(null);
   const stick = useRef(true);
@@ -675,12 +701,24 @@ export default function Chat({
 
   // Load history on thread switch; drop any live turn.
   useEffect(() => {
+    // The new-thread view itself registers no cleanup, so arriving in the
+    // adopted thread leaves its starting turn alone.
+    if (thread && adoptedRef.current === thread.id) {
+      adoptedRef.current = null;
+      return () => {
+        closeStream();
+        if (reloadTimer.current) clearTimeout(reloadTimer.current);
+      };
+    }
+    adoptedRef.current = null;
+    viewEpoch.current++;
     closeStream();
     if (reloadTimer.current) clearTimeout(reloadTimer.current);
     // Stash this thread's draft, restore the next one's. A queued
     // follow-up rides back into the draft — never silently dropped.
-    const prevId = threadRef.current;
-    if (prevId) drafts.current[prevId] = mergeQueued(queueRef.current, draftRef.current);
+    const prevKey = viewRef.current;
+    if (prevKey) drafts.current[prevKey] = mergeQueued(queueRef.current, draftRef.current);
+    viewRef.current = viewKey;
     sessionRef.current = null;
     liveIdRef.current = null;
     liveTextRef.current = "";
@@ -708,7 +746,7 @@ export default function Chat({
     // Steering disabled — kept for reference.
     // pendingSteer.current = null;
     lastPrompt.current = "";
-    const nextDraft = thread?.id ? (drafts.current[thread.id] ?? "") : "";
+    const nextDraft = viewKey ? (drafts.current[viewKey] ?? "") : "";
     draftRef.current = nextDraft;
     setDraft(nextDraft);
     resetBox();
@@ -757,7 +795,13 @@ export default function Chat({
       if (reloadTimer.current) clearTimeout(reloadTimer.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [thread?.id]);
+  }, [viewKey]);
+
+  // A new thread opens ready to type into.
+  useEffect(() => {
+    if (!thread && newThread) boxRef.current?.focus({ preventScroll: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewKey]);
 
   // Setup runs auto-send their opening or continuation prompt once history
   // has settled. Continuations intentionally run in non-empty setup threads.
@@ -1057,7 +1101,7 @@ export default function Chat({
   // The composer never locks: sending mid-turn parks the message in the
   // queue (flushed by finish()), sending while idle starts a turn.
   async function sendPrompt(prompt: string) {
-    if (!thread || !prompt.trim()) return;
+    if ((!thread && !newThread) || !prompt.trim()) return;
     if (streaming || turnActiveRef.current) {
       enqueue(prompt.trim());
       return;
@@ -1070,7 +1114,7 @@ export default function Chat({
     setQueue(text);
     setDraft("");
     draftRef.current = "";
-    if (threadRef.current) drafts.current[threadRef.current] = "";
+    if (viewRef.current) drafts.current[viewRef.current] = "";
     resetBox();
     stick.current = true;
     requestAnimationFrame(scrollDown);
@@ -1079,13 +1123,13 @@ export default function Chat({
   async function startTurn(prompt: string) {
     // No streaming check: callers own that (sendPrompt enqueues mid-turn,
     // maybeFlush only runs once the previous turn fully ended).
-    if (!thread || !prompt.trim()) return;
+    if ((!thread && !newThread) || !prompt.trim()) return;
     lastPrompt.current = prompt;
     catchupRef.current = false;
     pendingFilter.current = null;
     setDraft("");
     draftRef.current = "";
-    if (threadRef.current) drafts.current[threadRef.current] = "";
+    if (viewRef.current) drafts.current[viewRef.current] = "";
     setTurnError(null);
     setPerms([]);
     setOpenGroups({});
@@ -1094,30 +1138,87 @@ export default function Chat({
     liveTextRef.current = "";
     turnStart.current = Date.now();
     turnActiveRef.current = true;
+    stopRequestedRef.current = false;
+    const msgId = nid();
     setMsgs((prev) => [
       ...prev,
-      { id: nid(), role: "user", segs: [{ kind: "text", text: prompt }] },
+      { id: msgId, role: "user", segs: [{ kind: "text", text: prompt }] },
     ]);
     setStreaming(true);
     setActivity("Thinking…");
     stick.current = true;
     requestAnimationFrame(scrollDown);
+    const epoch = viewEpoch.current;
+    const startKey = viewRef.current;
+    let tid = thread?.id ?? null;
     try {
+      if (!tid) {
+        // First send of a new thread: only now is it stored.
+        let created: ThreadFull;
+        try {
+          created = await newThread!.create();
+        } catch (e) {
+          if (viewEpoch.current !== epoch) return;
+          unsend(msgId, prompt);
+          setTurnError(errText(e));
+          return;
+        }
+        tid = created.id;
+        const opened = viewEpoch.current === epoch;
+        newThread!.onCreated(created, opened);
+        if (!opened) {
+          // The user moved on: send nothing unseen (Jarvis auto-approves).
+          // The message waits in that new thread's draft instead.
+          drafts.current[startKey] = mergeQueued(prompt, drafts.current[startKey] ?? "");
+          return;
+        }
+        // Still looking at it: carry on in the new thread, no reset.
+        adoptedRef.current = created.id;
+        threadRef.current = created.id;
+        viewRef.current = created.id;
+        if (stopRequestedRef.current) {
+          unsend(msgId, prompt);
+          return;
+        }
+      }
       const { sessionId } = await postChat(
-        thread.id,
+        tid,
         prompt,
-        permissionModesRef.current[thread.id] ?? safePermissionMode(botPermissionMode, agent),
+        permissionModesRef.current[tid] ?? safePermissionMode(botPermissionMode, agent),
       );
-      if (threadRef.current !== thread.id) return;
+      if (threadRef.current !== tid) return;
       sessionRef.current = sessionId;
+      if (stopRequestedRef.current) {
+        postAbort(sessionId).catch(() => {});
+        finish(false, true);
+        return;
+      }
       openStream(sessionId);
     } catch (e) {
-      if (threadRef.current !== thread.id) return;
+      if (tid ? threadRef.current !== tid : viewEpoch.current !== epoch) return;
       turnActiveRef.current = false;
       setStreaming(false);
       setActivity(null);
       setTurnError(errText(e));
     }
+  }
+
+  /** A send that never reached the server: take its bubble back and return
+   *  the text, plus anything queued behind it, to the composer. */
+  function unsend(msgId: string, prompt: string) {
+    if (stopTimer.current) {
+      window.clearTimeout(stopTimer.current);
+      stopTimer.current = null;
+    }
+    turnActiveRef.current = false;
+    turnStart.current = 0;
+    setStreaming(false);
+    setActivity(null);
+    setMsgs((prev) => prev.filter((m) => m.id !== msgId));
+    const q = queueRef.current;
+    queueRef.current = null;
+    setQueue(null);
+    restoreToDraft(mergeQueued(prompt, q ?? ""));
   }
 
   function abortCurrent() {
@@ -1150,6 +1251,7 @@ export default function Chat({
       // pendingSteer.current = null;
       restoreToDraft(q);
     }
+    stopRequestedRef.current = true;
     setup?.onPause();
     abortCurrent();
   }
@@ -1160,7 +1262,7 @@ export default function Chat({
     const merged = mergeQueued(q, draftRef.current);
     setDraft(merged);
     draftRef.current = merged;
-    if (threadRef.current) drafts.current[threadRef.current] = merged;
+    if (viewRef.current) drafts.current[viewRef.current] = merged;
     fitBox();
   }
 
@@ -1323,7 +1425,7 @@ export default function Chat({
     </div>
   );
 
-  if (!thread) {
+  if (!thread && !newThread) {
     return (
       <main className="chat" aria-label={setup ? "Bot setup" : "Chat"}>
         {toolbar}
@@ -1357,9 +1459,11 @@ export default function Chat({
               )}
               <div className="conversation-empty-copy">
                 <h1>Start a conversation</h1>
-                <p>Choose a folder, then tell <BotName color={botAvatar?.color}>{botName}</BotName> what you’d like help with.</p>
+                {emptyCopy ?? (
+                  <p>Choose a folder, then tell <BotName color={botAvatar?.color}>{botName}</BotName> what you’d like help with.</p>
+                )}
               </div>
-              {onNewThread && (
+              {!emptyCopy && onNewThread && (
                 <button type="button" className="btn-primary" onClick={onNewThread}>
                   <AnimatedActionIcon icon={MessageSquarePlusIcon} size={16} aria-hidden="true" />
                   New conversation
@@ -1499,7 +1603,7 @@ export default function Chat({
             )}
           </article>
         )}
-        {loading && (thread.messageCount === 0 && !setup
+        {loading && (thread?.messageCount === 0 && !setup
           ? <ConversationEmptySkeleton />
           : <ChatSkeleton label="Loading history" />)}
         {showThreadEmpty && (
@@ -1517,6 +1621,7 @@ export default function Chat({
             <div className="conversation-empty-copy">
               <h1>Start a conversation</h1>
               <p>Tell <BotName color={botAvatar?.color}>{botName}</BotName> what you’d like help with.</p>
+              {!thread && emptyHint}
             </div>
           </div>
         )}
