@@ -30,6 +30,7 @@ import { startTurn } from "./turns";
 import { releaseToUser } from "./send-to-thread";
 import { watchChildReports } from "./reports";
 import { noteChildStopped } from "./child-lock";
+import { recoverInterruptedChildren, watchRunningMarks } from "./restart-recovery";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
 import { uiFileFor } from "./static-ui";
 
@@ -401,6 +402,10 @@ export async function start(network: string = "local", portOverride?: number, ca
     ...(codexAvailable ? ["codex"] : []),
   ];
   console.log(`  available agents: ${availableAgents.join(", ") || "none"}`);
+  // A child a restart interrupted tells its Jarvis with the user's next message.
+  const interrupted = recoverInterruptedChildren();
+  if (interrupted.length) console.log(`  interrupted by restart: ${interrupted.length} child thread(s), Jarvis will be told`);
+  watchRunningMarks();
   // A child Jarvis started reports back to it when its turn ends.
   watchChildReports(availableAgents);
 

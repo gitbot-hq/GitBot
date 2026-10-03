@@ -1,5 +1,5 @@
 import { basename } from "path";
-import { getBot, getThread, isJarvisBot, updateThread } from "./bot-store";
+import { getBot, getThread, isJarvisBot, setRunningFor, updateThread } from "./bot-store";
 import { sessions, turnReportsTo, type SessionStore } from "./server-common";
 
 // Lock and Stop. A Jarvis thread is locked exactly while one of its children
@@ -52,10 +52,19 @@ export function oneChildAtATime(running: RunningChild): string {
 export function noteChildStopped(store: SessionStore): void {
   const owner = turnReportsTo(store);
   if (!owner || !store.threadId) return;
-  const jarvis = getThread(owner);
+  addPendingNote(owner, `[you stopped ${childLabel(store.threadId)}]`);
+  // Jarvis has its note: a restart before the turn winds down owes no other.
+  setRunningFor(store.threadId, undefined);
+}
+
+/**
+ * Adds a note for the user's next message on a Jarvis thread, after any
+ * already waiting there.
+ */
+export function addPendingNote(jarvisThreadId: string, note: string): void {
+  const jarvis = getThread(jarvisThreadId);
   if (!jarvis) return;
-  const note = `[you stopped ${childLabel(store.threadId)}]`;
-  updateThread(owner, { pendingNote: jarvis.pendingNote ? `${jarvis.pendingNote}\n${note}` : note });
+  updateThread(jarvisThreadId, { pendingNote: jarvis.pendingNote ? `${jarvis.pendingNote}\n${note}` : note });
 }
 
 /**

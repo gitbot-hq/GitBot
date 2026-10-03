@@ -88,6 +88,12 @@ export interface Thread {
    * ("[you stopped PR Validator on Trophy]"). Prepended once, then cleared.
    */
   pendingNote?: string;
+  /**
+   * The Jarvis thread a turn running here now will report to. Set when a
+   * reportable turn starts, cleared when it ends; sessions live in memory, so
+   * one still set at startup is a child a restart interrupted.
+   */
+  runningFor?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -434,6 +440,19 @@ export function setThreadOwner(id: string, reportTo: string | undefined): void {
   if (!thread || thread.reportTo === reportTo) return;
   if (reportTo) thread.reportTo = reportTo;
   else delete thread.reportTo;
+  writeCollection(THREADS_FILE, threads);
+}
+
+/**
+ * Marks or unmarks a thread as running a turn for a Jarvis thread. Like
+ * ownership, it is not activity: updatedAt stays.
+ */
+export function setRunningFor(id: string, owner: string | undefined): void {
+  const threads = readCollection<Thread>(THREADS_FILE);
+  const thread = threads.find((t) => t.id === id);
+  if (!thread || thread.runningFor === owner) return;
+  if (owner) thread.runningFor = owner;
+  else delete thread.runningFor;
   writeCollection(THREADS_FILE, threads);
 }
 
