@@ -30,7 +30,7 @@ import { initAgent as initOpencode, stopAgent as stopOpencode, runAgent as runOp
 import { initAgent as initCodex, runAgent as runCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
 import { handleBotRoutes } from "./bot-routes";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
-import { getBot, getThread, touchThread, updateThread, botNeedsSetup, threadAgent } from "./bot-store";
+import { getBot, getThread, touchThread, updateThread, botNeedsSetup, threadAgent, isJarvisBot, jarvisDir } from "./bot-store";
 import { botPermissionToSession } from "./server-common";
 import { uiFileFor } from "./static-ui";
 
@@ -281,6 +281,15 @@ export async function handleRequest(
           disallowedTools: bot.disallowedTools,
           ...(isSetup ? { setup: true, setupInstructions: bot.setupInstructions } : {}),
         };
+        // Jarvis is fixed: its own folder, the default model, auto-approve,
+        // whatever the thread record or the request says.
+        if (isJarvisBot(bot)) {
+          repoPath = jarvisDir();
+          model = undefined;
+          permissionMode = "yolo";
+          mode = undefined;
+          botPreset = { ...botPreset, jarvis: { availableAgents } };
+        }
       }
 
       if (!repoPath) { jsonError(res, 400, "repoPath is required"); return; }

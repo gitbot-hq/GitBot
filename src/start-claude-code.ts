@@ -15,6 +15,7 @@ import {
 } from "./server-common";
 import { bindSession } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcome } from "./bot-prompt";
+import { isJarvisTool, jarvisQueryOptions } from "./jarvis";
 
 export async function initAgent(): Promise<boolean> {
   try {
@@ -96,8 +97,15 @@ export async function runAgent(store: SessionStore): Promise<void> {
         ...(preset?.allowedTools?.length ? { hooks: allowListHooks(preset.allowedTools, preset.name) } : {}),
         ...(preset?.disallowedTools?.length ? { disallowedTools: preset.disallowedTools } : {}),
         ...(store.sdkSessionId ? { resume: store.sdkSessionId } : {}),
+        // Jarvis's gitbot tools: a fresh in-process server per turn, for Jarvis only.
+        ...jarvisQueryOptions(preset),
         canUseTool: (toolName, input, { signal, toolUseID }) => {
           return new Promise((resolve) => {
+            // Jarvis's own tools only read gitbot's state; they never ask.
+            if (preset?.jarvis && isJarvisTool(toolName)) {
+              resolve({ behavior: "allow", updatedInput: input });
+              return;
+            }
             console.log(`[canUseTool] tool="${toolName}" mode="${store.permissionMode}" autoApprove=${shouldAutoApprove(store.agent, toolName, store.permissionMode)}`);
             if (shouldAutoApprove(store.agent, toolName, store.permissionMode)) {
               resolve({ behavior: "allow", updatedInput: input });

@@ -32,8 +32,10 @@ async function call(method: string, url: string, body?: unknown, agents: string[
   return { status, body: JSON.parse(out) };
 }
 
+// The plain agent bots; Jarvis, also built-in, has tests of its own.
+const isPlain = (b: { builtin?: string }) => !!b.builtin && b.builtin !== "jarvis";
 const builtinsIn = (bots: { builtin?: string; name: string }[]) =>
-  bots.filter((b) => b.builtin).map((b) => b.name);
+  bots.filter(isPlain).map((b) => b.name);
 
 test("GET /bots lists a plain bot for each installed agent, and only those", async () => {
   assert.deepEqual(builtinsIn((await call("GET", "/bots", undefined, [])).body.bots), []);
@@ -47,7 +49,7 @@ test("GET /bots lists a plain bot for each installed agent, and only those", asy
 
 test("plain bots run their own agent with no instructions", async () => {
   const { bots } = (await call("GET", "/bots")).body;
-  for (const bot of bots.filter((b: any) => b.builtin)) {
+  for (const bot of bots.filter(isPlain)) {
     assert.equal(bot.agent, bot.builtin);
     assert.equal(bot.instructions, "");
     assert.equal(bot.setupInstructions, undefined);

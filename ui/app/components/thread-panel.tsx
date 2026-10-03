@@ -71,6 +71,7 @@ export default function ThreadPanel({
   };
   const [current, setCurrent] = useState<BrowseResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const isJarvis = bot.builtin === "jarvis";
   const [agent, setAgent] = useState(bot.agent || "claude-code");
   const [installed, setInstalled] = useState<string[] | null>(null);
   const agentTouched = useRef(false);
@@ -166,7 +167,13 @@ export default function ThreadPanel({
           </div>
         </header>
 
-        <section className="thread-step" aria-labelledby="thread-workspace-title">
+        {/* Jarvis always works in its own folder; there is nothing to pick. */}
+        {isJarvis ? (
+          <p className="thread-local-note">
+            <IconDeviceDesktop size={17} stroke={1.7} aria-hidden="true" />
+            <span>{bot.name} works in its own folder and decides where other work happens.</span>
+          </p>
+        ) : <section className="thread-step" aria-labelledby="thread-workspace-title">
           <div className="thread-step-head">
             <span className="thread-step-number" aria-hidden="true">1</span>
             <div>
@@ -244,7 +251,7 @@ export default function ThreadPanel({
               </div>
             )}
           </div>
-        </section>
+        </section>}
 
         {!bot.builtin && <section className="thread-agent thread-step" aria-labelledby="thread-agent-title">
           <div className="thread-step-head">
@@ -283,11 +290,15 @@ export default function ThreadPanel({
         </section>}
         {/* A built-in agent bot has no agent step, so say here why it can't start. */}
         {bot.builtin && agentMissing && (
-          <p className="field-warn">{bot.name} is not installed on this machine. Install it to create a thread.</p>
+          <p className="field-warn">
+            {isJarvis
+              ? `${bot.name} runs on Claude Code, which is not installed on this machine. Install it to create a thread.`
+              : `${bot.name} is not installed on this machine. Install it to create a thread.`}
+          </p>
         )}
 
         <footer className="pick-acts">
-          <button
+          {!isJarvis && <button
             type="button"
             className="btn-ghost"
             title="Run where the CLI was started (or the bot's directory)"
@@ -295,7 +306,7 @@ export default function ThreadPanel({
             onClick={() => pick(null)}
           >
             Use default
-          </button>
+          </button>}
           <div className="spacer" />
           <button type="button" className="btn-secondary" disabled={creating} onClick={onClose}>
             Cancel
@@ -303,8 +314,10 @@ export default function ThreadPanel({
           <button
             type="button"
             className="btn-primary"
-            disabled={!current || loading || creating || installed === null || agentMissing}
-            onClick={() => current && pick(current.path)}
+            disabled={isJarvis
+              ? creating || installed === null || agentMissing
+              : !current || loading || creating || installed === null || agentMissing}
+            onClick={() => isJarvis ? pick(null) : current && pick(current.path)}
           >
             {creating ? "Creating…" : "Create thread"}
           </button>

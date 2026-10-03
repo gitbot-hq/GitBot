@@ -1,4 +1,5 @@
 import { setSetupStatus } from "./bot-store";
+import { jarvisSystemPrompt } from "./jarvis";
 import type { SessionStore } from "./server-common";
 
 // How a bot's preset is put to an agent. Shared by every harness, so a bot
@@ -12,6 +13,7 @@ type Preset = NonNullable<SessionStore["botPreset"]>;
  */
 export function presetSystemPrompt(preset: Preset | undefined): string | undefined {
   if (!preset) return undefined;
+  if (preset.jarvis) return jarvisSystemPrompt();
   if (preset.setup) return setupSystemPrompt(preset);
   return preset.instructions?.trim() ? botSystemPrompt(preset) : undefined;
 }

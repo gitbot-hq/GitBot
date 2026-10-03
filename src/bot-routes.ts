@@ -22,6 +22,9 @@ import {
   setSetupStatus,
   isBotAgent,
   isBuiltinBot,
+  isJarvisBot,
+  jarvisDir,
+  builtinAgent,
   BOT_AGENTS,
   type Bot,
 } from "./bot-store";
@@ -141,8 +144,9 @@ export async function handleBotRoutes(
       const bot = body.botId ? getBot(body.botId) : undefined;
       if (!bot) { jsonError(res, 400, "a valid botId is required"); return true; }
       // A thread runs where it is told to: the folder the user picked, else the
-      // bot's default, else the directory the CLI was started in.
-      const repoPath = body.repoPath ?? bot.repoPath ?? workspaceCwd;
+      // bot's default, else the directory the CLI was started in. Jarvis is the
+      // exception: it always works in its own folder, whatever was asked for.
+      const repoPath = isJarvisBot(bot) ? jarvisDir() : body.repoPath ?? bot.repoPath ?? workspaceCwd;
       if (!existsSync(repoPath) || !statSync(repoPath).isDirectory()) {
         jsonError(res, 400, `Not a directory: ${repoPath}`);
         return true;
@@ -161,13 +165,15 @@ export async function handleBotRoutes(
         });
         return true;
       }
-      // A plain agent bot is its agent; its threads cannot run on another,
-      // and there is no thread to make while that agent is missing here.
-      if (bot.builtin && !availableAgents.includes(bot.builtin)) {
-        jsonError(res, 400, `${bot.name} is not installed on this machine`, { agentUnavailable: bot.builtin });
+      // A built-in bot is pinned to its agent; its threads cannot run on
+      // another, and there is no thread to make while that agent is missing.
+      const pinned = bot.builtin ? builtinAgent(bot.builtin) : undefined;
+      if (pinned && !availableAgents.includes(pinned)) {
+        const what = isJarvisBot(bot) ? `${bot.name} needs ${pinned}, which is` : `${bot.name} is`;
+        jsonError(res, 400, `${what} not installed on this machine`, { agentUnavailable: pinned });
         return true;
       }
-      const agent = bot.builtin ?? body.agent;
+      const agent = pinned ?? body.agent;
       jsonOk(res, { thread: createThread(bot.id, repoPath, body.title, "chat", agent) });
       return true;
     }
@@ -200,6 +206,9 @@ export async function handleBotRoutes(
     }
     if (method === "PATCH") {
       const body = await readBody(req);
+      // A Jarvis thread's folder is not the caller's to move.
+      const existing = getThread(threadId);
+      if (existing && isJarvisBot(getBot(existing.botId))) delete body.repoPath;
       const thread = updateThread(threadId, body);
       if (!thread) { jsonError(res, 404, "Thread not found"); return true; }
       jsonOk(res, { thread });
