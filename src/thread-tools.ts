@@ -13,7 +13,8 @@ import { getSessionHistory as loadOpencodeHistory } from "./start-opencode";
 
 // --- Transcripts ---
 
-export type TranscriptMessage = { role: string; content: any[] };
+/** `at`: the message's transcript time, where the agent records one (claude-code). */
+export type TranscriptMessage = { role: string; content: any[]; at?: string };
 
 /**
  * How each agent's transcript is read back — the same readers the thread view

@@ -10,12 +10,13 @@ export type ChildApproval = {
   childBotId: string;
   bot: string;
   tool: string;
-  /** The Jarvis thread's turn count when asked: the row follows that many turns. */
-  after: number;
+  /** When it asked (ISO time). */
+  askedAt: string;
   outcome?: "approved" | "denied" | "dropped";
 };
 
-export type ApprovalState = "pending" | "approved" | "denied" | "dropped";
+/** "unknown": unanswered, and the stream not heard from yet to say whether it still waits. */
+export type ApprovalState = "pending" | "approved" | "denied" | "dropped" | "unknown";
 
 export type ApprovalRow = ChildApproval & { state: ApprovalState };
 
@@ -44,14 +45,42 @@ export function pendingByJarvis(snapshot: ApprovalsSnapshot): Record<string, str
 
 /**
  * Each stored row with its state now. A row the server has answered says
- * so; an unanswered one is pending while the stream lists it, or until the
- * stream is first heard from (`pending` null). One the stream no longer lists
- * and nobody answered was dropped: its turn ended, or gitbot restarted.
+ * so; an unanswered one is pending while the stream lists it, and dropped
+ * once it does not (its turn ended, or gitbot restarted). Until the stream is
+ * first heard from (`pending` null) an unanswered row is "unknown": shown
+ * neutral, offering no Review.
  */
 export function approvalRows(log: ChildApproval[], pending: readonly string[] | null): ApprovalRow[] {
   const waiting = pending ? new Set(pending) : null;
   return log.map((r) => ({
     ...r,
-    state: r.outcome ?? (!waiting || waiting.has(r.id) ? "pending" : "dropped"),
+    state: r.outcome ?? (!waiting ? "unknown" : waiting.has(r.id) ? "pending" : "dropped"),
   }));
+}
+
+/**
+ * Where rows sit among the conversation's messages, by time: each goes just
+ * before the first message that began after it was asked, in the order
+ * asked. `times` are the messages' start times (ISO); a message with none is
+ * no boundary. Rows asked after every message trail the conversation.
+ */
+export function placeApprovals<R extends { askedAt: string }>(
+  times: readonly (string | undefined)[],
+  rows: readonly R[],
+): { before: Map<number, R[]>; trailing: R[] } {
+  const ms = (t: string) => {
+    const n = Date.parse(t);
+    return Number.isNaN(n) ? Infinity : n;
+  };
+  let rest = [...rows].sort((a, b) => ms(a.askedAt) - ms(b.askedAt));
+  const before = new Map<number, R[]>();
+  times.forEach((t, i) => {
+    if (!t || rest.length === 0) return;
+    const at = ms(t);
+    const here = rest.filter((r) => ms(r.askedAt) < at);
+    if (here.length === 0) return;
+    before.set(i, here);
+    rest = rest.filter((r) => ms(r.askedAt) >= at);
+  });
+  return { before, trailing: rest };
 }

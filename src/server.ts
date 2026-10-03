@@ -30,7 +30,7 @@ import { startTurn } from "./turns";
 import { releaseToUser } from "./send-to-thread";
 import { watchChildReports } from "./reports";
 import { noteChildStopped } from "./child-lock";
-import { answerChildApproval, watchChildApprovals } from "./child-approvals";
+import { answerChildApprovals, watchChildApprovals } from "./child-approvals";
 import { recoverInterruptedChildren, watchRunningMarks } from "./restart-recovery";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
 import { uiFileFor } from "./static-ui";
@@ -238,19 +238,20 @@ export async function handleRequest(
       if (store.agent === "claude-code") {
         const pending = store.pendingPermissions.get(toolUseID);
         if (pending) {
-          answerChildApproval(store, toolUseID, !!approved);
           store.pendingPermissions.delete(toolUseID);
-          notifyPermissionsChanged();
           pending.resolve(approved
             ? { behavior: "allow", updatedInput: updatedInput ?? pending.input }
             : { behavior: "deny", message: "User denied" }
           );
+          // A Jarvis-owned child's row says how, before the change is broadcast.
+          answerChildApprovals(store, [toolUseID], !!approved);
+          notifyPermissionsChanged();
         }
       } else if (store.agent === "opencode" && store.sdkSessionId) {
         const pending = store.pendingPermissions.get(toolUseID);
         if (pending) {
-          answerChildApproval(store, toolUseID, !!approved);
           store.pendingPermissions.delete(toolUseID);
+          answerChildApprovals(store, [toolUseID], !!approved);
           notifyPermissionsChanged();
           // For subagent permissions, respond on the child sdkSessionId that actually raised the request.
           const respondSdkId = pending.askedBySdkSessionId ?? store.sdkSessionId;
@@ -357,24 +358,28 @@ export async function handleRequest(
         store.permissionMode = body.permissionMode as PermissionMode;
 
         if (store.agent === "claude-code") {
+          const allowed: string[] = [];
           for (const [id, perm] of store.pendingPermissions) {
             if (shouldAutoApprove(store.agent, perm.toolName, store.permissionMode)) {
-              answerChildApproval(store, id, true);
               store.pendingPermissions.delete(id);
               perm.resolve({ behavior: "allow", updatedInput: perm.input });
+              allowed.push(id);
             }
           }
+          answerChildApprovals(store, allowed, true);
           notifyPermissionsChanged();
         } else if (store.agent === "codex") {
           // codex applies approvalPolicy at thread start — mode change takes effect next turn
         } else if (store.agent === "opencode" && store.sdkSessionId) {
-          for (const [id, perm] of store.pendingPermissions) {
-            if (shouldAutoApprove(store.agent, perm.toolName, store.permissionMode)) {
-              answerChildApproval(store, id, true);
-              store.pendingPermissions.delete(id);
-              const respondSdkId = perm.askedBySdkSessionId ?? store.sdkSessionId;
-              await opencodePermission(respondSdkId, id, true, store.repoPath).catch(() => {});
-            }
+          // Taken off the store and their rows answered before any await, so a
+          // broadcast meanwhile never finds them gone and unanswered.
+          const allowed = [...store.pendingPermissions.values()]
+            .filter((perm) => shouldAutoApprove(store.agent, perm.toolName, store.permissionMode));
+          for (const perm of allowed) store.pendingPermissions.delete(perm.toolUseID);
+          answerChildApprovals(store, allowed.map((perm) => perm.toolUseID), true);
+          for (const perm of allowed) {
+            const respondSdkId = perm.askedBySdkSessionId ?? store.sdkSessionId;
+            await opencodePermission(respondSdkId, perm.toolUseID, true, store.repoPath).catch(() => {});
           }
           notifyPermissionsChanged();
         }
