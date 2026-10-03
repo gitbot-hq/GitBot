@@ -39,13 +39,18 @@ after(() => {
 const ev = (type: string, extra: Record<string, unknown> = {}): StoredEvent => ({ seq: 0, type, ...extra });
 const turnEnd = () => new Promise((r) => setImmediate(r));
 
-/** A Jarvis thread with a running child, as start_thread leaves them. */
-function jarvisWithChild() {
+/**
+ * A Jarvis thread with a running child, as start_thread leaves them. With
+ * jarvisRunning, Jarvis's own turn (the one that called start_thread) is
+ * still running too.
+ */
+function jarvisWithChild({ jarvisRunning = false } = {}) {
   const folder = realpathSync(mkdtempSync(join(tmpdir(), "gitbot-proj-")));
   const added = addProject(folder);
   assert.ok(added.ok);
   const jarvis = createThread(JARVIS_BOT_ID, jarvisDir(), undefined, "chat", "claude-code");
   updateThread(jarvis.id, { title: "Make two files", titleIsAuto: false, preview: "make two files" });
+  if (jarvisRunning) assert.ok(startTurn({ threadId: jarvis.id, prompt: "make two files" }, ALL_AGENTS).ok);
   const started = startChildThread(jarvis.id, { agent: "claude-code", project: added.project.id, message: "create a.txt" }, ALL_AGENTS);
   assert.ok(started.ok, JSON.stringify(started));
   const child = runs[runs.length - 1];
@@ -159,10 +164,8 @@ test("a stopped child does not wake Jarvis", async () => {
 });
 
 test("a report that finds Jarvis mid-turn is dropped, and the server says so", async () => {
-  const { jarvis, childThread, child } = jarvisWithChild();
-  // Jarvis's own turn is still running.
-  const own = startTurn({ threadId: jarvis.id, prompt: "and another thing" }, ALL_AGENTS);
-  assert.ok(own.ok);
+  // Jarvis's own turn, the one that started the child, is still running.
+  const { jarvis, childThread, child } = jarvisWithChild({ jarvisRunning: true });
   const warnings: string[] = [];
   const warn = console.warn;
   console.warn = (...args: unknown[]) => { warnings.push(args.join(" ")); };

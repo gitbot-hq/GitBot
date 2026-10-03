@@ -13,6 +13,7 @@ import { runAgent as runOpencode } from "./start-opencode";
 import { runAgent as runCodex } from "./start-codex";
 import { resolveThreadTurn } from "./bot-routes";
 import { getBot, getThread, touchThread, updateThread } from "./bot-store";
+import { childLabel, clearPendingNote, pendingNoteFor, runningChildOf, withNote } from "./child-lock";
 
 // Starting a turn: what POST /chat does once it has read the request, and what
 // gitbot itself does when it starts a turn without one (Jarvis's start_thread).
@@ -52,6 +53,17 @@ export const agentRunners: Record<SessionStore["agent"], (store: SessionStore) =
 };
 
 /**
+ * Per-turn flags start afresh: a stop belongs to the turn it stopped, and
+ * only a turn Jarvis started reports back to it. Set before the turn's first
+ * status broadcast, which the UI derives a Jarvis thread's lock from.
+ */
+function startTurnFlags(store: SessionStore, request: TurnRequest): void {
+  store.abortRequested = false;
+  store.reportable = !!request.reportable;
+  store.reportTo = request.reportable && request.threadId ? getThread(request.threadId)?.reportTo : undefined;
+}
+
+/**
  * Validates a turn, makes or reuses its session, and sets the agent running.
  * Returns once the run has started — never waits for it to finish.
  */
@@ -89,6 +101,16 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
     return { ok: false, status: 400, message: `Agent '${agent}' is not available` };
   }
 
+  // Lock and Stop: a Jarvis thread waiting on its child takes no message from
+  // the user (the UI hides the composer; this is the backstop), and the next
+  // one it does take carries any note left by a Stop.
+  const waitingOn = threadId && !request.report ? runningChildOf(threadId) : undefined;
+  if (waitingOn) {
+    return { ok: false, status: 409, message: `Waiting on ${childLabel(waitingOn.threadId)}: stop it or wait for its report` };
+  }
+  const note = pendingNoteFor(threadId, request.report);
+  const sent = withNote(note, prompt);
+
   let store = existingId ? sessions.get(existingId) : undefined;
 
   // A thread's first-turn store is keyed by a random id, so the lookup above
@@ -109,6 +131,7 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
       return { ok: false, status: 400, message: "Jarvis turns need a threadId" };
     }
     store.status = "running";
+    startTurnFlags(store, request);
     notifyPermissionsChanged();
     // A turn's events start afresh, but seq keeps counting up across turns:
     // a client that read seq N, or reconnects with Last-Event-ID N, must
@@ -119,7 +142,7 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
     if (permissionMode) store.permissionMode = permissionMode as PermissionMode;
     if (botPreset?.jarvis) { store.model = undefined; store.mode = undefined; }
     if (threadId) { store.threadId = threadId; store.botPreset = botPreset; }
-    emitEvent(store, 'user_prompt', { prompt: prompt ?? '', ...(attachments?.length ? { attachments } : {}) });
+    emitEvent(store, 'user_prompt', { prompt: sent ?? '', ...(attachments?.length ? { attachments } : {}) });
   } else {
     // A thread's first turn has no SDK session id yet, so its store is keyed
     // by a random id. Known: later turns look it up by the SDK id and miss
@@ -129,15 +152,13 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
     if (existingId) {
       store.sdkSessionId = existingId;
     }
-    emitEvent(store, 'user_prompt', { prompt: prompt ?? '', ...(attachments?.length ? { attachments } : {}) });
+    startTurnFlags(store, request);
+    emitEvent(store, 'user_prompt', { prompt: sent ?? '', ...(attachments?.length ? { attachments } : {}) });
     notifyPermissionsChanged();
   }
 
   const s = store;
-  // Per-turn flags start afresh: a stop belongs to the turn it stopped, and
-  // only a turn Jarvis started reports back to it.
-  s.abortRequested = false;
-  s.reportable = !!request.reportable;
+  if (note) clearPendingNote(threadId!);
   // A report is not what the thread is about: it leaves preview and title be.
   if (threadId) touchThread(threadId, request.report ? '' : prompt ?? '');
 

@@ -246,6 +246,8 @@ export interface SessionStore {
   // turn reports to the thread's Jarvis when it ends (Jarvis started it).
   abortRequested?: boolean;
   reportable?: boolean;
+  /** The Jarvis thread a reportable turn reports to, read from its thread when the turn starts. */
+  reportTo?: string;
 }
 
 /** The parts of a bot that shape the agent run. Mirrors fields on Bot in bot-store. */
@@ -315,6 +317,17 @@ export interface SessionSummaryItem {
   status: SessionStatus;
   /** The bot hub thread the session belongs to, if any. */
   threadId: string | null;
+  /**
+   * The Jarvis thread this session's turn reports to, or null when the turn
+   * is not one Jarvis started. While such a turn is live, that Jarvis thread
+   * is locked; the UI derives the lock from this and the status.
+   */
+  reportTo: string | null;
+}
+
+/** The Jarvis thread a store's current (or last) turn reports to, if any. */
+export function turnReportsTo(store: SessionStore): string | null {
+  return store.reportable && store.reportTo ? store.reportTo : null;
 }
 
 export function buildSessionsDump(): SessionSummaryItem[] {
@@ -323,6 +336,7 @@ export function buildSessionsDump(): SessionSummaryItem[] {
     sessionId: store.sdkSessionId,
     status: store.pendingPermissions.size > 0 ? "awaiting_permissions" : store.status,
     threadId: store.threadId ?? null,
+    reportTo: turnReportsTo(store),
   }));
 }
 
@@ -354,25 +368,33 @@ export function onTurnEnd(listener: TurnEndListener): () => void {
 }
 
 export function notifyPermissionsChanged(): void {
+  const ended: Array<[SessionStore, EndedTurn]> = [];
   for (const store of sessions.values()) {
     const before = lastStatus.get(store);
     lastStatus.set(store, store.status);
     if (before !== "running" || store.status === "running") continue;
-    const turn: EndedTurn = {
+    ended.push([store, {
       status: store.status,
       events: store.events,
       threadId: store.threadId,
       abortRequested: !!store.abortRequested,
       reportable: !!store.reportable,
-    };
-    // Deferred: a listener may start a turn of its own.
-    setImmediate(() => {
+    }]);
+  }
+  const broadcast = () => permissionsEmitter.emit("update", buildPermissionsDump(), buildSessionsDump());
+  if (ended.length === 0) { broadcast(); return; }
+  // Deferred: a listener may start a turn of its own. The broadcast waits for
+  // the listeners too, so a child's end and the Jarvis turn its report starts
+  // reach the UI together — never a moment where the Jarvis thread looks
+  // unlocked and idle in between.
+  setImmediate(() => {
+    for (const [store, turn] of ended) {
       for (const listener of turnEndListeners) {
         try { listener(store, turn); } catch (err: any) { console.error("[turn-end]", err?.message ?? err); }
       }
-    });
-  }
-  permissionsEmitter.emit("update", buildPermissionsDump(), buildSessionsDump());
+    }
+    broadcast();
+  });
 }
 
 export function createSession(

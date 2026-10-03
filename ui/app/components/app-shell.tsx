@@ -17,7 +17,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "./page-link";
 import { useUserProfile } from "./app-providers";
 
-import Chat from "./chat";
+import Chat, { type ChildLock } from "./chat";
 import NewBotButton from "./new-bot-button";
 import BotForm from "./bot-form";
 import BotProfile from "./bot-profile";
@@ -45,7 +45,9 @@ import {
   getAgents,
   getBots,
   getSessionStatus,
+  getThread,
   getThreads,
+  postAbort,
 } from "../lib/api";
 import { getAvatarPref, setAvatarPref, resolveAvatar, defaultMascotFor, type AvatarPref } from "../lib/avatar-prefs";
 import { JARVIS_BOT_ID, type Bot, type ThreadFull } from "../lib/gitbot";
@@ -478,6 +480,30 @@ export default function V2() {
   // stored on the first send. A picked one still loading is not new.
   const jarvisNewThread =
     isJarvis && !jarvisBlocked && !activeThread && !(bot && threadByBot[bot.id] && threadsLoading);
+  // Lock and Stop: an open Jarvis thread with a running child is locked.
+  // The lock is the server's session snapshot, read as it arrives; only the
+  // child's name and folder are fetched, once per child.
+  const runningChild = isJarvis && activeThread ? threadSessions.runningChildren[activeThread.id] : undefined;
+  const [lockedChild, setLockedChild] = useState<ThreadFull | null>(null);
+  useEffect(() => {
+    const id = runningChild?.threadId;
+    if (!id) return;
+    let live = true;
+    getThread(id).then(({ thread }) => live && setLockedChild(thread), () => {});
+    return () => { live = false; };
+  }, [runningChild?.threadId]);
+  const childInfo = runningChild && lockedChild?.id === runningChild.threadId ? lockedChild : null;
+  const childBotName = childInfo ? bots.find((b) => b.id === childInfo.botId)?.name ?? "Bot" : null;
+  const chatLock: ChildLock | undefined = runningChild
+    ? {
+        status: childInfo
+          ? `${childBotName} is working on ${childInfo.repoPath.split("/").filter(Boolean).pop() ?? childInfo.repoPath}`
+          : "A child thread is working",
+        onOpen: childInfo ? () => openThread(childInfo.botId, childInfo.id) : undefined,
+        onStop: () => postAbort(runningChild.sessionId),
+      }
+    : undefined;
+
   // When the selected bot also appears in the empty chat panel, both
   // renderings act as one character: same pose and same pointer gaze.
   const mirroredEmptyBotId =
@@ -1352,7 +1378,8 @@ export default function V2() {
               )}
               <Chat
                 thread={activeThread}
-                serverStatus={activeThread ? threadSessions[activeThread.id] : undefined}
+                serverStatus={activeThread ? threadSessions.statuses[activeThread.id] : undefined}
+                lock={chatLock}
                 botId={bot?.id}
                 botName={bot?.name ?? "bot"}
                 botPermissionMode={bot?.permissionMode}

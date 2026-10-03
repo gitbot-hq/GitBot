@@ -286,6 +286,16 @@ function isChatPermissionMode(mode: unknown): mode is ChatPermissionMode {
   return permissionOptions.some((option) => option.mode === mode);
 }
 
+/** A Jarvis thread waiting on its child (Lock and Stop). */
+export type ChildLock = {
+  /** "PR Validator is working on Trophy". */
+  status: string;
+  /** Switches the hub to the child; absent until the child is known. */
+  onOpen?: () => void;
+  /** Aborts the child's turn. Jarvis is not woken. */
+  onStop: () => Promise<unknown>;
+};
+
 type SetupMode = {
   status: string;
   instructions: string;
@@ -410,8 +420,12 @@ export default function Chat({
   emptyHint,
   booting,
   setup,
+  lock,
 }: {
   thread: ThreadFull | null;
+  /** Set while a Jarvis thread waits on its running child: the composer is
+   *  replaced by the child's status, a way into it, and Stop. */
+  lock?: ChildLock;
   /** The open thread's session status on the server, pushed live: how the
    *  chat notices a turn gitbot started itself (a child's report). */
   serverStatus?: ThreadSessionStatus;
@@ -460,6 +474,19 @@ export default function Chat({
   const [loading, setLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
+  // Lock and Stop. While locked the user cannot send. A turn gitbot started
+  // here (a child's report) that the chat has not joined yet counts as
+  // busy too, so the moment between a child's end and the report turn's
+  // stream opening never offers an idle composer to send from.
+  const lockRef = useRef(lock);
+  lockRef.current = lock;
+  const serverBusy = (serverStatus === "running" || serverStatus === "awaiting_permissions") && !streaming;
+  const serverBusyRef = useRef(serverBusy);
+  serverBusyRef.current = serverBusy;
+  const [stoppingChild, setStoppingChild] = useState(false);
+  useEffect(() => {
+    if (!lock) setStoppingChild(false);
+  }, [lock]);
   const [activity, setActivity] = useState<string | null>(null);
   const [perms, setPerms] = useState<(PermRequest & { verdict?: boolean })[]>([]);
   const [turnError, setTurnError] = useState<string | null>(null);
@@ -1047,7 +1074,11 @@ export default function Chat({
       queueRef.current = null;
       setQueue(null);
     }
-    if (next) {
+    if (next && lockRef.current) {
+      // The turn that just ended started a child: the thread is locked, so
+      // the follow-up goes back to the draft for after the child.
+      restoreToDraft(next);
+    } else if (next) {
       startTurn(next);
       return;
     }
@@ -1242,6 +1273,8 @@ export default function Chat({
       enqueue(prompt.trim());
       return;
     }
+    // Locked, or a gitbot-started turn about to be joined: the draft waits.
+    if (lockRef.current || serverBusyRef.current) return;
     startTurn(prompt);
   }
 
@@ -1860,6 +1893,37 @@ export default function Chat({
             </button>
           </div>
         </div>
+      ) : lock && !streaming ? (
+        <div className="composer">
+          {jumpLatest}
+          <div className="composer-pill composer-locked" role="status">
+            <span className="composer-locked-status">
+              <LoadingState label={lock.status} variant="Drive" />
+              {lock.onOpen && (
+                <button type="button" className="composer-locked-open" onClick={lock.onOpen}>
+                  Open thread
+                </button>
+              )}
+            </span>
+            <button
+              type="button"
+              className="send-btn"
+              disabled={stoppingChild}
+              onClick={() => {
+                setStoppingChild(true);
+                lock.onStop().catch((e) => {
+                  setStoppingChild(false);
+                  setTurnError(errText(e));
+                });
+              }}
+              aria-label="Stop the child thread"
+              data-tip={stoppingChild ? "Stopping…" : "Stop"}
+              data-tip-pos="above"
+            >
+              <span className="stop-glyph" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
       ) : (
         <form
           className="composer"
@@ -1980,7 +2044,7 @@ export default function Chat({
                 </button>
               </div>
             ) : (
-              <button type="submit" className="send-btn" disabled={!draft.trim()} aria-label="Send" data-tip="Send" data-tip-pos="above">
+              <button type="submit" className="send-btn" disabled={!draft.trim() || serverBusy} aria-label="Send" data-tip="Send" data-tip-pos="above">
                 <AnimatedActionIcon icon={ArrowUpIcon} size={16} aria-hidden="true" />
               </button>
             )}

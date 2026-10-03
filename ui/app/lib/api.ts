@@ -48,6 +48,10 @@ export function getThreads(botId?: string) {
   );
 }
 
+export function getThread(threadId: string) {
+  return req<{ thread: import("./gitbot").ThreadFull }>(`/threads/${encodeURIComponent(threadId)}`);
+}
+
 export function getMessages(threadId: string) {
   return req<{ messages: import("./gitbot").HistoryMsg[] }>(
     `/threads/${encodeURIComponent(threadId)}/messages`,

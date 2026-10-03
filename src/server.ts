@@ -28,6 +28,7 @@ import { initAgent as initCodex, listSessions as listCodexSessions, loadTranscri
 import { handleBotRoutes } from "./bot-routes";
 import { startTurn } from "./turns";
 import { watchChildReports } from "./reports";
+import { noteChildStopped } from "./child-lock";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
 import { uiFileFor } from "./static-ui";
 
@@ -191,6 +192,9 @@ export async function handleRequest(
       // Before any await: the agent may end the turn while the abort is in
       // flight, and a stopped turn must never wake Jarvis.
       store.abortRequested = true;
+      // A stopped child does not wake Jarvis; its Jarvis thread hears of the
+      // stop with the user's next message instead.
+      noteChildStopped(store);
       if (store.agent === "claude-code" && store.abortController) {
         store.abortController.abort();
       } else if (store.agent === "codex" && store.abortController) {

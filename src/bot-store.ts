@@ -83,6 +83,11 @@ export interface Thread {
    * TODO(slice 11): pass ownership back to the user when they type here.
    */
   reportTo?: string;
+  /**
+   * Jarvis threads only: what gitbot owes Jarvis with the user's next message
+   * ("[you stopped PR Validator on Trophy]"). Prepended once, then cleared.
+   */
+  pendingNote?: string;
   createdAt: string;
   updatedAt: string;
 }

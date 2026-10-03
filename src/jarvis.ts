@@ -18,6 +18,7 @@ import { addProject, findProject, listProjects } from "./project-index";
 import { forget, getProjectsWithMemory, remember } from "./project-memory";
 import { botPermissionToSession, type BotPreset, type PermissionMode } from "./server-common";
 import { startTurn } from "./turns";
+import { childLabel, runningChildOf } from "./child-lock";
 import { listThreadsForJarvis, readThreadTail, TAIL_MAX, threadStatus } from "./thread-tools";
 
 // Jarvis, the built-in manager bot: its fixed prompt and its tools. The tools
@@ -249,6 +250,14 @@ export function startChildThread(
 ): StartThreadResult {
   const owner = getThread(jarvisThreadId);
   if (!owner || !isJarvisBot(getBot(owner.botId))) return { ok: false, error: "only a Jarvis thread can start a child thread" };
+  // One child at a time: the lock, and the report that ends it, assume one.
+  const running = runningChildOf(jarvisThreadId);
+  if (running) {
+    return {
+      ok: false,
+      error: `${childLabel(running.threadId)} (thread ${running.threadId}) is still running, and this thread runs one child at a time. Tell the user: its report arrives when it finishes, or they can stop it.`,
+    };
+  }
 
   if (!!args.bot === !!args.agent) return { ok: false, error: "pass exactly one of bot or agent" };
   let bot: Bot | undefined;
