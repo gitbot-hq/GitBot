@@ -15,6 +15,7 @@ import {
   emitEvent,
   notifyPermissionsChanged,
   sessions,
+  setShuttingDown,
   type IRequest,
   type IResponse,
   type SessionStore,
@@ -175,6 +176,22 @@ test("an approval left unanswered when its turn ends is marked dropped", async (
   notifyPermissionsChanged();
   await tick();
   assert.equal(getThread(jarvis.id)!.approvals![0].outcome, "dropped");
+});
+
+test("a shutdown leaves a pending approval unanswered, not dropped", async () => {
+  const { jarvis, child } = jarvisWithChild();
+  ask(child, "tu-sd", "Bash", { command: "npm test" });
+  await tick();
+  setShuttingDown(true);
+  try {
+    child.pendingPermissions.clear();
+    child.status = "error";
+    notifyPermissionsChanged();
+    await tick();
+    assert.equal(getThread(jarvis.id)!.approvals![0].outcome, undefined);
+  } finally {
+    setShuttingDown(false);
+  }
 });
 
 test("a user's own thread asking for approval leaves Jarvis threads alone", async () => {

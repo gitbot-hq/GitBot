@@ -510,8 +510,25 @@ export async function createHttpServer(opts: {
   return { server, PORT, caffeinatePid };
 }
 
+let shuttingDown = false;
+
+/**
+ * True once gitbot has begun shutting down. Turns that end from here on were
+ * killed by the shutdown, not finished: they report to no one and keep their
+ * running mark, so the next start tells their Jarvis.
+ */
+export function isShuttingDown(): boolean {
+  return shuttingDown;
+}
+
+/** For tests: a shutdown without the process exit. */
+export function setShuttingDown(value: boolean): void {
+  shuttingDown = value;
+}
+
 export function setupShutdown(cleanup: () => void, caffeinatePid: number | null): void {
   const shutdown = () => {
+    shuttingDown = true;
     console.log("\nShutting down...");
     killCaffeinate(caffeinatePid);
     cleanup();

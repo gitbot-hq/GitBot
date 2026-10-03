@@ -1,6 +1,6 @@
 import { basename } from "path";
 import { getBot, getThread } from "./bot-store";
-import { onTurnEnd, type EndedTurn, type StoredEvent } from "./server-common";
+import { isShuttingDown, onTurnEnd, type EndedTurn, type StoredEvent } from "./server-common";
 import { startTurn } from "./turns";
 
 // A finished child wakes its Jarvis: when a turn ends in a thread Jarvis
@@ -66,6 +66,8 @@ export function reportFor(turn: EndedTurn): { owner: string; prompt: string; chi
  * docs/issues/future/report-collides-with-jarvis-turn.md.
  */
 export function deliverReport(turn: EndedTurn, availableAgents: readonly string[]): void {
+  // A child our own shutdown killed did not finish; the next start notes it.
+  if (isShuttingDown()) return;
   const report = reportFor(turn);
   if (!report) return;
   let refused: string;

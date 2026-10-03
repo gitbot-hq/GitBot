@@ -12,7 +12,7 @@ import { runAgent as runClaudeCode } from "./start-claude-code";
 import { runAgent as runOpencode } from "./start-opencode";
 import { runAgent as runCodex } from "./start-codex";
 import { resolveThreadTurn } from "./bot-routes";
-import { getBot, getThread, touchThread, updateThread } from "./bot-store";
+import { getBot, getThread, setRunningFor, touchThread, updateThread } from "./bot-store";
 import { childLabel, clearPendingNote, pendingNoteFor, runningChildOf, withNote } from "./child-lock";
 
 // Starting a turn: what POST /chat does once it has read the request, and what
@@ -62,6 +62,9 @@ function startTurnFlags(store: SessionStore, request: TurnRequest): void {
   store.reportable = !!request.reportable;
   // Who the report goes to is fixed now, not when the turn ends.
   store.reportOwner = store.reportable && request.threadId ? getThread(request.threadId)?.reportTo : undefined;
+  // Persisted, so a restart mid-turn can tell its Jarvis (restart-recovery.ts).
+  // Written either way: a turn that reports nowhere clears a stale mark.
+  if (request.threadId) setRunningFor(request.threadId, store.reportOwner);
 }
 
 /**

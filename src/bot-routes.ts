@@ -206,8 +206,9 @@ export async function handleBotRoutes(
       // A Jarvis thread's folder, agent, kind and session are not the caller's
       // to change.
       const existing = getThread(threadId);
-      // Ownership, a Stop's note and approval rows are gitbot's to set, on any thread.
-      for (const key of ["reportTo", "pendingNote", "approvals"]) delete body[key];
+      // Ownership, a Stop's note, the running marker and approval rows are
+      // gitbot's to set, on any thread.
+      for (const key of ["reportTo", "pendingNote", "runningFor", "approvals"]) delete body[key];
       if (existing && isJarvisBot(getBot(existing.botId))) {
         for (const key of ["repoPath", "agent", "kind", "sdkSessionId"]) delete body[key];
       }

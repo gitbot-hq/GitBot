@@ -1,5 +1,5 @@
 import { getBot, getThread, setThreadApprovals, type ChildApproval } from "./bot-store";
-import { permissionsEmitter, sessions, turnReportsTo, type SessionStore } from "./server-common";
+import { isShuttingDown, permissionsEmitter, sessions, turnReportsTo, type SessionStore } from "./server-common";
 
 // Approvals in Jarvis. A child that Jarvis owns and that waits on an approval
 // shows up as a row in its Jarvis thread. gitbot places the row; Jarvis never
@@ -33,8 +33,9 @@ function settle(owner: string, id: string, outcome: NonNullable<ChildApproval["o
 /**
  * Brings the rows up to date with the live approvals: a new one gets a row,
  * one that left without an answer (its turn ended or was stopped) is marked
- * dropped. Runs before each approvals broadcast, so a client that refetches
- * on the broadcast finds the row already there.
+ * dropped, except during a shutdown, which leaves it unanswered. Runs
+ * before each approvals broadcast, so a client that refetches on the
+ * broadcast finds the row already there.
  */
 export function syncChildApprovals(): void {
   const live = new Set<string>();
@@ -65,6 +66,9 @@ export function syncChildApprovals(): void {
       });
     }
   }
+  // A shutdown kills turns rather than ending them: their approvals stay
+  // unanswered, as after any restart, not dropped.
+  if (isShuttingDown()) return;
   for (const [id, owner] of recorded) {
     if (live.has(id)) continue;
     recorded.delete(id);
