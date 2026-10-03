@@ -89,13 +89,22 @@ export interface Thread {
    */
   pendingNote?: string;
   /**
-   * The Jarvis thread a turn running here now will report to. Set when a
-   * reportable turn starts, cleared when it ends; sessions live in memory, so
-   * one still set at startup is a child a restart interrupted.
+   * Set while a turn here runs that will report to a Jarvis thread: that
+   * thread, and the gitbot process running the turn. Set when the turn
+   * starts, cleared when it ends; sessions live in memory, so one still set
+   * at startup, by a process no longer alive, is a child a restart
+   * interrupted (restart-recovery.ts).
    */
-  runningFor?: string;
+  runningFor?: RunningMark;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface RunningMark {
+  /** The Jarvis thread the running turn reports to. */
+  owner: string;
+  /** The gitbot process running it. */
+  pid: number;
 }
 
 export type NewBot = Partial<Bot> & Pick<Bot, "name">;
@@ -444,16 +453,61 @@ export function setThreadOwner(id: string, reportTo: string | undefined): void {
 }
 
 /**
- * Marks or unmarks a thread as running a turn for a Jarvis thread. Like
- * ownership, it is not activity: updatedAt stays.
+ * Marks a thread as running a turn for a Jarvis thread (owner), or unmarks
+ * it. Like ownership, it is not activity: updatedAt stays. Best-effort: a
+ * failed write is logged, never thrown into the turn that made it.
  */
 export function setRunningFor(id: string, owner: string | undefined): void {
+  try {
+    const threads = readCollection<Thread>(THREADS_FILE);
+    const thread = threads.find((t) => t.id === id);
+    if (!thread) return;
+    if (owner) {
+      if (thread.runningFor?.owner === owner && thread.runningFor.pid === process.pid) return;
+      thread.runningFor = { owner, pid: process.pid };
+    } else {
+      if (!thread.runningFor) return;
+      delete thread.runningFor;
+    }
+    writeCollection(THREADS_FILE, threads);
+  } catch (err: any) {
+    console.error(`[running-mark] could not ${owner ? "mark" : "unmark"} thread ${id}: ${err?.message ?? err}`);
+  }
+}
+
+/** A pending note with one more line; a line already there is not repeated. */
+export function appendNote(existing: string | undefined, note: string): string {
+  if (!existing) return note;
+  return existing.split("\n").includes(note) ? existing : `${existing}\n${note}`;
+}
+
+/**
+ * Settles the marks a gone gitbot process left behind, in one write: each
+ * one's Jarvis thread gets note(thread) appended to its pendingNote, and the
+ * mark is cleared. A mark held by another live gitbot on the same data dir
+ * is still running, so it is left alone. Returns the threads settled.
+ */
+export function settleRunningMarks(
+  note: (child: Thread) => string,
+  isAlive: (pid: number) => boolean,
+): string[] {
   const threads = readCollection<Thread>(THREADS_FILE);
-  const thread = threads.find((t) => t.id === id);
-  if (!thread || thread.runningFor === owner) return;
-  if (owner) thread.runningFor = owner;
-  else delete thread.runningFor;
-  writeCollection(THREADS_FILE, threads);
+  const settled: string[] = [];
+  for (const thread of threads) {
+    const mark = thread.runningFor;
+    if (!mark) continue;
+    try {
+      if (mark.pid !== process.pid && isAlive(mark.pid)) continue;
+      const owner = threads.find((t) => t.id === mark.owner);
+      if (owner) owner.pendingNote = appendNote(owner.pendingNote, note(thread));
+      delete thread.runningFor;
+      settled.push(thread.id);
+    } catch (err: any) {
+      console.error(`[restart-recovery] thread ${thread.id}: ${err?.message ?? err}`);
+    }
+  }
+  if (settled.length) writeCollection(THREADS_FILE, threads);
+  return settled;
 }
 
 /**

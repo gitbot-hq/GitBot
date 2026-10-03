@@ -1,5 +1,5 @@
 import { basename } from "path";
-import { getBot, getThread, isJarvisBot, setRunningFor, updateThread } from "./bot-store";
+import { appendNote, getBot, getThread, isJarvisBot, setRunningFor, updateThread, type Thread } from "./bot-store";
 import { sessions, turnReportsTo, type SessionStore } from "./server-common";
 
 // Lock and Stop. A Jarvis thread is locked exactly while one of its children
@@ -31,7 +31,11 @@ export function runningChildOf(jarvisThreadId: string): RunningChild | undefined
 /** "PR Validator on Trophy": how a child is named to the user and to Jarvis. */
 export function childLabel(childThreadId: string): string {
   const child = getThread(childThreadId);
-  if (!child) return "a child thread";
+  return child ? threadLabel(child) : "a child thread";
+}
+
+/** childLabel for a thread already in hand. */
+export function threadLabel(child: Pick<Thread, "botId" | "repoPath">): string {
   return `${getBot(child.botId)?.name ?? "Bot"} on ${basename(child.repoPath)}`;
 }
 
@@ -59,12 +63,12 @@ export function noteChildStopped(store: SessionStore): void {
 
 /**
  * Adds a note for the user's next message on a Jarvis thread, after any
- * already waiting there.
+ * already waiting there; a note already waiting is not added twice.
  */
 export function addPendingNote(jarvisThreadId: string, note: string): void {
   const jarvis = getThread(jarvisThreadId);
   if (!jarvis) return;
-  updateThread(jarvisThreadId, { pendingNote: jarvis.pendingNote ? `${jarvis.pendingNote}\n${note}` : note });
+  updateThread(jarvisThreadId, { pendingNote: appendNote(jarvis.pendingNote, note) });
 }
 
 /**

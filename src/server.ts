@@ -191,6 +191,13 @@ export async function handleRequest(
         ?? [...sessions.values()].find(s => s.sdkSessionId === abortId);
       if (!store) { jsonError(res, 404, "Session not found"); return; }
       if (store.status !== "running") { jsonOk(res, { ok: true }); return; }
+      // Already stopping: a second press changes nothing (and notes nothing).
+      if (store.abortRequested) { jsonOk(res, { ok: true }); return; }
+      // A turn with no handle to stop yet (codex before its controller,
+      // opencode before its session id) would run on regardless: claiming a
+      // stop would suppress its report and tell Jarvis a lie.
+      const stoppable = store.agent === "opencode" ? !!store.sdkSessionId : !!store.abortController;
+      if (!stoppable) { jsonError(res, 409, "Not stoppable yet — try again in a moment"); return; }
       // Before any await: the agent may end the turn while the abort is in
       // flight, and a stopped turn must never wake Jarvis.
       store.abortRequested = true;

@@ -46,6 +46,7 @@ import { groupTools, type ToolChip } from "../lib/tool-ui";
 import { parseMarketplaceListing, type MarketplaceListing } from "../lib/marketplace-publish";
 import { presentSetupText, readSetupNeedsInput } from "../lib/setup";
 import { parseReport, type Report } from "../lib/report";
+import { stripGitbotNotes } from "../lib/gitbot-note";
 import type { ThreadSessionStatus } from "../lib/use-thread-sessions";
 import RunSummary, { ActionRow } from "./run-summary";
 import QueueTray from "./queue-tray";
@@ -93,7 +94,8 @@ function flatten(
       b.text &&
       !b.text.trimStart().startsWith("<recommended_plugins>")
     ) {
-      pushText(b.text as string);
+      const text = role === "user" ? stripGitbotNotes(b.text) : b.text;
+      if (text) pushText(text);
     } else if (b.type === "tool_use" && b.tool_name) {
       pushTool(String(b.tool_name), b.tool_input);
     }
@@ -290,6 +292,8 @@ function isChatPermissionMode(mode: unknown): mode is ChatPermissionMode {
 export type ChildLock = {
   /** "PR Validator is working on Trophy". */
   status: string;
+  /** The child's running session: what Stop aborts. */
+  sessionId: string;
   /** Switches the hub to the child; absent until the child is known. */
   onOpen?: () => void;
   /** Aborts the child's turn. Jarvis is not woken. */
@@ -483,10 +487,10 @@ export default function Chat({
   const serverBusy = (serverStatus === "running" || serverStatus === "awaiting_permissions") && !streaming;
   const serverBusyRef = useRef(serverBusy);
   serverBusyRef.current = serverBusy;
-  const [stoppingChild, setStoppingChild] = useState(false);
-  useEffect(() => {
-    if (!lock) setStoppingChild(false);
-  }, [lock]);
+  // The child session a Stop was sent for. Chat outlives a thread switch, so
+  // "stopping" is keyed to the session, not held as a bare flag.
+  const [stoppingSession, setStoppingSession] = useState<string | null>(null);
+  const stoppingChild = !!lock && stoppingSession === lock.sessionId;
   const [activity, setActivity] = useState<string | null>(null);
   const [perms, setPerms] = useState<(PermRequest & { verdict?: boolean })[]>([]);
   const [turnError, setTurnError] = useState<string | null>(null);
@@ -1188,7 +1192,7 @@ export default function Chat({
       if (!replayed(ev) || historyCoversRef.current) return;
       const d = data(ev);
       const files = Array.isArray(d.attachments) ? d.attachments.length : 0;
-      const text = String(d.prompt ?? "") || (files ? `_${files} attachment${files === 1 ? "" : "s"}_` : "");
+      const text = stripGitbotNotes(String(d.prompt ?? "")) || (files ? `_${files} attachment${files === 1 ? "" : "s"}_` : "");
       if (text) setMsgs((prev) => [...prev, { id: nid(), role: "user", segs: [{ kind: "text", text }] }]);
     });
     es.addEventListener("assistant", (ev) => {
@@ -1365,6 +1369,13 @@ export default function Chat({
       openStream(sessionId);
     } catch (e) {
       if (tid ? threadRef.current !== tid : viewEpoch.current !== epoch) return;
+      if (e instanceof ApiError && e.status === 409) {
+        // Refused, never run (a locked Jarvis thread, or a turn already
+        // running): the words go back to the composer, not into thin air.
+        unsend(msgId, prompt);
+        setTurnError(errText(e));
+        return;
+      }
       turnActiveRef.current = false;
       setStreaming(false);
       setActivity(null);
@@ -1910,9 +1921,12 @@ export default function Chat({
               className="send-btn"
               disabled={stoppingChild}
               onClick={() => {
-                setStoppingChild(true);
+                const sid = lock.sessionId;
+                setStoppingSession(sid);
+                setTurnError(null);
                 lock.onStop().catch((e) => {
-                  setStoppingChild(false);
+                  // Not stopped (e.g. not stoppable yet): say so, and offer Stop again.
+                  setStoppingSession((cur) => (cur === sid ? null : cur));
                   setTurnError(errText(e));
                 });
               }}

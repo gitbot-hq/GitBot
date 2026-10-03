@@ -9,12 +9,13 @@ import { runningChildOf } from "../src/child-lock";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
 import { watchChildReports } from "../src/reports";
-import { recoverInterruptedChildren, watchRunningMarks } from "../src/restart-recovery";
+import { pidAlive, recoverInterruptedChildren, watchRunningMarks } from "../src/restart-recovery";
 import {
   buildSessionsDump,
   emitEvent,
   notifyPermissionsChanged,
   sessions,
+  setShuttingDown,
   type IRequest,
   type IResponse,
   type SessionStore,
@@ -39,7 +40,8 @@ before(() => {
 afterEach(() => {
   // Each test ends with every mark accounted for, so one test's "restart"
   // never recovers another's child.
-  recoverInterruptedChildren();
+  setShuttingDown(false);
+  recoverInterruptedChildren(() => false);
   sessions.clear();
   runs = [];
 });
@@ -79,7 +81,7 @@ async function end(store: SessionStore, status: "done" | "error", content = "fin
 /** What a restart leaves: the stored threads, and no live sessions. */
 function restart(): string[] {
   sessions.clear();
-  return recoverInterruptedChildren();
+  return recoverInterruptedChildren(() => false);
 }
 
 const userPrompt = (sessionId: string) => sessions.get(sessionId)!.events.find((e) => e.type === "user_prompt")?.prompt;
@@ -88,7 +90,7 @@ const userPrompt = (sessionId: string) => sessions.get(sessionId)!.events.find((
 
 test("a reportable turn marks its thread with its Jarvis thread; its end clears the mark", async () => {
   const { jarvis, childId, child } = jarvisWithChild();
-  assert.equal(getThread(childId)?.runningFor, jarvis.id);
+  assert.deepEqual(getThread(childId)?.runningFor, { owner: jarvis.id, pid: process.pid });
   await end(child, "done");
   assert.equal(getThread(childId)?.runningFor, undefined);
 });
@@ -163,6 +165,59 @@ test("a child that ended in error before the restart leaves no note", async () =
   await end(child, "error");
   assert.deepEqual(restart(), []);
   assert.equal(getThread(jarvis.id)?.pendingNote, undefined);
+});
+
+// --- Review fixes ---
+
+test("the mark records this process; another live gitbot's mark is left alone, a dead one's is settled", () => {
+  const proj = project();
+  const jarvis = jarvisThread();
+  const ours = createThread("builtin-claude-code", proj.folder, "Ours", "chat", "claude-code", jarvis.id);
+  setRunningFor(ours.id, jarvis.id);
+  assert.deepEqual(getThread(ours.id)?.runningFor, { owner: jarvis.id, pid: process.pid });
+
+  const theirs = createThread("builtin-claude-code", proj.folder, "Theirs", "chat", "claude-code", jarvis.id);
+  updateThread(theirs.id, { runningFor: { owner: jarvis.id, pid: 999_999 } });
+  // Instance B starting while instance A (pid 999999) still runs that child.
+  const alive = (pid: number) => pid === 999_999;
+  assert.deepEqual(recoverInterruptedChildren(alive), [ours.id]);
+  assert.deepEqual(getThread(theirs.id)?.runningFor, { owner: jarvis.id, pid: 999_999 });
+  // Instance A is gone by the next start.
+  assert.deepEqual(recoverInterruptedChildren(() => false), [theirs.id]);
+  const label = `[Claude Code on ${basename(proj.folder)} was interrupted by a restart]`;
+  // The same note line is not repeated.
+  assert.equal(getThread(jarvis.id)?.pendingNote, label);
+});
+
+test("pidAlive: this process and its parent are alive; a pid no one has is not", () => {
+  assert.equal(pidAlive(process.pid), true);
+  assert.equal(pidAlive(process.ppid), true);
+  assert.equal(pidAlive(2 ** 22 + 12345), false);
+});
+
+test("a user's turn started on the child before the reportable turn's end is seen leaves no stale mark", async () => {
+  const { childId, child } = jarvisWithChild();
+  // The child ends; before its turn-end listeners run, the user types into it.
+  emitEvent(child, "assistant", { content: "done" });
+  child.status = "done";
+  notifyPermissionsChanged();
+  const typed = startTurn({ threadId: childId, prompt: "my turn now" }, ALL_AGENTS);
+  assert.ok(typed.ok, JSON.stringify(typed));
+  assert.equal(getThread(childId)?.runningFor, undefined, "the user's turn cleared the mark as it started");
+  await turnEnd();
+  assert.equal(getThread(childId)?.runningFor, undefined);
+  assert.deepEqual(restart(), []);
+});
+
+test("a child killed by gitbot's own shutdown keeps its mark and reports to no one; the next start tells Jarvis", async () => {
+  const { jarvis, childId, child, proj } = jarvisWithChild();
+  setShuttingDown(true);
+  await end(child, "error", "killed");
+  assert.deepEqual(getThread(childId)?.runningFor, { owner: jarvis.id, pid: process.pid });
+  assert.equal(runs.filter((s) => s.threadId === jarvis.id).length, 0, "no report turn");
+  setShuttingDown(false);
+  assert.deepEqual(restart(), [childId]);
+  assert.equal(getThread(jarvis.id)?.pendingNote, `[Claude Code on ${basename(proj.folder)} was interrupted by a restart]`);
 });
 
 // --- With a Stop ---

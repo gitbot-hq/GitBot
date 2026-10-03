@@ -63,7 +63,8 @@ function startTurnFlags(store: SessionStore, request: TurnRequest): void {
   // Who the report goes to is fixed now, not when the turn ends.
   store.reportOwner = store.reportable && request.threadId ? getThread(request.threadId)?.reportTo : undefined;
   // Persisted, so a restart mid-turn can tell its Jarvis (restart-recovery.ts).
-  if (store.reportOwner) setRunningFor(request.threadId!, store.reportOwner);
+  // Written either way: a turn that reports nowhere clears a stale mark.
+  if (request.threadId) setRunningFor(request.threadId, store.reportOwner);
 }
 
 /**
