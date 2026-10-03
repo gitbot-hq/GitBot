@@ -395,6 +395,23 @@ export async function listProjects(): Promise<{ projects: ProjectListing[]; part
 }
 
 /**
+ * The project id a folder belongs to, resolved exactly as the index resolves
+ * folders; null when it is not a folder.
+ */
+export function projectIdForFolder(path: string): string | null {
+  const folder = resolveFolder(path);
+  return folder ? projectId(folder) : null;
+}
+
+/**
+ * Every indexed project's display name by id, without a workspace scan: for
+ * callers that only label things the index already holds.
+ */
+export function projectNames(): Map<string, string> {
+  return displayNames(syncedIndex().projects);
+}
+
+/**
  * A project's folder by id, from the index as it stands — no workspace scan.
  * Ids come from list_projects or add_project.
  */
