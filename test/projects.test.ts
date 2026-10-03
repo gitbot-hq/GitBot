@@ -206,6 +206,15 @@ test("Jarvis's prompt resolves folders through the project tools", async () => {
   assert.doesNotMatch(prompt, /not available yet/);
 });
 
+test("Jarvis's prompt clones into the workspace, adds clones, and checks bots first", () => {
+  const prompt = jarvisSystemPrompt();
+  assert.ok(prompt.includes(`clone into the workspace, ${process.cwd()}`));
+  assert.match(prompt, /After every clone, add_project the new folder\. Always; don't ask\./);
+  assert.match(prompt, /affiliation=owner,collaborator,organization_member/);
+  assert.match(prompt, /accept the invitation only if they say so/);
+  assert.match(prompt, /Before you tell the user you can't do something, and before you do a task\s+yourself, check the user's bots/);
+});
+
 test("a thread folder reached through a symlink is one project, at its real path", async () => {
   const real = tempFolder("real");
   const link = join(tempRoot(), "alias");
