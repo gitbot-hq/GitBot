@@ -56,7 +56,7 @@ import { getAvatarPref, setAvatarPref, resolveAvatar, defaultMascotFor, type Ava
 import { JARVIS_BOT_ID, type Bot, type ThreadFull } from "../lib/gitbot";
 import { setupPrompt, type SetupRunKind } from "../lib/setup";
 import { useScrollEdge } from "../lib/use-scroll-edge";
-import { useThreadSessions } from "../lib/use-thread-sessions";
+import { rowLabel, useThreadSessions } from "../lib/use-thread-sessions";
 import { approvalRows, type ChildApproval } from "../lib/approvals";
 import { attentionRows, hasNews, needsYouCount, needsYouLabel } from "../lib/attention";
 import { useAttentionTitle } from "../lib/tab-title";
@@ -412,6 +412,16 @@ export default function V2() {
   // Server-side session status per thread: lets the open chat pick up a turn
   // gitbot started itself (a child's report to Jarvis).
   const threadSessions = useThreadSessions();
+  // A bot's status from its threads' sessions, whichever bot is selected.
+  const statusLabelFor = (b: Bot) => rowLabel(threadSessions.liveBots, b.id, bot?.id, activeLabel, needsSetup(b));
+  const selectedLabel = bot ? statusLabelFor(bot) : null;
+  // The face moves with the label: the open chat's own activity, else a
+  // generic one from the bot's other threads (what chatMascotActivity gives
+  // an approval wait and an unknown tool).
+  const liveMascot = (b: Bot) => {
+    const s = needsSetup(b) ? undefined : threadSessions.liveBots[b.id];
+    return s === "awaiting_permissions" ? "listening" : s === "running" ? "working" : undefined;
+  };
   const botsScrollEdge = useScrollEdge(
     botsScrollRef,
     `${collapsed}:${botsLoading}:${visibleBots.length}`,
@@ -1030,11 +1040,12 @@ export default function V2() {
     const mirrored = !setupPending && b.id === mirroredEmptyBotId;
     // Jarvis says how many of its threads need you, whichever bot is selected.
     const attentionLabel = b.builtin === "jarvis" ? needsYouLabel(needsYou) : null;
+    const statusLabel = statusLabelFor(b);
     return (
       <div className="bot-row-wrap" key={b.id}>
         <button
           type="button"
-          className={`${b.id === bot?.id ? "bot-row selected" : "bot-row"}${b.id === bot?.id && activeLabel ? " live" : ""}${setupPending ? " needs-setup" : ""}${searchText ? "" : " msg-in"}`}
+          className={`${b.id === bot?.id ? "bot-row selected" : "bot-row"}${statusLabel ? " live" : ""}${setupPending ? " needs-setup" : ""}${searchText ? "" : " msg-in"}`}
           onClick={() => botRowClick(b)}
           onMouseEnter={() => setHoverId(b.id)}
           onMouseLeave={() => setHoverId((prev) => (prev === b.id ? null : prev))}
@@ -1047,7 +1058,7 @@ export default function V2() {
             <BotFace
               mascot={avatarFor(b.id).mascot}
               size={44}
-              activity={!setupPending && b.id === bot?.id ? chatMascotActivity(botActivity) : undefined}
+              activity={setupPending ? undefined : (b.id === bot?.id && chatMascotActivity(botActivity)) || liveMascot(b)}
               color={avatarFor(b.id).color}
               cheer={!setupPending && !mirrored && (hoverId === b.id)}
               follow={mirrored}
@@ -1063,9 +1074,9 @@ export default function V2() {
             <small className={attentionLabel ? "needs-you" : undefined}>
               <i aria-hidden="true" />
               {attentionLabel
-                ? b.id === bot?.id && activeLabel ? `${activeLabel} · ${attentionLabel}` : attentionLabel
-                : b.id === bot?.id && activeLabel
-                ? activeLabel
+                ? statusLabel ? `${statusLabel} · ${attentionLabel}` : attentionLabel
+                : statusLabel
+                ? statusLabel
                 : setupPending
                   ? pausedSetupIds[b.id]
                     ? "Setup pending"
@@ -1418,11 +1429,11 @@ export default function V2() {
             >
               <div ref={threadsHeaderRef} className={`threads-scroll-header${threadsScrolled ? " is-scrolled" : ""}`}>
               <div className={collapsed ? "threads-bot-wrap open" : "threads-bot-wrap"}>
-              <div className={`${activeLabel ? "threads-bot live" : "threads-bot"}${setupRequired ? " needs-setup" : ""}`}>
+              <div className={`${selectedLabel ? "threads-bot live" : "threads-bot"}${setupRequired ? " needs-setup" : ""}`}>
                 <b>{bot?.name ?? ""}</b>
                 <small>
                   <i aria-hidden="true" />
-                  {activeLabel ??
+                  {selectedLabel ??
                     (setupRequired
                       ? bot && pausedSetupIds[bot.id]
                         ? "Setup pending"
