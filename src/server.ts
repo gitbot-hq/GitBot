@@ -67,7 +67,7 @@ export async function handleRequest(
     if (await handleWorkspaceRoutes(req, res, workspaceCwd, availableAgents)) return;
 
     // Bot hub: /bots and /threads
-    if (await handleBotRoutes(req, res, workspaceCwd)) return;
+    if (await handleBotRoutes(req, res, workspaceCwd, availableAgents)) return;
 
     // GET /sessions
     if (method === "GET" && path === "/sessions") {

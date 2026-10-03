@@ -33,7 +33,7 @@ One Node.js process does everything. There is no database, no separate frontend 
 
 ## Bots, threads, sessions
 
-- A **bot** is a preset: a name, instructions (its job), an agent, a model, a permission mode, optional tool lists and optional setup instructions.
+- A **bot** is a preset: a name, instructions (its job), an agent, a model, a permission mode, optional tool lists and optional setup instructions. Each installed agent also has a built-in **plain agent bot** (Claude Code, Codex, OpenCode) with no instructions, defined in `bot-store.ts` rather than stored, so every thread is a bot thread. `getBot` finds built-in and stored bots alike; built-ins cannot be edited or deleted.
 - A **thread** is one conversation between a bot and a folder. It remembers which agent it runs on and that agent's session id.
 - A **session** is one agent conversation held in the server's memory while gitbot runs: its status, its buffered events and its pending approvals.
 

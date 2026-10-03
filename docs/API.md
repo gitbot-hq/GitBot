@@ -34,7 +34,7 @@ A bot is a named, reusable agent preset.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/bots` | `{ bots: Bot[] }` |
+| `GET` | `/bots` | `{ bots: Bot[] }` — your bots by name, then the built-in plain agent bots for the installed agents |
 | `POST` | `/bots` | Create a bot. Returns `{ bot, setupThread? }` |
 | `GET` | `/bots/:id` | `{ bot }` |
 | `PATCH` | `/bots/:id` | Update any bot field. Returns `{ bot, setupThread? }` |
@@ -57,6 +57,8 @@ A bot is a named, reusable agent preset.
 | `disallowedTools` | string[] | Tools the bot may never use. Not supported on Codex |
 
 Read-only fields the server maintains: `id`, `setupStatus` (`pending` \| `complete` \| `failed`), `setupThreadId`, `createdAt`, `updatedAt`.
+
+**Built-in bots.** Each installed agent has a plain bot with no instructions — **Claude Code**, **Codex**, **OpenCode** — with id `builtin-<agent>` and `builtin` set to its agent. They are defined in code, not stored. `PATCH`, `DELETE` and `POST /setup` on them return `403`. A thread made with one always runs on that bot's agent; an `agent` in the request is ignored.
 
 ## Threads
 

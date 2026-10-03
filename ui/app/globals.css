@@ -2428,6 +2428,25 @@ pre {
   gap: var(--space-1);
 }
 
+/* Built-in agent bots: their own labelled group under the user's bots. */
+.bot-section {
+  margin-top: var(--space-4);
+}
+
+.bot-section-title {
+  margin: 0 0 var(--space-1);
+  padding-left: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.side.closing .bot-section-title {
+  visibility: hidden;
+}
+
 /* New-bot ghost button, mirrors row sizing. Frame is drawn by
    NewBotButton's measured SVG so dashes follow the radius. */
 .new-bot {

@@ -110,7 +110,8 @@ export default function ThreadPanel({
       ({ agents }) => {
         if (!alive) return;
         setInstalled(agents);
-        if (!agentTouched.current && agents.length > 0) {
+        // A built-in agent bot is its agent; there is nothing to choose.
+        if (!bot.builtin && !agentTouched.current && agents.length > 0) {
           setAgent((currentAgent) => agents.includes(currentAgent) ? currentAgent : agents[0]);
         }
       },
@@ -245,7 +246,7 @@ export default function ThreadPanel({
           </div>
         </section>
 
-        <section className="thread-agent thread-step" aria-labelledby="thread-agent-title">
+        {!bot.builtin && <section className="thread-agent thread-step" aria-labelledby="thread-agent-title">
           <div className="thread-step-head">
             <span className="thread-step-number" aria-hidden="true">2</span>
             <div>
@@ -279,7 +280,7 @@ export default function ThreadPanel({
             })}
           </div>
           {installed?.length === 0 && <p className="field-warn">Install Claude Code, Codex, or OpenCode to create a thread.</p>}
-        </section>
+        </section>}
 
         <footer className="pick-acts">
           <button

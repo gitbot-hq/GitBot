@@ -299,6 +299,10 @@ export default function V2() {
   const visibleBots = searchText
     ? bots.filter((b) => b.name.toLowerCase().includes(searchText))
     : bots;
+  // Built-in plain agent bots get a section of their own, apart from the user's.
+  const userBots = bots.filter((b) => !b.builtin);
+  const visibleUserBots = visibleBots.filter((b) => !b.builtin);
+  const visibleAgentBots = visibleBots.filter((b) => b.builtin);
 
   const threadSearchText = threadQuery.trim().toLowerCase();
   const visibleThreads = threadSearchText
@@ -668,12 +672,23 @@ export default function V2() {
     });
     const target = switchTo;
     setSwitchTo(null);
-    if (target) setEditing(target);
+    if (target) openSwitchTarget(target);
   }
 
   function applySwitch(target: Bot) {
     setSwitchTo(null);
-    setEditing(target);
+    openSwitchTarget(target);
+  }
+
+  /** The studio follows a switch to another bot; a built-in one has nothing
+   *  to edit, so the studio closes on it instead. */
+  function openSwitchTarget(target: Bot) {
+    if (target.builtin) {
+      setEditing(null);
+      setSelectedId(target.id);
+    } else {
+      setEditing(target);
+    }
   }
 
   /** Sidebar bot rows while panels are open. The studio guards unsaved
@@ -700,6 +715,69 @@ export default function V2() {
     } else if (b.id === bot?.id) {
       openBotProfile(b.id);
     }
+  }
+
+  /** One sidebar row: the bot's face, name and live status, plus its profile button. */
+  function botRow(b: Bot, i: number) {
+    const setupPending = needsSetup(b);
+    const mirrored = !setupPending && b.id === mirroredEmptyBotId;
+    return (
+      <div className="bot-row-wrap" key={b.id}>
+        <button
+          type="button"
+          className={`${b.id === bot?.id ? "bot-row selected" : "bot-row"}${b.id === bot?.id && activeLabel ? " live" : ""}${setupPending ? " needs-setup" : ""}${searchText ? "" : " msg-in"}`}
+          onClick={() => botRowClick(b)}
+          onMouseEnter={() => setHoverId(b.id)}
+          onMouseLeave={() => setHoverId((prev) => (prev === b.id ? null : prev))}
+          aria-current={b.id === bot?.id ? "true" : undefined}
+        >
+          <span
+            className={`mascot-wrap${setupPending ? " unpowered" : ""}`}
+            data-bot-follow={mirrored ? b.id : undefined}
+          >
+            <BotFace
+              mascot={avatarFor(b.id).mascot}
+              size={44}
+              activity={!setupPending && b.id === bot?.id ? chatMascotActivity(botActivity) : undefined}
+              color={avatarFor(b.id).color}
+              cheer={!setupPending && !mirrored && (hoverId === b.id)}
+              follow={mirrored}
+              still={setupPending || mirrored}
+              unpowered={setupPending}
+              duration={240}
+              phase={i}
+            />
+            <span className="presence" aria-hidden="true" />
+          </span>
+          <span className="bot-row-text">
+            <b>{b.name}</b>
+            <small>
+              <i aria-hidden="true" />
+              {b.id === bot?.id && activeLabel
+                ? activeLabel
+                : setupPending
+                  ? pausedSetupIds[b.id]
+                    ? "Setup pending"
+                    : b.setupStatus === "failed"
+                    ? "Setup paused"
+                    : "Setup pending"
+                  : "Idle"}
+            </small>
+          </span>
+        </button>
+        <button
+          type="button"
+          className="bot-profile-btn"
+          aria-label={`Open ${b.name} profile`}
+          data-tip="Open profile"
+          onClick={() => {
+            openBotProfile(b.id);
+          }}
+        >
+          <AnimatedActionIcon icon={UserIcon} size={16} aria-hidden="true" />
+        </button>
+      </div>
+    );
   }
 
   function refreshAfterTurn() {
@@ -773,7 +851,8 @@ export default function V2() {
   // No bots yet (and done loading, no error): first run. The onboarding
   // flow takes the whole page; creating or importing reloads bots and
   // lands in the app with the new bot selected.
-  if (!botsLoading && !botsError && bots.length === 0) {
+  // The built-in agent bots don't count: onboarding is about the user's own.
+  if (!botsLoading && !botsError && userBots.length === 0) {
     return (
       <div className="page v2">
         <TopBar
@@ -935,73 +1014,23 @@ export default function V2() {
                   ))}
                 </div>
               ) : (
+                <>
                 <div className="bot-list">
-                  {visibleBots.map((b, i) => {
-                    const setupPending = needsSetup(b);
-                    const mirrored = !setupPending && b.id === mirroredEmptyBotId;
-                    return (
-                      <div className="bot-row-wrap" key={b.id}>
-                        <button
-                          type="button"
-                          className={`${b.id === bot?.id ? "bot-row selected" : "bot-row"}${b.id === bot?.id && activeLabel ? " live" : ""}${setupPending ? " needs-setup" : ""}${searchText ? "" : " msg-in"}`}
-                          onClick={() => botRowClick(b)}
-                          onMouseEnter={() => setHoverId(b.id)}
-                          onMouseLeave={() => setHoverId((prev) => (prev === b.id ? null : prev))}
-                          aria-current={b.id === bot?.id ? "true" : undefined}
-                        >
-                          <span
-                            className={`mascot-wrap${setupPending ? " unpowered" : ""}`}
-                            data-bot-follow={mirrored ? b.id : undefined}
-                          >
-                            <BotFace
-                              mascot={avatarFor(b.id).mascot}
-                              size={44}
-                              activity={!setupPending && b.id === bot?.id ? chatMascotActivity(botActivity) : undefined}
-                              color={avatarFor(b.id).color}
-                              cheer={!setupPending && !mirrored && (hoverId === b.id)}
-                              follow={mirrored}
-                              still={setupPending || mirrored}
-                              unpowered={setupPending}
-                              duration={240}
-                              phase={i}
-                            />
-                            <span className="presence" aria-hidden="true" />
-                          </span>
-                          <span className="bot-row-text">
-                            <b>{b.name}</b>
-                            <small>
-                              <i aria-hidden="true" />
-                              {b.id === bot?.id && activeLabel
-                                ? activeLabel
-                                : setupPending
-                                  ? pausedSetupIds[b.id]
-                                    ? "Setup pending"
-                                    : b.setupStatus === "failed"
-                                    ? "Setup paused"
-                                    : "Setup pending"
-                                  : "Idle"}
-                            </small>
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          className="bot-profile-btn"
-                          aria-label={`Open ${b.name} profile`}
-                          data-tip="Open profile"
-                          onClick={() => {
-                            openBotProfile(b.id);
-                          }}
-                        >
-                          <AnimatedActionIcon icon={UserIcon} size={16} aria-hidden="true" />
-                        </button>
-                      </div>
-                    );
-                  })}
-                  {bots.length === 0 && <p className="threads-empty">No bots yet — add one with +.</p>}
-                  {bots.length > 0 && visibleBots.length === 0 && (
+                  {visibleUserBots.map(botRow)}
+                  {userBots.length === 0 && <p className="threads-empty">No bots yet — add one with +.</p>}
+                  {userBots.length > 0 && visibleUserBots.length === 0 && (
                     <p className="threads-empty">No bots match your search.</p>
                   )}
                 </div>
+                {visibleAgentBots.length > 0 && (
+                  <section className="bot-section" aria-labelledby="agent-bots-title">
+                    <h3 id="agent-bots-title" className="bot-section-title">Agents</h3>
+                    <div className="bot-list">
+                      {visibleAgentBots.map((b, i) => botRow(b, visibleUserBots.length + i))}
+                    </div>
+                  </section>
+                )}
+                </>
               )}
             </div>
             <div className={`side-scroll-edge side-scroll-edge-bottom${botsScrollEdge === "bottom" ? " is-visible" : ""}`} aria-hidden="true" />
@@ -1178,7 +1207,7 @@ export default function V2() {
                 onAutoSent={() => setAutoSend(null)}
                 onActivityChange={setBotActivity}
                 onTurnDone={refreshAfterTurn}
-                onShare={bot ? (view) => setModal({ kind: "share", bot, view }) : undefined}
+                onShare={bot && !bot.builtin ? (view) => setModal({ kind: "share", bot, view }) : undefined}
                 onLearnMorePermissions={() => openLearnMore("permissions")}
                 onOpenBot={bot ? () => openBotProfile(bot.id) : undefined}
                 onNewThread={bot && !setupRequired ? newThread : undefined}

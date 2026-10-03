@@ -29,6 +29,11 @@ export interface Bot {
   /** The harness this bot runs on. Undefined on older records: Claude Code. */
   agent?: BotAgent;
   /**
+   * Set on bots defined in code rather than stored: the agent a plain agent bot
+   * runs. Built-in bots are not in bots.json and cannot be edited or deleted.
+   */
+  builtin?: BotAgent;
+  /**
    * What this bot needs on a machine before it can work — "ffmpeg must be on
    * PATH", "run npm install in the repo". Travels with the bot when shared, and
    * is run once, on this machine, in a thread of its own. Blank means the bot
@@ -118,14 +123,67 @@ function writeCollection<T>(file: string, items: T[]): void {
 
 const now = () => new Date().toISOString();
 
-// --- Bots ---
+// --- Built-in bots ---
+// One plain bot per agent: the agent itself, with no instructions, so a thread
+// that is "just Claude Code" is still a bot thread. Defined here, never stored.
 
-export function listBots(): Bot[] {
-  return readCollection<Bot>(BOTS_FILE).sort((a, b) => a.name.localeCompare(b.name));
+const PLAIN_AGENT_NAMES: Record<BotAgent, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  opencode: "OpenCode",
+};
+
+const PLAIN_AGENT_ORDER: BotAgent[] = ["claude-code", "codex", "opencode"];
+
+const BUILTIN_EPOCH = new Date(0).toISOString();
+
+function plainAgentBot(agent: BotAgent): Bot {
+  const name = PLAIN_AGENT_NAMES[agent];
+  return {
+    id: `builtin-${agent}`,
+    name,
+    description: `${name} with no bot instructions.`,
+    emoji: "🤖",
+    instructions: "",
+    agent,
+    builtin: agent,
+    permissionMode: "ask-permissions",
+    createdAt: BUILTIN_EPOCH,
+    updatedAt: BUILTIN_EPOCH,
+  };
 }
 
+/** The plain agent bots for the agents installed on this machine. */
+export function plainAgentBots(installedAgents: readonly string[]): Bot[] {
+  return PLAIN_AGENT_ORDER.filter((a) => installedAgents.includes(a)).map(plainAgentBot);
+}
+
+/** The built-in bot with this id, its agent installed here or not. */
+function builtinBot(id: string): Bot | undefined {
+  const agent = PLAIN_AGENT_ORDER.find((a) => plainAgentBot(a).id === id);
+  return agent ? plainAgentBot(agent) : undefined;
+}
+
+/** True for a bot defined in code rather than stored. */
+export function isBuiltinBot(id: string): boolean {
+  return builtinBot(id) !== undefined;
+}
+
+// --- Bots ---
+
+/** The user's bots by name, then the built-in bots for the installed agents. */
+export function listBots(installedAgents: readonly string[]): Bot[] {
+  const stored = readCollection<Bot>(BOTS_FILE).sort((a, b) => a.name.localeCompare(b.name));
+  return [...stored, ...plainAgentBots(installedAgents)];
+}
+
+/**
+ * Any bot by id, built-in or stored. A built-in is found whether or not its
+ * agent is installed, so its existing threads still resolve; running them is
+ * refused elsewhere when the agent is missing.
+ */
 export function getBot(id: string): Bot | undefined {
-  return readCollection<Bot>(BOTS_FILE).find((b) => b.id === id);
+  return builtinBot(id) ?? readCollection<Bot>(BOTS_FILE).find((b) => b.id === id);
 }
 
 export function createBot(input: NewBot): Bot {
@@ -157,7 +215,8 @@ export function updateBot(id: string, patch: Partial<Bot>): Bot | undefined {
   const bots = readCollection<Bot>(BOTS_FILE);
   const idx = bots.findIndex((b) => b.id === id);
   if (idx === -1) return undefined;
-  const { id: _ignored, createdAt: _created, ...rest } = patch;
+  // Built-in is a property of where a bot is defined, not something a patch can claim.
+  const { id: _ignored, createdAt: _created, builtin: _builtin, ...rest } = patch;
   const before = bots[idx];
   const merged: Bot = { ...before, ...rest, updatedAt: now() };
 

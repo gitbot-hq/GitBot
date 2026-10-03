@@ -21,6 +21,7 @@ import {
   ensureSetupThread,
   setSetupStatus,
   isBotAgent,
+  isBuiltinBot,
   BOT_AGENTS,
   type Bot,
 } from "./bot-store";
@@ -39,7 +40,8 @@ import { getSessionHistory as loadOpencodeHistory } from "./start-opencode";
 export async function handleBotRoutes(
   req: IRequest,
   res: IResponse,
-  workspaceCwd: string
+  workspaceCwd: string,
+  availableAgents: readonly string[],
 ): Promise<boolean> {
   const url = req.url ?? "/";
   const method = req.method ?? "GET";
@@ -50,7 +52,7 @@ export async function handleBotRoutes(
 
   if (path === "/bots") {
     if (method === "GET") {
-      jsonOk(res, { bots: listBots() });
+      jsonOk(res, { bots: listBots(availableAgents) });
       return true;
     }
     if (method === "POST") {
@@ -70,6 +72,13 @@ export async function handleBotRoutes(
       jsonOk(res, { bot: getBot(bot.id) ?? bot, setupThread });
       return true;
     }
+  }
+
+  // Built-in bots are defined in code: nothing about them can be changed here.
+  const changedBotId = method === "GET" ? null : matchId(path, "/bots/") ?? matchId(path, "/bots/", "/setup");
+  if (changedBotId && isBuiltinBot(changedBotId)) {
+    jsonError(res, 403, "Built-in bots cannot be edited or deleted");
+    return true;
   }
 
   // POST /bots/:id/setup — the manual controls beside the automatic run.
@@ -152,7 +161,9 @@ export async function handleBotRoutes(
         });
         return true;
       }
-      jsonOk(res, { thread: createThread(bot.id, repoPath, body.title, "chat", body.agent) });
+      // A plain agent bot is its agent; its threads cannot run on another.
+      const agent = bot.builtin ?? body.agent;
+      jsonOk(res, { thread: createThread(bot.id, repoPath, body.title, "chat", agent) });
       return true;
     }
   }

@@ -179,12 +179,15 @@ export default function BotProfile({
           ) : null}
           {bot.description ? <p>{bot.description}</p> : null}
         </div>
-        <div className="profile-acts">
-          <ShareDropdown open={shareOpen} onOpenChange={setShareOpen} onShare={onShare} label />
-          <button type="button" className="btn-secondary" onClick={onEdit}>
-            Edit
-          </button>
-        </div>
+        {/* Built-in bots are defined by gitbot: nothing to edit or share. */}
+        {!bot.builtin && (
+          <div className="profile-acts">
+            <ShareDropdown open={shareOpen} onOpenChange={setShareOpen} onShare={onShare} label />
+            <button type="button" className="btn-secondary" onClick={onEdit}>
+              Edit
+            </button>
+          </div>
+        )}
       </div>
       {threads == null ? (
         <div className="skel profile-loading" aria-label="Loading activity">

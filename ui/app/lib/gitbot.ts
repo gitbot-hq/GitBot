@@ -24,6 +24,9 @@ export type Bot = {
   disallowedTools?: string[];
   setupStatus?: string;
   setupThreadId?: string;
+  // Set on the plain agent bots the server defines in code ("claude-code",
+  // "codex", "opencode"): not editable, deletable or shareable.
+  builtin?: string;
 };
 
 export type Thread = {
