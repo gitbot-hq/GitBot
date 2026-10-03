@@ -35,9 +35,7 @@ import {
   type Thread,
 } from "./bot-store";
 import { existsSync, statSync } from "fs";
-import { loadTranscript } from "./start-claude-code";
-import { loadTranscript as loadCodexTranscript } from "./start-codex";
-import { getSessionHistory as loadOpencodeHistory } from "./start-opencode";
+import { loadThreadMessages } from "./thread-tools";
 
 /**
  * REST surface for the bot hub: bots, their threads, and a thread's messages.
@@ -191,14 +189,7 @@ export async function handleBotRoutes(
     const thread = getThread(messagesId);
     if (!thread) { jsonError(res, 404, "Thread not found"); return true; }
     // A thread that has not had a turn yet has no transcript on disk.
-    const messages = !thread.sdkSessionId
-      ? []
-      : thread.agent === "codex"
-        ? await loadCodexTranscript(thread.sdkSessionId, thread.repoPath)
-        : thread.agent === "opencode"
-          ? await loadOpencodeHistory(thread.sdkSessionId, thread.repoPath)
-          : await loadTranscript(thread.sdkSessionId, thread.repoPath);
-    jsonOk(res, { messages });
+    jsonOk(res, { messages: await loadThreadMessages(thread) });
     return true;
   }
 

@@ -18,6 +18,7 @@ import { addProject, findProject, listProjects } from "./project-index";
 import { forget, getProjectsWithMemory, remember } from "./project-memory";
 import { botPermissionToSession, type BotPreset, type PermissionMode } from "./server-common";
 import { startTurn } from "./turns";
+import { listThreadsForJarvis, readThreadTail, TAIL_MAX, threadStatus } from "./thread-tools";
 
 // Jarvis, the built-in manager bot: its fixed prompt and its tools. The tools
 // are an in-process MCP server handed to Claude Code through query()'s
@@ -71,7 +72,17 @@ export function jarvisSystemPrompt(): string {
     "  own and the user can open it from this thread's list of started threads.",
     "  Nothing tells you when it finishes: say what you started and where, and that",
     "  the user can check the thread. If it refuses, tell the user why.",
-    "A bot's or project's name is often all you see; call get_bots or get_projects",
+    "- list_threads: gitbot's threads (newest first, at most 30), filtered by project",
+  "  id and/or bot id. Use it when the user asks about their threads or work in a",
+  "  project, or to find a thread to check on.",
+  "- thread_status: whether a thread is running, waiting on approval (and for",
+  "  which tool), done, failed or stopped, with its last message. idle means",
+  "  nothing has run there since gitbot started. Use it before reporting how",
+  "  a thread is going; never guess.",
+  "- read_thread_tail: a thread's last few messages, when the last one is not",
+  "  enough. Ask for only as many as you need.",
+  "  These three only read. To show the user what a thread said, summarise it.",
+  "A bot's or project's name is often all you see; call get_bots or get_projects",
     "when the name is not enough.",
     "",
     "STARTING A THREAD:",
@@ -281,6 +292,12 @@ const asText = (value: unknown) => ({ content: [{ type: "text" as const, text: J
 const memoryReply = (result: ReturnType<typeof remember>) =>
   result.ok ? asText(result) : { ...asText(result), isError: true };
 
+const readReply = (result: { ok: boolean; error?: string }) => {
+  if (!result.ok) return { ...asText({ error: result.error }), isError: true };
+  const { ok: _ok, ...rest } = result;
+  return asText(rest);
+};
+
 /**
  * A fresh gitbot tool server for one Jarvis turn. It closes over the calling
  * Jarvis thread, so a child it starts knows its owner without Jarvis saying.
@@ -363,6 +380,30 @@ export function jarvisToolServer(availableAgents: readonly string[], jarvisThrea
           const { ok: _ok, ...started } = result;
           return asText(started);
         },
+      ),
+      tool(
+        "list_threads",
+        "List gitbot threads, newest first (at most 30): id, title, bot, project and last update. Filter by project id and/or bot id. Jarvis threads and setup threads are not listed.",
+        {
+          project: z.string().optional().describe("Project id from list_projects"),
+          bot: z.string().optional().describe("Bot id from list_bots"),
+        },
+        async (filter) => readReply(await listThreadsForJarvis(filter, jarvisThreadId)),
+      ),
+      tool(
+        "thread_status",
+        "How a thread stands: running, waiting on approval (with the tools waiting), done, failed, stopped, or idle when nothing has run since gitbot started. Includes its last message.",
+        { threadId: z.string().describe("Thread id from list_threads") },
+        async ({ threadId }) => readReply(await threadStatus(threadId)),
+      ),
+      tool(
+        "read_thread_tail",
+        `The last n messages of a thread, from its agent's transcript (at most ${TAIL_MAX}; long messages are cut).`,
+        {
+          threadId: z.string().describe("Thread id from list_threads"),
+          n: z.number().int().min(1).max(TAIL_MAX).optional().describe("How many messages; default 5"),
+        },
+        async ({ threadId, n }) => readReply(await readThreadTail(threadId, n)),
       ),
     ],
   });
