@@ -127,7 +127,7 @@ test("markers, sort, Jarvis count and tab title come from a fixed snapshot", () 
   };
   const pending = pendingByJarvis(snapshot);
   const approval = (id: string, tool: string, outcome?: ChildApproval["outcome"]): ChildApproval => ({
-    id, childThreadId: "cb", childBotId: "b", bot: "PR Validator", tool, after: 1, ...(outcome ? { outcome } : {}),
+    id, childThreadId: "cb", childBotId: "b", bot: "PR Validator", tool, askedAt: "2026-10-01T10:00:00.000Z", ...(outcome ? { outcome } : {}),
   });
   // In the server's order (newest first).
   const threads = [
