@@ -1,7 +1,8 @@
 import { createSdkMcpServer, tool, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { botNeedsSetup, getBot, isJarvisBot, listBots, type Bot } from "./bot-store";
-import { addProject, getProjects, listProjects } from "./project-index";
+import { addProject, listProjects } from "./project-index";
+import { forget, getProjectsWithMemory, remember } from "./project-memory";
 import type { BotPreset } from "./server-common";
 
 // Jarvis, the built-in manager bot: its fixed prompt and its tools. The tools
@@ -44,10 +45,12 @@ export function jarvisSystemPrompt(): string {
     "- get_projects: details for one or more projects at once — folder, git remote,",
     "  current branch (no git details for a folder that is not a repo). A git.root",
     "  means the folder sits inside a larger repo: the folder is where the user",
-    "  worked, the root is the repo.",
+    "  worked, the root is the repo. memory holds what the user asked you to keep",
+    "  in mind for that project; follow it.",
     "- add_project: add a folder by absolute path. Use it when the user names a",
     "  project the list lacks and you found its folder with your shell. If your",
     "  shell finds more than one candidate folder, ask before add_project.",
+    "- remember / forget: change a project's memory, one short note at a time.",
     "A bot's or project's name is often all you see; call get_bots or get_projects",
     "when the name is not enough.",
     "Starting threads is not available yet: when work should go to a bot or agent,",
@@ -60,6 +63,13 @@ export function jarvisSystemPrompt(): string {
     "  bot the user names; otherwise ask. Never guess a folder.",
     "- Your working directory is your own scratch folder, not a project. Do not",
     "  treat it as the user's code.",
+    "- Project memory: call remember only when the user states a preference for a",
+    "  project, corrects you about one, or tells you a fact that changes how work",
+    "  happens there. Never record what you did, task results or observations.",
+    "  One short line per note; when a note changes, pass replaces rather than",
+    "  adding another. It holds about 20 notes: when full, replace or forget one.",
+    "- Before work in a project, read its memory with get_projects and pass on",
+    "  what matters for the task.",
     "- Be brief. Answer from the tools rather than guessing about the user's bots",
     "  and projects.",
   ].join("\n");
@@ -138,6 +148,9 @@ export function getBotsForJarvis(
 
 const asText = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] });
 
+const memoryReply = (result: ReturnType<typeof remember>) =>
+  result.ok ? asText(result) : { ...asText(result), isError: true };
+
 /** A fresh gitbot tool server for one Jarvis turn. */
 export function jarvisToolServer(availableAgents: readonly string[]) {
   return createSdkMcpServer({
@@ -167,9 +180,28 @@ export function jarvisToolServer(availableAgents: readonly string[]) {
       ),
       tool(
         "get_projects",
-        "Details for one or more projects by id: folder, git remote and current branch. git is null for a folder that is not a git repo.",
+        "Details for one or more projects by id: folder, git remote, current branch, and the project's memory (path and contents; empty when none). git is null for a folder that is not a git repo.",
         { ids: z.array(z.string()).min(1).max(20).describe("Project ids from list_projects, up to 20") },
-        async ({ ids }) => asText({ projects: await getProjects(ids) }),
+        async ({ ids }) => asText({ projects: await getProjectsWithMemory(ids) }),
+      ),
+      tool(
+        "remember",
+        "Add a note to a project's memory, or rewrite the note named by replaces. Only the user's preferences and corrections for the project, never task logs. One short line; the memory holds at most 20 notes.",
+        {
+          project: z.string().describe("Project id from list_projects"),
+          note: z.string().describe("One short line, e.g. \"Open PRs as drafts\""),
+          replaces: z.string().optional().describe("An existing note (its text, or a unique part of it) to rewrite instead of adding one"),
+        },
+        async ({ project, note, replaces }) => memoryReply(remember(project, note, replaces)),
+      ),
+      tool(
+        "forget",
+        "Remove a note from a project's memory, named by its text or a unique part of it.",
+        {
+          project: z.string().describe("Project id from list_projects"),
+          note: z.string().describe("The note's text, or a unique part of it"),
+        },
+        async ({ project, note }) => memoryReply(forget(project, note)),
       ),
       tool(
         "add_project",
