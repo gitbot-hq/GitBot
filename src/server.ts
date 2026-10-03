@@ -1,10 +1,8 @@
-import { randomUUID } from "crypto";
 import http from "node:http";
 import {
   createHttpServer,
   setupShutdown,
   handleWorkspaceRoutes,
-  createSession,
   shouldAutoApprove,
   sessions,
   emitEvent,
@@ -23,14 +21,13 @@ import {
   IRequest,
   IResponse,
   type PermissionMode,
-  type BotPreset,
 } from "./server-common";
-import { initAgent as initClaudeCode, runAgent as runClaudeCode, listSessions as listClaudeSessions, loadTranscript } from "./start-claude-code";
-import { initAgent as initOpencode, stopAgent as stopOpencode, runAgent as runOpencode, listSessions as listOpencodeSessions, getSessionHistory, abortSession as opencodeAbort, respondPermission as opencodePermission } from "./start-opencode";
-import { initAgent as initCodex, runAgent as runCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
-import { handleBotRoutes, resolveThreadTurn } from "./bot-routes";
+import { initAgent as initClaudeCode, listSessions as listClaudeSessions, loadTranscript } from "./start-claude-code";
+import { initAgent as initOpencode, stopAgent as stopOpencode, listSessions as listOpencodeSessions, getSessionHistory, abortSession as opencodeAbort, respondPermission as opencodePermission } from "./start-opencode";
+import { initAgent as initCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
+import { handleBotRoutes } from "./bot-routes";
+import { startTurn } from "./turns";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
-import { getBot, getThread, touchThread, updateThread } from "./bot-store";
 import { uiFileFor } from "./static-ui";
 
 export async function handleRequest(
@@ -231,103 +228,13 @@ export async function handleRequest(
     // POST /chat
     if (method === "POST" && path === "/chat") {
       const body = await readBody(req);
-      let { repoPath, agent, sessionId: existingId, model, permissionMode } = body;
-      const { prompt, attachments, threadId } = body;
-      let { mode } = body;
-      // attachments: Array<{ url: string }> | undefined
-
-      // A threadId comes from the bot hub: it supplies the repo, the resume handle
-      // and the bot preset, so the client need not repeat them.
-      let botPreset: BotPreset | undefined;
-      if (threadId) {
-        const thread = getThread(threadId);
-        if (!thread) { jsonError(res, 404, "Thread not found"); return; }
-        const bot = getBot(thread.botId);
-        if (!bot) { jsonError(res, 404, "Bot not found"); return; }
-        const turn = resolveThreadTurn(thread, bot, { model, permissionMode, mode }, availableAgents);
-        if (!turn.ok) { jsonError(res, turn.status, turn.message, turn.extra); return; }
-        ({ repoPath, agent, model, permissionMode, mode, preset: botPreset } = turn);
-        if (thread.agent !== agent) updateThread(threadId, { agent });
-        existingId = thread.sdkSessionId ?? undefined;
-      }
-
-      if (!repoPath) { jsonError(res, 400, "repoPath is required"); return; }
-      if (!prompt && (!attachments || attachments.length === 0)) {
-        jsonError(res, 400, "prompt or attachments is required"); return;
-      }
-      if (attachments != null && (!Array.isArray(attachments) || attachments.some((a: any) => typeof a?.url !== "string" || !a.url))) {
-        jsonError(res, 400, "attachments must be an array of { url: string }"); return;
-      }
-      if (agent !== "claude-code" && agent !== "opencode" && agent !== "codex") {
-        jsonError(res, 400, "agent must be claude-code, opencode, or codex");
-        return;
-      }
-      if (!availableAgents.includes(agent)) {
-        jsonError(res, 400, `Agent '${agent}' is not available`);
-        return;
-      }
-
-      let store = existingId ? sessions.get(existingId) : undefined;
-
-      if (store) {
-        if (store.status === "running") {
-          jsonError(res, 409, "Session is already running");
-          return;
-        }
-        // A Jarvis session's settings are fixed by its thread; a bare /chat
-        // must not reach in and change them.
-        if (!threadId && store.botPreset?.jarvis) {
-          jsonError(res, 400, "Jarvis turns need a threadId");
-          return;
-        }
-        store.status = "running";
-        notifyPermissionsChanged();
-        store.events = [];
-        store.seq = 0;
-        if (model) store.model = model;
-        if (mode) store.mode = mode;
-        if (permissionMode) store.permissionMode = permissionMode as PermissionMode;
-        if (botPreset?.jarvis) { store.model = undefined; store.mode = undefined; }
-        if (threadId) { store.threadId = threadId; store.botPreset = botPreset; }
-        emitEvent(store, 'user_prompt', { prompt: prompt ?? '', ...(attachments?.length ? { attachments } : {}) });
-      } else {
-        const gitbotId = existingId ?? randomUUID();
-        store = createSession(gitbotId, agent, repoPath, model, mode, permissionMode as PermissionMode | undefined, { threadId, preset: botPreset });
-        if (existingId) {
-          store.sdkSessionId = existingId;
-        }
-        emitEvent(store, 'user_prompt', { prompt: prompt ?? '', ...(attachments?.length ? { attachments } : {}) });
-        notifyPermissionsChanged();
-      }
-
-      const s = store;
-      if (threadId) touchThread(threadId, prompt ?? '');
-
-      // Anything thrown past runAgent's own handling would otherwise leave the
-      // session pinned to "running": every later message on the thread answers
-      // 409 for as long as the server lives, and the event stream — which only
-      // closes on done/error/aborted — hangs the client that is watching it.
-      // Each runAgent already reports its own failures and lands on "error"
-      // before returning, so the status check makes this a no-op on every path
-      // that handled itself.
-      const onRunRejected = (err: any) => {
-        console.error("[runAgent] unhandled:", err);
-        if (s.status === "running") {
-          emitEvent(s, "error", { message: err?.message ?? `${agent} failed to start` });
-          s.status = "error";
-          notifyPermissionsChanged();
-        }
-      };
-
-      if (agent === "claude-code") {
-        runClaudeCode(s).catch(onRunRejected);
-      } else if (agent === "codex") {
-        runCodex(s).catch(onRunRejected);
-      } else {
-        runOpencode(s).catch(onRunRejected);
-      }
-
-      jsonOk(res, { sessionId: s.gitbotId });
+      const { repoPath, agent, sessionId, model, permissionMode, prompt, attachments, threadId, mode } = body;
+      const turn = startTurn(
+        { repoPath, agent, sessionId, model, permissionMode, prompt, attachments, threadId, mode },
+        availableAgents,
+      );
+      if (!turn.ok) { jsonError(res, turn.status, turn.message, turn.extra); return; }
+      jsonOk(res, { sessionId: turn.sessionId });
       return;
     }
 

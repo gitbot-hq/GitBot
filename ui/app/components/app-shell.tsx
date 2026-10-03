@@ -25,6 +25,7 @@ import UserProfile from "./user-profile";
 import ProfilePanelOverlay from "./profile-panel-overlay";
 import LearnMorePanel, { type LearnMoreKind } from "./learn-more-panel";
 import ThreadPanel from "./thread-panel";
+import JarvisChildren from "./jarvis-children";
 import OnboardingFlow from "./onboarding-flow";
 import ThemeButton from "./theme-button";
 import { CreateBotWithAgentModal, ImportModal, ShareModal } from "./share-modals";
@@ -921,6 +922,12 @@ export default function V2() {
     setThreadByBot((prev) => ({ ...prev, [thread.botId]: thread.id }));
   }
 
+  /** Opens a thread under its own bot, as picking the bot and then the thread would. */
+  function openThread(botId: string, threadId: string) {
+    setSelectedId(botId);
+    setThreadByBot((prev) => ({ ...prev, [botId]: threadId }));
+  }
+
   function threadCreated(thread: ThreadFull) {
     setHasThreads(true);
     if (!bot) return;
@@ -1374,6 +1381,9 @@ export default function V2() {
                     : undefined
                 }
               />
+              {isJarvis && activeThread && (
+                <JarvisChildren jarvisThreadId={activeThread.id} bots={bots} onOpen={openThread} />
+              )}
               <div className="thread-overlay" aria-hidden={!threadPanel}>
                 {threadPanel && bot && (
                   <ThreadPanel

@@ -298,7 +298,7 @@ export function resolveThreadTurn(
       repoPath: jarvisDir(),
       agent,
       permissionMode: "yolo",
-      preset: { ...preset, jarvis: { availableAgents } },
+      preset: { ...preset, jarvis: { availableAgents, threadId: thread.id } },
     };
   }
   // Bot presets speak their own vocabulary ("auto-approve", "plan"); the

@@ -258,7 +258,11 @@ export interface BotPreset {
    * Set only on a Jarvis thread: what its tools need to know. Its presence is
    * what gets the session Jarvis's prompt and its gitbot tool server.
    */
-  jarvis?: { availableAgents: readonly string[] };
+  jarvis?: {
+    availableAgents: readonly string[];
+    /** The Jarvis thread this session belongs to: the owner of any child it starts. */
+    threadId: string;
+  };
 }
 
 export const sessions = new Map<string, SessionStore>();

@@ -77,6 +77,12 @@ export interface Thread {
   repoPath: string;
   preview: string;
   messageCount: number;
+  /**
+   * The Jarvis thread this one reports to: set when Jarvis starts it. Threads
+   * the user starts never have one.
+   * TODO(slice 11): pass ownership back to the user when they type here.
+   */
+  reportTo?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -369,6 +375,7 @@ export function createThread(
   title?: string,
   kind: "chat" | "setup" = "chat",
   agent?: BotAgent,
+  reportTo?: string,
 ): Thread {
   const threads = readCollection<Thread>(THREADS_FILE);
   const ts = now();
@@ -383,6 +390,7 @@ export function createThread(
     repoPath,
     preview: "",
     messageCount: 0,
+    ...(reportTo ? { reportTo } : {}),
     createdAt: ts,
     updatedAt: ts,
   };

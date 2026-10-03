@@ -1,8 +1,21 @@
 import { createSdkMcpServer, tool, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import { botNeedsSetup, getBot, isJarvisBot, listBots, type Bot } from "./bot-store";
-import { addProject, getProjects, listProjects } from "./project-index";
-import type { BotPreset } from "./server-common";
+import {
+  BOT_AGENTS,
+  botNeedsSetup,
+  createThread,
+  deleteThread,
+  getBot,
+  getThread,
+  isJarvisBot,
+  listBots,
+  threadAgent,
+  type Bot,
+  type BotAgent,
+} from "./bot-store";
+import { addProject, findProject, getProjects, listProjects } from "./project-index";
+import { botPermissionToSession, type BotPreset, type PermissionMode } from "./server-common";
+import { startTurn } from "./turns";
 
 // Jarvis, the built-in manager bot: its fixed prompt and its tools. The tools
 // are an in-process MCP server handed to Claude Code through query()'s
@@ -47,10 +60,22 @@ export function jarvisSystemPrompt(): string {
     "- add_project: add a folder by absolute path. Use it when the user names a",
     "  project the list lacks and you found its folder with your shell. If your",
     "  shell finds more than one candidate folder, ask before add_project.",
+    "- start_thread: start a child thread — with a bot (its id) or a plain agent",
+    "  (claude-code, codex or opencode) — in a project (its id), with its first",
+    "  message. It returns the child's thread id at once; the child works on its",
+    "  own and the user can open it from this thread's list of started threads.",
+    "  Nothing tells you when it finishes: say what you started and where, and that",
+    "  the user can check the thread. If it refuses, tell the user why.",
     "A bot's or project's name is often all you see; call get_bots or get_projects",
     "when the name is not enough.",
-    "Starting threads is not available yet: when work should go to a bot or agent,",
-    "say which one you would use and in what folder, and the user can start it.",
+    "",
+    "STARTING A THREAD:",
+    "- The child sees nothing of this conversation. Write its first message as a",
+    "  complete brief: the task, and anything the user told you that matters.",
+    "- start_thread needs a project id. For a bot's default folder that is not",
+    "  listed yet, add_project it first.",
+    "- Leave permissionMode unset unless the user asked for a mode. Plain agents",
+    "  then run in auto-approve and bots in their own mode.",
     "",
     "RULES:",
     "- A bot that is not set up on this machine: say so. Do not start its setup.",
@@ -133,12 +158,110 @@ export function getBotsForJarvis(
   });
 }
 
+// --- Starting a child thread ---
+
+/** A thread's permissions in the bot vocabulary: what Jarvis may ask for. */
+export type ChildPermissionMode = Bot["permissionMode"];
+
+export const CHILD_PERMISSION_MODES = ["ask-permissions", "auto-approve", "plan"] as const satisfies readonly ChildPermissionMode[];
+
+/**
+ * How a child runs: a plain agent in auto-approve, a bot in its own mode, and
+ * either in the mode the user asked for when Jarvis passes one. The run mode is
+ * always explicit, so an override is never mixed with a plan bot's own mode.
+ */
+export function childPermission(
+  bot: Pick<Bot, "builtin" | "permissionMode">,
+  agent: BotAgent,
+  override?: ChildPermissionMode,
+): { chosen: ChildPermissionMode; permissionMode: PermissionMode; mode: "plan" | "build" } {
+  const chosen = override ?? (bot.builtin ? "auto-approve" : bot.permissionMode);
+  const session = botPermissionToSession(chosen, agent);
+  return { chosen, permissionMode: session.permissionMode, mode: session.mode ?? "build" };
+}
+
+export interface StartThreadArgs {
+  bot?: string;
+  agent?: string;
+  project: string;
+  message: string;
+  permissionMode?: ChildPermissionMode;
+}
+
+export type StartThreadResult =
+  | { ok: true; threadId: string; bot: string; project: string; folder: string; permissionMode: ChildPermissionMode }
+  | { ok: false; error: string };
+
+/**
+ * Starts a child of a Jarvis thread: makes the thread under its own bot, in
+ * the project's folder, owned by the Jarvis thread, and starts its first turn.
+ * Returns as soon as the turn is running.
+ */
+export function startChildThread(
+  jarvisThreadId: string,
+  args: StartThreadArgs,
+  availableAgents: readonly string[],
+): StartThreadResult {
+  const owner = getThread(jarvisThreadId);
+  if (!owner || !isJarvisBot(getBot(owner.botId))) return { ok: false, error: "only a Jarvis thread can start a child thread" };
+
+  if (!!args.bot === !!args.agent) return { ok: false, error: "pass exactly one of bot or agent" };
+  let bot: Bot | undefined;
+  if (args.agent) {
+    if (!(BOT_AGENTS as readonly string[]).includes(args.agent)) {
+      return { ok: false, error: `unknown agent "${args.agent}": use one of ${BOT_AGENTS.join(", ")}` };
+    }
+    if (!availableAgents.includes(args.agent)) return { ok: false, error: `${args.agent} is not installed on this machine` };
+    bot = getBot(`builtin-${args.agent}`);
+  } else {
+    bot = getBot(args.bot!);
+    if (bot && isJarvisBot(bot)) return { ok: false, error: "a child thread cannot be a Jarvis thread" };
+    if (!bot) return { ok: false, error: `no bot with id "${args.bot}": use list_bots` };
+  }
+  if (!bot) return { ok: false, error: `no plain bot for ${args.agent}` };
+  if (botNeedsSetup(bot)) {
+    const status = bot.setupStatus === "failed" ? "its setup failed" : "its setup has not finished";
+    return {
+      ok: false,
+      error: `${bot.name} is not set up on this machine (${status}). Tell the user; they can finish its setup from the bot in gitbot.`,
+    };
+  }
+
+  const project = findProject(args.project);
+  if (!project) return { ok: false, error: `no project with id "${args.project}": use list_projects, or add_project a folder` };
+  if (!args.message?.trim()) return { ok: false, error: "message is required" };
+
+  const agent = threadAgent({}, bot);
+  const permission = childPermission(bot, agent, args.permissionMode);
+  const child = createThread(bot.id, project.folder, undefined, "chat", agent, jarvisThreadId);
+  const turn = startTurn(
+    { threadId: child.id, prompt: args.message, permissionMode: permission.permissionMode, mode: permission.mode },
+    availableAgents,
+  );
+  if (!turn.ok) {
+    // A thread that never ran is noise in the bot's list.
+    deleteThread(child.id);
+    return { ok: false, error: turn.message };
+  }
+  return {
+    ok: true,
+    threadId: child.id,
+    bot: bot.name,
+    project: project.name,
+    folder: project.folder,
+    permissionMode: permission.chosen,
+  };
+}
+
 // --- SDK wiring ---
 
 const asText = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] });
 
-/** A fresh gitbot tool server for one Jarvis turn. */
-export function jarvisToolServer(availableAgents: readonly string[]) {
+/**
+ * A fresh gitbot tool server for one Jarvis turn. It closes over the calling
+ * Jarvis thread, so a child it starts knows its owner without Jarvis saying.
+ */
+export function jarvisToolServer(availableAgents: readonly string[], jarvisThreadId: string) {
   return createSdkMcpServer({
     name: JARVIS_SERVER,
     version: "1.0.0",
@@ -181,6 +304,23 @@ export function jarvisToolServer(availableAgents: readonly string[]) {
             : { ...asText({ error: result.error }), isError: true };
         },
       ),
+      tool(
+        "start_thread",
+        "Start a child thread with a bot or a plain agent, in a project's folder, with its first message. Returns the child's thread id as soon as it starts; it does not wait for the work. Pass exactly one of bot or agent.",
+        {
+          bot: z.string().optional().describe("Bot id from list_bots"),
+          agent: z.enum(BOT_AGENTS).optional().describe("A plain agent, when no bot fits"),
+          project: z.string().describe("Project id from list_projects"),
+          message: z.string().describe("The child's first message: a complete brief, since it sees nothing of this conversation"),
+          permissionMode: z.enum(CHILD_PERMISSION_MODES).optional().describe("Only when the user asked for a mode. Default: auto-approve for a plain agent, the bot's own mode for a bot."),
+        },
+        async (args) => {
+          const result = startChildThread(jarvisThreadId, args, availableAgents);
+          if (!result.ok) return { ...asText({ error: result.error }), isError: true };
+          const { ok: _ok, ...started } = result;
+          return asText(started);
+        },
+      ),
     ],
   });
 }
@@ -191,5 +331,5 @@ export function jarvisToolServer(availableAgents: readonly string[]) {
  */
 export function jarvisQueryOptions(preset: BotPreset | undefined): Pick<Options, "mcpServers"> {
   if (!preset?.jarvis) return {};
-  return { mcpServers: { [JARVIS_SERVER]: jarvisToolServer(preset.jarvis.availableAgents) } };
+  return { mcpServers: { [JARVIS_SERVER]: jarvisToolServer(preset.jarvis.availableAgents, preset.jarvis.threadId) } };
 }

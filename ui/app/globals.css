@@ -4240,3 +4240,78 @@ button.file-chip:hover {
   .theme-btn, .user-chip, .bot-profile-btn, .act-row, .queue-icon-btn, .queue-steer) {
   transition: var(--transition-control);
 }
+
+/* Threads a Jarvis thread started: floats top-left over its chat. */
+.jarvis-children {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-3);
+  z-index: 3;
+  max-width: min(320px, calc(100% - 96px));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.12);
+  font-size: var(--text-sm);
+}
+
+.jarvis-children-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.jarvis-children-toggle svg {
+  transition: transform var(--duration-slow, 200ms) ease;
+}
+
+.jarvis-children.open .jarvis-children-toggle svg {
+  transform: rotate(180deg);
+}
+
+.jarvis-children-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--space-1) var(--space-1);
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.jarvis-child {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-2);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.jarvis-child:hover,
+.jarvis-child:focus-visible {
+  background: var(--surface-2);
+}
+
+.jarvis-child-title,
+.jarvis-child small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jarvis-child small {
+  color: var(--muted);
+}

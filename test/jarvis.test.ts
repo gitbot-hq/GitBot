@@ -185,7 +185,8 @@ function jarvisThread(): Thread {
 }
 
 test("resolveThreadTurn: a Jarvis thread is forced to its folder, default model and auto-approve", () => {
-  const stale = { ...jarvisThread(), repoPath: tmpdir(), agent: "codex" as const };
+  const own = jarvisThread();
+  const stale = { ...own, repoPath: tmpdir(), agent: "codex" as const };
   const turn = resolveThreadTurn(stale, getBot(JARVIS_BOT_ID)!, {
     model: "claude-haiku-4-5", permissionMode: "ask-permissions", mode: "plan",
   }, ALL_AGENTS);
@@ -195,7 +196,8 @@ test("resolveThreadTurn: a Jarvis thread is forced to its folder, default model 
   assert.equal(turn.model, undefined);
   assert.equal(turn.permissionMode, "yolo");
   assert.equal(turn.mode, undefined);
-  assert.deepEqual(turn.preset.jarvis, { availableAgents: ALL_AGENTS });
+  // The tool server learns its caller from the preset, not from Jarvis.
+  assert.deepEqual(turn.preset.jarvis, { availableAgents: ALL_AGENTS, threadId: own.id });
 });
 
 test("resolveThreadTurn: a plain bot thread gets no jarvis key", () => {
@@ -265,7 +267,7 @@ test("the tool server is attached only to a Jarvis session, fresh each turn", ()
   assert.deepEqual(jarvisQueryOptions({ id: "x", name: "Reviewer", instructions: "Review" }), {});
   assert.deepEqual(jarvisQueryOptions({ id: "builtin-claude-code", name: "Claude Code", instructions: "" }), {});
 
-  const jarvisPreset = { id: JARVIS_BOT_ID, name: "Jarvis", instructions: "", jarvis: { availableAgents: ALL_AGENTS } };
+  const jarvisPreset = { id: JARVIS_BOT_ID, name: "Jarvis", instructions: "", jarvis: { availableAgents: ALL_AGENTS, threadId: "t" } };
   const first = jarvisQueryOptions(jarvisPreset).mcpServers!;
   const second = jarvisQueryOptions(jarvisPreset).mcpServers!;
   assert.deepEqual(Object.keys(first), [JARVIS_SERVER]);
@@ -276,7 +278,7 @@ test("the tool server is attached only to a Jarvis session, fresh each turn", ()
 });
 
 test("Jarvis's prompt replaces the bot framing, and only its own tools are auto-allowed by name", () => {
-  const prompt = presetSystemPrompt({ id: JARVIS_BOT_ID, name: "Jarvis", instructions: "", jarvis: { availableAgents: [] } });
+  const prompt = presetSystemPrompt({ id: JARVIS_BOT_ID, name: "Jarvis", instructions: "", jarvis: { availableAgents: [], threadId: "t" } });
   assert.match(prompt ?? "", /You are Jarvis/);
   assert.match(prompt ?? "", /DELEGATION/);
   assert.equal(presetSystemPrompt({ id: "builtin-claude-code", name: "Claude Code", instructions: "" }), undefined);
@@ -313,7 +315,7 @@ async function serve(method: string, url: string, body?: unknown) {
 function idleJarvisSession() {
   const store = createSession(`jarvis-${Date.now()}-${Math.random()}`, "claude-code", jarvisDir(), undefined, undefined, "yolo", {
     threadId: "t",
-    preset: { id: JARVIS_BOT_ID, name: "Jarvis", instructions: "", jarvis: { availableAgents: ALL_AGENTS } },
+    preset: { id: JARVIS_BOT_ID, name: "Jarvis", instructions: "", jarvis: { availableAgents: ALL_AGENTS, threadId: "t" } },
   });
   store.status = "done";
   return store;

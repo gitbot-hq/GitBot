@@ -186,7 +186,7 @@ test("Jarvis's prompt resolves folders through the project tools", () => {
   const prompt = jarvisSystemPrompt();
   for (const name of ["list_projects", "get_projects", "add_project"]) assert.match(prompt, new RegExp(name));
   assert.match(prompt, /a project the user names \(earlier in this thread counts\),\s+resolved with list_projects/);
-  assert.match(prompt, /Starting threads is not available yet/);
+  assert.doesNotMatch(prompt, /not available yet/);
 });
 
 test("a thread folder reached through a symlink is one project, at its real path", () => {

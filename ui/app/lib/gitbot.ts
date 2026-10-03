@@ -48,6 +48,8 @@ export type ThreadFull = Thread & {
   repoPath: string;
   preview: string;
   messageCount: number;
+  // The Jarvis thread that started this one, while it reports to it.
+  reportTo?: string;
   createdAt: string;
   updatedAt: string;
 };
