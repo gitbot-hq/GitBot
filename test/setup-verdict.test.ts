@@ -1,4 +1,3 @@
-import { TEST_DATA_DIR } from "./temp-data-dir";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "fs";
@@ -7,6 +6,7 @@ import { join } from "path";
 import { createBot, dataDir, getBot } from "../src/bot-store";
 import { recordSetupOutcome, recordSetupOutcomeFromEvents } from "../src/bot-prompt";
 import type { SessionStore } from "../src/server-common";
+import { TEST_DATA_DIR } from "./temp-data-dir";
 
 function newSetupBot(): string {
   const bot = createBot({ name: "Setup test", setupInstructions: "ffmpeg must be on PATH" });
@@ -79,6 +79,17 @@ test("from events: reads the run's own assistant messages, last marker wins", ()
     ])
   );
   assert.equal(statusOf(id), "complete");
+});
+
+test("from events: a user's message is not the run's verdict", () => {
+  const id = newSetupBot();
+  recordSetupOutcomeFromEvents(
+    setupStore(id, [
+      { type: "assistant", content: "SETUP_FAILED: no brew" },
+      { type: "user", content: "SETUP_COMPLETE" },
+    ])
+  );
+  assert.equal(statusOf(id), "failed");
 });
 
 test("from events: a sub-agent's marker is not the run's verdict", () => {

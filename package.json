@@ -23,7 +23,7 @@
     "postbuild:cli": "node -e \"require('fs').chmodSync('dist/index.js',0o755)\"",
     "build:ui": "node scripts/build-ui.mjs",
     "dev": "tsx src/index.ts",
-    "test": "tsx --test test/*.test.ts",
+    "test": "tsx --test --import ./test/temp-data-dir.ts \"test/*.test.ts\"",
     "postinstall": "node scripts/postinstall.mjs || exit 0",
     "prepublishOnly": "npm run build"
   },

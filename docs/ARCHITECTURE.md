@@ -119,7 +119,9 @@ GitBot/
 
 `npm test` runs every `test/*.test.ts` with Node's built-in `node:test`, through `tsx` — no other framework. Tests live outside `src/`, so `tsc` neither checks nor emits them.
 
-Every test file imports `./temp-data-dir` first. It points `GITBOT_DATA_DIR` at a fresh temp directory before `bot-store` loads (the store reads it once, at import) and removes it on exit, so a test run never touches your real `~/.gitbot`.
+`npm test` preloads `test/temp-data-dir.ts` into every test process. It points `GITBOT_DATA_DIR` at a fresh temp directory before `bot-store` loads (the store reads it once, at import) and removes it on exit, so a test run never touches your real `~/.gitbot` (or legacy `~/.grass`). Test files need not import it themselves.
+
+Running the tests needs Node 21+ (the runner relies on `node --test` expanding the glob). GitBot itself still runs on Node 18+.
 
 ## Tech stack
 
