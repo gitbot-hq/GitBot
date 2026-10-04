@@ -630,7 +630,7 @@ export default function Chat({
 
   // Voice dictation — placed after boxRef and draftRef so the callbacks
   // can safely close over them (they are always assigned before any event fires).
-  const { state: dictationState, toggle: toggleDictation } = useDictation({
+  const { state: dictationState, toggle: toggleDictation, savedDraft: dictationSavedDraft, clearSavedDraft: clearDictationSavedDraft } = useDictation({
     onInterim: (text) => {
       setDraft(text);
       draftRef.current = text;
@@ -649,6 +649,21 @@ export default function Chat({
       }
     },
   });
+
+  // If a previous dictation session crashed mid-cleanup, restore the raw
+  // transcript into the textarea so the user's words aren't lost.
+  useEffect(() => {
+    if (!dictationSavedDraft) return;
+    setDraft(dictationSavedDraft);
+    draftRef.current = dictationSavedDraft;
+    clearDictationSavedDraft();
+    if (boxRef.current) {
+      boxRef.current.style.height = "auto";
+      boxRef.current.style.height = `${Math.min(boxRef.current.scrollHeight, 160)}px`;
+      boxRef.current.focus({ preventScroll: true });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Turn bookkeeping for the end-of-turn card.
   const turnStart = useRef(0);

@@ -53,6 +53,24 @@ type DeepgramMessage =
   | { type: string };
 
 // ---------------------------------------------------------------------------
+// localStorage key for crash-safe transcript recovery
+// ---------------------------------------------------------------------------
+
+const LS_KEY = "dictation:draft";
+
+function saveDraft(text: string) {
+  try { localStorage.setItem(LS_KEY, text); } catch {}
+}
+
+function clearDraft() {
+  try { localStorage.removeItem(LS_KEY); } catch {}
+}
+
+function loadDraft(): string {
+  try { return localStorage.getItem(LS_KEY) ?? ""; } catch { return ""; }
+}
+
+// ---------------------------------------------------------------------------
 // Cleanup helpers (ported from murmur's Formatter.swift)
 // ---------------------------------------------------------------------------
 
@@ -63,9 +81,7 @@ type DeepgramMessage =
 function needsCleanup(text: string): boolean {
   const t = text.trim().toLowerCase();
   const words = t.split(/\s+/).filter(Boolean).length;
-  // Very short single thought → no LLM needed
   if (words < 4) return false;
-  // Long utterance: always worth a cleanup pass
   if (words >= 15) return true;
 
   const cues = [
@@ -100,8 +116,50 @@ async function cleanTranscript(raw: string): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// AudioWorklet processor (inlined as a Blob URL so no extra build step needed)
-// Converts Float32 mic samples → Int16 PCM and sends them to the main thread.
+// WAV encoding — wraps raw Int16 PCM chunks into a playable/retryable blob
+// ---------------------------------------------------------------------------
+
+function encodeWav(chunks: Int16Array[], sampleRate = 16000): Blob {
+  const totalSamples = chunks.reduce((n, c) => n + c.length, 0);
+  const dataBytes = totalSamples * 2; // Int16 = 2 bytes/sample
+  const buffer = new ArrayBuffer(44 + dataBytes);
+  const view = new DataView(buffer);
+
+  const write = (off: number, val: number, bytes: number, le = true) => {
+    if (bytes === 4) le ? view.setUint32(off, val, true) : view.setUint32(off, val);
+    else if (bytes === 2) le ? view.setUint16(off, val, true) : view.setUint16(off, val);
+    else view.setUint8(off, val);
+  };
+  const writeStr = (off: number, s: string) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+
+  writeStr(0, "RIFF");
+  write(4, 36 + dataBytes, 4);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  write(16, 16, 4);       // PCM chunk size
+  write(20, 1, 2);        // PCM format
+  write(22, 1, 2);        // mono
+  write(24, sampleRate, 4);
+  write(28, sampleRate * 2, 4); // byte rate
+  write(32, 2, 2);        // block align
+  write(34, 16, 2);       // bits per sample
+  writeStr(36, "data");
+  write(40, dataBytes, 4);
+
+  let offset = 44;
+  for (const chunk of chunks) {
+    for (let i = 0; i < chunk.length; i++) {
+      view.setInt16(offset, chunk[i], true);
+      offset += 2;
+    }
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+// ---------------------------------------------------------------------------
+// AudioWorklet processor (inlined as a Blob URL — no extra build step needed)
+// Converts Float32 mic samples → Int16 PCM and posts them to the main thread.
 // ---------------------------------------------------------------------------
 
 const WORKLET_CODE = `
@@ -109,7 +167,6 @@ class PcmProcessor extends AudioWorkletProcessor {
   process(inputs) {
     const ch = inputs[0]?.[0];
     if (!ch) return true;
-    // Float32 → Int16 (clamp)
     const buf = new Int16Array(ch.length);
     for (let i = 0; i < ch.length; i++) {
       const s = Math.max(-1, Math.min(1, ch[i]));
@@ -130,6 +187,11 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
   state: DictationState;
   supported: boolean;
   toggle: () => void;
+  /** Raw transcript saved to localStorage during cleanup; non-empty if a
+   *  previous session crashed before cleanup finished. Call clearSavedDraft
+   *  once the caller has consumed it. */
+  savedDraft: string;
+  clearSavedDraft: () => void;
 } {
   const [state, setState] = useState<DictationState>("idle");
   const stateRef = useRef<DictationState>("idle");
@@ -138,40 +200,51 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
   onInterimRef.current = onInterim;
   onFinalRef.current = onFinal;
 
+  // Crash-recovery: raw transcript saved to localStorage while cleanup runs
+  const [savedDraft, setSavedDraft] = useState<string>(() => loadDraft());
+  const clearSavedDraft = useCallback(() => {
+    clearDraft();
+    setSavedDraft("");
+  }, []);
+
   // Refs for the live recording session
   const wsRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const workletBlobUrlRef = useRef<string | null>(null);
   const finalsRef = useRef<string[]>([]);
-  const dgKeyRef = useRef<string | null>(null); // cached after first fetch
+  const dgKeyRef = useRef<string | null>(null);
 
-  // Browser support: needs getUserMedia + AudioWorklet + WebSocket
-  const supported =
-    typeof window !== "undefined" &&
-    typeof navigator.mediaDevices?.getUserMedia === "function" &&
-    typeof AudioContext !== "undefined" &&
-    typeof WebSocket !== "undefined";
+  // Accumulated raw PCM chunks — kept in memory for same-session retry
+  const pcmChunksRef = useRef<Int16Array[]>([]);
+  // Object URL of the WAV blob (revoked after cleanup succeeds)
+  const audioBlobUrlRef = useRef<string | null>(null);
 
   const setStateBoth = (s: DictationState) => {
     stateRef.current = s;
     setState(s);
   };
 
+  const revokeAudioBlob = () => {
+    if (audioBlobUrlRef.current) {
+      URL.revokeObjectURL(audioBlobUrlRef.current);
+      audioBlobUrlRef.current = null;
+    }
+    pcmChunksRef.current = [];
+  };
+
   // Fetch the Deepgram key from the server (cached only on success).
-  // On network failure we leave dgKeyRef.current as null so the next
-  // click retries rather than permanently returning null.
   const getDgKey = useCallback(async (): Promise<string | null> => {
     if (dgKeyRef.current !== null) return dgKeyRef.current || null;
     try {
       const res = await fetch("/api/dictation-key");
-      if (!res.ok) return null; // don't cache — retry next time
+      if (!res.ok) return null;
       const data = (await res.json()) as { key?: string };
       const key = data.key ?? "";
-      dgKeyRef.current = key; // cache only after a successful response
+      dgKeyRef.current = key;
       return key || null;
     } catch {
-      return null; // don't cache — retry next time
+      return null;
     }
   }, []);
 
@@ -180,7 +253,6 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
     const stream = streamRef.current;
     const ctx = audioCtxRef.current;
 
-    // Disconnect audio pipeline
     if (ctx) {
       await ctx.close().catch(() => {});
       audioCtxRef.current = null;
@@ -204,10 +276,11 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
   const startRecording = useCallback(async () => {
     setStateBoth("recording");
     finalsRef.current = [];
+    pcmChunksRef.current = [];
+    revokeAudioBlob();
 
     const key = await getDgKey();
     if (!key) {
-      // No Deepgram key: fall back silently — hide the button
       setStateBoth("idle");
       return;
     }
@@ -242,15 +315,12 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
 
         if (r.is_final) {
           finalsRef.current.push(text);
-          // Show accumulated finals as the live preview
           onInterimRef.current(finalsRef.current.join(" "));
         } else {
-          // Show finals + current interim
           const interim = finalsRef.current.join(" ");
           onInterimRef.current(interim ? `${interim} ${text}` : text);
         }
 
-        // from_finalize means Deepgram has flushed everything after our Finalize
         if (r.from_finalize) {
           ws.close(1000);
         }
@@ -265,7 +335,6 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
 
     ws.addEventListener("close", async () => {
       wsRef.current = null;
-      // Ensure audio pipeline is torn down
       const ctx = audioCtxRef.current;
       if (ctx) { await ctx.close().catch(() => {}); audioCtxRef.current = null; }
       const stream = streamRef.current;
@@ -274,25 +343,46 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
       const raw = finalsRef.current.join(" ").trim();
       finalsRef.current = [];
 
+      // Encode accumulated PCM into a WAV blob for same-session retry
+      if (pcmChunksRef.current.length > 0) {
+        const wavBlob = encodeWav(pcmChunksRef.current);
+        revokeAudioBlob(); // revoke any previous
+        audioBlobUrlRef.current = URL.createObjectURL(wavBlob);
+        // pcmChunksRef stays populated so the blob stays valid
+      }
+
       if (!raw) {
         setStateBoth("idle");
         return;
       }
 
       if (!needsCleanup(raw)) {
+        // Short clean transcript — no LLM needed, no need to save
         onFinalRef.current(raw);
+        revokeAudioBlob();
         setStateBoth("idle");
         return;
       }
 
+      // Save raw transcript to localStorage before hitting the LLM.
+      // If the page crashes or reloads during cleanup, the user's words survive.
+      saveDraft(raw);
+      setSavedDraft(raw);
+
       setStateBoth("cleaning");
       const cleaned = await cleanTranscript(raw);
       onFinalRef.current(cleaned);
+
+      // Cleanup succeeded — remove the safety net
+      clearDraft();
+      setSavedDraft("");
+      revokeAudioBlob();
+
       setStateBoth("idle");
     });
 
     ws.addEventListener("error", () => {
-      // close event will fire after error, which handles cleanup
+      // close event fires after error and handles cleanup
     });
 
     // --- 2. Capture microphone at 16 kHz mono ---
@@ -313,21 +403,23 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
     }
     streamRef.current = stream;
 
-    // --- 3. Audio pipeline: Float32 → Int16 PCM → WebSocket ---
-    // Try AudioWorklet first; fall back to ScriptProcessor for browsers
-    // (mobile Safari, older Chrome) that block Blob-URL worklets.
+    // --- 3. Audio pipeline: Float32 → Int16 PCM → WebSocket + local buffer ---
     const ctx = new AudioContext({ sampleRate: 16000 });
     audioCtxRef.current = ctx;
     const source = ctx.createMediaStreamSource(stream);
 
     const sendPcm = (float32: Float32Array) => {
-      if (ws.readyState !== WebSocket.OPEN) return;
       const buf = new Int16Array(float32.length);
       for (let i = 0; i < float32.length; i++) {
         const s = Math.max(-1, Math.min(1, float32[i]));
         buf[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
       }
-      ws.send(buf.buffer);
+      // Store a copy locally for WAV encoding
+      pcmChunksRef.current.push(new Int16Array(buf));
+      // Send to Deepgram
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(buf.buffer);
+      }
     };
 
     // Try AudioWorklet (preferred)
@@ -344,14 +436,13 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
           sendPcm(new Float32Array(e.data));
         };
         source.connect(workletNode);
-        // Don't connect to destination — avoids mic feedback
         workletOk = true;
       } catch {
         // fall through to ScriptProcessor
       }
     }
 
-    // ScriptProcessor fallback (deprecated but universally supported)
+    // ScriptProcessor fallback (deprecated but universally supported on mobile)
     if (!workletOk) {
       // eslint-disable-next-line @typescript-eslint/no-deprecated
       const scriptNode = ctx.createScriptProcessor(4096, 1, 1);
@@ -367,7 +458,6 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
     if (stateRef.current === "idle") {
       startRecording();
     } else if (stateRef.current === "recording") {
-      // User clicked stop: tear down audio, send Finalize, wait for WS close
       stopSession(true);
     }
     // While cleaning, ignore clicks
@@ -382,8 +472,9 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
       if (workletBlobUrlRef.current) {
         URL.revokeObjectURL(workletBlobUrlRef.current);
       }
+      revokeAudioBlob();
     };
   }, []);
 
-  return { state, supported: true, toggle };
+  return { state, supported: true, toggle, savedDraft, clearSavedDraft };
 }
