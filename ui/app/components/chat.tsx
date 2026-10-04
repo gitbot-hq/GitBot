@@ -630,7 +630,7 @@ export default function Chat({
 
   // Voice dictation — placed after boxRef and draftRef so the callbacks
   // can safely close over them (they are always assigned before any event fires).
-  const { state: dictationState, supported: dictationSupported, toggle: toggleDictation } = useDictation({
+  const { state: dictationState, toggle: toggleDictation } = useDictation({
     onInterim: (text) => {
       setDraft(text);
       draftRef.current = text;
@@ -2141,7 +2141,7 @@ export default function Chat({
                 <button type="button" className="menu-scrim" onClick={() => setActiveMenu(null)} aria-label="Close permissions" tabIndex={-1} />
               </>}
             </div>}
-            {dictationSupported && !streaming && (
+            {!streaming && (
               <button
                 type="button"
                 className={`mic-btn${dictationState === "recording" ? " mic-btn--recording" : ""}${dictationState === "cleaning" ? " mic-btn--cleaning" : ""}`}

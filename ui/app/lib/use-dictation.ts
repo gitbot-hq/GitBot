@@ -369,16 +369,5 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
     };
   }, []);
 
-  // Resolve `supported` to false if no Deepgram key is configured.
-  // We track this via dgKeyRef: once we know it's empty, hide the button.
-  // Initial render is optimistic (shows the button) until the first key fetch.
-  const [hasKey, setHasKey] = useState<boolean | null>(null);
-  useEffect(() => {
-    if (!supported) { setHasKey(false); return; }
-    getDgKey().then((k) => setHasKey(k !== null));
-  }, [supported, getDgKey]);
-
-  const effectivelySupported = supported && hasKey !== false;
-
-  return { state, supported: effectivelySupported, toggle };
+  return { state, supported: true, toggle };
 }
