@@ -53,31 +53,76 @@ type DeepgramMessage =
   | { type: string };
 
 // ---------------------------------------------------------------------------
-// localStorage key for crash-safe transcript recovery
+// IndexedDB — crash-safe storage for the raw transcript + WAV blob.
+// Both are stored under the same record key "current" so they're atomic.
 // ---------------------------------------------------------------------------
 
-const LS_KEY = "dictation:draft";
+const DB_NAME = "dictation";
+const DB_VERSION = 1;
+const STORE = "drafts";
 
-function saveDraft(text: string) {
-  try { localStorage.setItem(LS_KEY, text); } catch {}
+interface DraftRecord {
+  id: "current";
+  transcript: string;
+  audio: Blob | null;
 }
 
-function clearDraft() {
-  try { localStorage.removeItem(LS_KEY); } catch {}
+function openDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore(STORE, { keyPath: "id" });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
 }
 
-function loadDraft(): string {
-  try { return localStorage.getItem(LS_KEY) ?? ""; } catch { return ""; }
+async function idbSave(transcript: string, audio: Blob | null): Promise<void> {
+  try {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      const record: DraftRecord = { id: "current", transcript, audio };
+      const req = tx.objectStore(STORE).put(record);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    // Storage failure is non-fatal — the session continues without persistence
+  }
+}
+
+async function idbLoad(): Promise<DraftRecord | null> {
+  try {
+    const db = await openDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, "readonly");
+      const req = tx.objectStore(STORE).get("current");
+      req.onsuccess = () => resolve((req.result as DraftRecord) ?? null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function idbClear(): Promise<void> {
+  try {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      const req = tx.objectStore(STORE).delete("current");
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  } catch {}
 }
 
 // ---------------------------------------------------------------------------
 // Cleanup helpers (ported from murmur's Formatter.swift)
 // ---------------------------------------------------------------------------
 
-/**
- * Deepgram's smart_format already punctuates and handles most um/uh, so skip
- * the LLM pass for short clean transcripts. Mirrors Formatter.needsCleanup.
- */
 function needsCleanup(text: string): boolean {
   const t = text.trim().toLowerCase();
   const words = t.split(/\s+/).filter(Boolean).length;
@@ -116,35 +161,32 @@ async function cleanTranscript(raw: string): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// WAV encoding — wraps raw Int16 PCM chunks into a playable/retryable blob
+// WAV encoding — wraps raw Int16 PCM chunks into a retryable Blob
 // ---------------------------------------------------------------------------
 
 function encodeWav(chunks: Int16Array[], sampleRate = 16000): Blob {
   const totalSamples = chunks.reduce((n, c) => n + c.length, 0);
-  const dataBytes = totalSamples * 2; // Int16 = 2 bytes/sample
+  const dataBytes = totalSamples * 2;
   const buffer = new ArrayBuffer(44 + dataBytes);
   const view = new DataView(buffer);
 
-  const write = (off: number, val: number, bytes: number, le = true) => {
-    if (bytes === 4) le ? view.setUint32(off, val, true) : view.setUint32(off, val);
-    else if (bytes === 2) le ? view.setUint16(off, val, true) : view.setUint16(off, val);
-    else view.setUint8(off, val);
+  const writeStr = (off: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
   };
-  const writeStr = (off: number, s: string) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
 
   writeStr(0, "RIFF");
-  write(4, 36 + dataBytes, 4);
+  view.setUint32(4, 36 + dataBytes, true);
   writeStr(8, "WAVE");
   writeStr(12, "fmt ");
-  write(16, 16, 4);       // PCM chunk size
-  write(20, 1, 2);        // PCM format
-  write(22, 1, 2);        // mono
-  write(24, sampleRate, 4);
-  write(28, sampleRate * 2, 4); // byte rate
-  write(32, 2, 2);        // block align
-  write(34, 16, 2);       // bits per sample
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);        // PCM
+  view.setUint16(22, 1, true);        // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
   writeStr(36, "data");
-  write(40, dataBytes, 4);
+  view.setUint32(40, dataBytes, true);
 
   let offset = 44;
   for (const chunk of chunks) {
@@ -159,7 +201,6 @@ function encodeWav(chunks: Int16Array[], sampleRate = 16000): Blob {
 
 // ---------------------------------------------------------------------------
 // AudioWorklet processor (inlined as a Blob URL — no extra build step needed)
-// Converts Float32 mic samples → Int16 PCM and posts them to the main thread.
 // ---------------------------------------------------------------------------
 
 const WORKLET_CODE = `
@@ -187,10 +228,11 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
   state: DictationState;
   supported: boolean;
   toggle: () => void;
-  /** Raw transcript saved to localStorage during cleanup; non-empty if a
-   *  previous session crashed before cleanup finished. Call clearSavedDraft
-   *  once the caller has consumed it. */
+  /** Non-empty when a previous session crashed before cleanup finished.
+   *  The raw transcript and audio blob are available for recovery.
+   *  Call clearSavedDraft once the caller has consumed it. */
   savedDraft: string;
+  savedAudio: Blob | null;
   clearSavedDraft: () => void;
 } {
   const [state, setState] = useState<DictationState>("idle");
@@ -200,11 +242,24 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
   onInterimRef.current = onInterim;
   onFinalRef.current = onFinal;
 
-  // Crash-recovery: raw transcript saved to localStorage while cleanup runs
-  const [savedDraft, setSavedDraft] = useState<string>(() => loadDraft());
+  // Crash-recovery state — loaded from IndexedDB on mount
+  const [savedDraft, setSavedDraft] = useState("");
+  const [savedAudio, setSavedAudio] = useState<Blob | null>(null);
+
   const clearSavedDraft = useCallback(() => {
-    clearDraft();
+    void idbClear();
     setSavedDraft("");
+    setSavedAudio(null);
+  }, []);
+
+  // Load any crash-surviving draft on mount
+  useEffect(() => {
+    idbLoad().then((record) => {
+      if (record?.transcript) {
+        setSavedDraft(record.transcript);
+        setSavedAudio(record.audio ?? null);
+      }
+    });
   }, []);
 
   // Refs for the live recording session
@@ -214,26 +269,13 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
   const workletBlobUrlRef = useRef<string | null>(null);
   const finalsRef = useRef<string[]>([]);
   const dgKeyRef = useRef<string | null>(null);
-
-  // Accumulated raw PCM chunks — kept in memory for same-session retry
   const pcmChunksRef = useRef<Int16Array[]>([]);
-  // Object URL of the WAV blob (revoked after cleanup succeeds)
-  const audioBlobUrlRef = useRef<string | null>(null);
 
   const setStateBoth = (s: DictationState) => {
     stateRef.current = s;
     setState(s);
   };
 
-  const revokeAudioBlob = () => {
-    if (audioBlobUrlRef.current) {
-      URL.revokeObjectURL(audioBlobUrlRef.current);
-      audioBlobUrlRef.current = null;
-    }
-    pcmChunksRef.current = [];
-  };
-
-  // Fetch the Deepgram key from the server (cached only on success).
   const getDgKey = useCallback(async (): Promise<string | null> => {
     if (dgKeyRef.current !== null) return dgKeyRef.current || null;
     try {
@@ -277,7 +319,6 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
     setStateBoth("recording");
     finalsRef.current = [];
     pcmChunksRef.current = [];
-    revokeAudioBlob();
 
     const key = await getDgKey();
     if (!key) {
@@ -321,14 +362,11 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
           onInterimRef.current(interim ? `${interim} ${text}` : text);
         }
 
-        if (r.from_finalize) {
-          ws.close(1000);
-        }
+        if (r.from_finalize) ws.close(1000);
       } else if (msg.type === "Metadata") {
         ws.close(1000);
       } else if (msg.type === "Error") {
-        const e = msg as DeepgramErrorMessage;
-        console.warn("[Deepgram] error:", e.message);
+        console.warn("[Deepgram] error:", (msg as DeepgramErrorMessage).message);
         ws.close(1000);
       }
     });
@@ -343,40 +381,34 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
       const raw = finalsRef.current.join(" ").trim();
       finalsRef.current = [];
 
-      // Encode accumulated PCM into a WAV blob for same-session retry
-      if (pcmChunksRef.current.length > 0) {
-        const wavBlob = encodeWav(pcmChunksRef.current);
-        revokeAudioBlob(); // revoke any previous
-        audioBlobUrlRef.current = URL.createObjectURL(wavBlob);
-        // pcmChunksRef stays populated so the blob stays valid
-      }
-
       if (!raw) {
+        pcmChunksRef.current = [];
         setStateBoth("idle");
         return;
       }
 
       if (!needsCleanup(raw)) {
-        // Short clean transcript — no LLM needed, no need to save
+        pcmChunksRef.current = [];
         onFinalRef.current(raw);
-        revokeAudioBlob();
         setStateBoth("idle");
         return;
       }
 
-      // Save raw transcript to localStorage before hitting the LLM.
-      // If the page crashes or reloads during cleanup, the user's words survive.
-      saveDraft(raw);
-      setSavedDraft(raw);
+      // Encode PCM into a WAV blob and persist both to IndexedDB before the
+      // LLM call. If the page crashes mid-cleanup, next mount restores both.
+      const wavBlob = pcmChunksRef.current.length > 0
+        ? encodeWav(pcmChunksRef.current)
+        : null;
+      pcmChunksRef.current = [];
+
+      await idbSave(raw, wavBlob);
 
       setStateBoth("cleaning");
       const cleaned = await cleanTranscript(raw);
       onFinalRef.current(cleaned);
 
       // Cleanup succeeded — remove the safety net
-      clearDraft();
-      setSavedDraft("");
-      revokeAudioBlob();
+      await idbClear();
 
       setStateBoth("idle");
     });
@@ -414,9 +446,7 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
         const s = Math.max(-1, Math.min(1, float32[i]));
         buf[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
       }
-      // Store a copy locally for WAV encoding
       pcmChunksRef.current.push(new Int16Array(buf));
-      // Send to Deepgram
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(buf.buffer);
       }
@@ -450,7 +480,7 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
         sendPcm(e.inputBuffer.getChannelData(0));
       };
       source.connect(scriptNode);
-      scriptNode.connect(ctx.destination); // must be connected to run
+      scriptNode.connect(ctx.destination);
     }
   }, [getDgKey, stopSession]);
 
@@ -460,7 +490,6 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
     } else if (stateRef.current === "recording") {
       stopSession(true);
     }
-    // While cleaning, ignore clicks
   }, [startRecording, stopSession]);
 
   // Clean up on unmount
@@ -472,9 +501,8 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
       if (workletBlobUrlRef.current) {
         URL.revokeObjectURL(workletBlobUrlRef.current);
       }
-      revokeAudioBlob();
     };
   }, []);
 
-  return { state, supported: true, toggle, savedDraft, clearSavedDraft };
+  return { state, supported: true, toggle, savedDraft, savedAudio, clearSavedDraft };
 }

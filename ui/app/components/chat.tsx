@@ -630,7 +630,7 @@ export default function Chat({
 
   // Voice dictation — placed after boxRef and draftRef so the callbacks
   // can safely close over them (they are always assigned before any event fires).
-  const { state: dictationState, toggle: toggleDictation, savedDraft: dictationSavedDraft, clearSavedDraft: clearDictationSavedDraft } = useDictation({
+  const { state: dictationState, toggle: toggleDictation, savedDraft: dictationSavedDraft, savedAudio: _dictationSavedAudio, clearSavedDraft: clearDictationSavedDraft } = useDictation({
     onInterim: (text) => {
       setDraft(text);
       draftRef.current = text;
