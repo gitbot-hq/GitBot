@@ -208,11 +208,9 @@ class PcmProcessor extends AudioWorkletProcessor {
   process(inputs) {
     const ch = inputs[0]?.[0];
     if (!ch) return true;
-    const buf = new Int16Array(ch.length);
-    for (let i = 0; i < ch.length; i++) {
-      const s = Math.max(-1, Math.min(1, ch[i]));
-      buf[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-    }
+    // Post raw Float32 samples; sendPcm on the main thread does the Int16
+    // conversion. (Converting here too sent reinterpreted noise to Deepgram.)
+    const buf = new Float32Array(ch);
     this.port.postMessage(buf.buffer, [buf.buffer]);
     return true;
   }
@@ -458,8 +456,18 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
       pcmChunksRef.current.push(new Int16Array(buf));
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(buf.buffer);
+      } else if (ws.readyState === WebSocket.CONNECTING) {
+        // The socket takes ~1s to open; hold the first words until it does
+        pending.push(buf.buffer);
       }
     };
+    const pending: ArrayBuffer[] = [];
+    const flushPending = () => {
+      for (const b of pending) ws.send(b);
+      pending.length = 0;
+    };
+    if (ws.readyState === WebSocket.OPEN) flushPending();
+    else ws.addEventListener("open", flushPending, { once: true });
 
     // Try AudioWorklet (preferred)
     let workletOk = false;
