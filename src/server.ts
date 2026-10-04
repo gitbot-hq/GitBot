@@ -283,7 +283,9 @@ export async function handleRequest(
         jsonError(res, 400, "transcript is required"); return;
       }
 
-      const apiKey = process.env.ANTHROPIC_API_KEY;
+      // Not ANTHROPIC_API_KEY: bots' Claude Code sessions inherit this
+      // process's env and would bill that key instead of the subscription.
+      const apiKey = process.env.GITBOT_ANTHROPIC_API_KEY;
       if (!apiKey) {
         // No key: caller falls back to raw transcript
         jsonOk(res, { cleaned: transcript }); return;

@@ -5,8 +5,15 @@ process.on("SIGINT", () => {
   process.exit(0);
 });
 
+import { existsSync } from "fs";
+import { join } from "path";
 import { Command } from "commander";
 import { start } from "./server";
+
+// Local secrets (DEEPGRAM_API_KEY, GITBOT_ANTHROPIC_API_KEY) live in a
+// gitignored .env at the package root; real env vars win over it.
+const envFile = join(__dirname, "..", ".env");
+if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const program = new Command();
 

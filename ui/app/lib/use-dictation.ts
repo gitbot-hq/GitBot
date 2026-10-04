@@ -277,13 +277,16 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
   };
 
   const getDgKey = useCallback(async (): Promise<string | null> => {
-    if (dgKeyRef.current !== null) return dgKeyRef.current || null;
+    if (dgKeyRef.current) return dgKeyRef.current;
     try {
       const res = await fetch("/api/dictation-key");
       if (!res.ok) return null;
       const data = (await res.json()) as { key?: string };
       const key = data.key ?? "";
-      dgKeyRef.current = key;
+      // Only cache a real key — caching "" made every later click a no-op
+      // even after the server was given a key.
+      if (key) dgKeyRef.current = key;
+      else console.warn("[dictation] no DEEPGRAM_API_KEY on the server");
       return key || null;
     } catch {
       return null;
@@ -431,6 +434,12 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
     } catch {
       ws.close(1000);
       setStateBoth("idle");
+      return;
+    }
+    // The socket may have closed (bad key, network) while the mic prompt was
+    // up; its close handler already ran, so release the mic here.
+    if (wsRef.current !== ws) {
+      stream.getTracks().forEach((t) => t.stop());
       return;
     }
     streamRef.current = stream;
