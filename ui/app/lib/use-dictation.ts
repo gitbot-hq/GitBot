@@ -158,18 +158,20 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
     setState(s);
   };
 
-  // Fetch the Deepgram key from the server (cached after first call)
+  // Fetch the Deepgram key from the server (cached only on success).
+  // On network failure we leave dgKeyRef.current as null so the next
+  // click retries rather than permanently returning null.
   const getDgKey = useCallback(async (): Promise<string | null> => {
     if (dgKeyRef.current !== null) return dgKeyRef.current || null;
     try {
       const res = await fetch("/api/dictation-key");
-      if (!res.ok) { dgKeyRef.current = ""; return null; }
+      if (!res.ok) return null; // don't cache — retry next time
       const data = (await res.json()) as { key?: string };
-      dgKeyRef.current = data.key ?? "";
-      return dgKeyRef.current || null;
+      const key = data.key ?? "";
+      dgKeyRef.current = key; // cache only after a successful response
+      return key || null;
     } catch {
-      dgKeyRef.current = "";
-      return null;
+      return null; // don't cache — retry next time
     }
   }, []);
 
@@ -311,40 +313,54 @@ export function useDictation({ onInterim, onFinal }: UseDictationOptions): {
     }
     streamRef.current = stream;
 
-    // --- 3. AudioWorklet: Float32 → Int16 PCM → WebSocket ---
+    // --- 3. Audio pipeline: Float32 → Int16 PCM → WebSocket ---
+    // Try AudioWorklet first; fall back to ScriptProcessor for browsers
+    // (mobile Safari, older Chrome) that block Blob-URL worklets.
     const ctx = new AudioContext({ sampleRate: 16000 });
     audioCtxRef.current = ctx;
-
-    // Create worklet blob URL once
-    if (!workletBlobUrlRef.current) {
-      const blob = new Blob([WORKLET_CODE], { type: "application/javascript" });
-      workletBlobUrlRef.current = URL.createObjectURL(blob);
-    }
-
-    try {
-      await ctx.audioWorklet.addModule(workletBlobUrlRef.current);
-    } catch {
-      // Fallback: ScriptProcessor (deprecated but widely supported)
-      await ctx.close().catch(() => {});
-      audioCtxRef.current = null;
-      stream.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-      ws.close(1000);
-      setStateBoth("idle");
-      return;
-    }
-
     const source = ctx.createMediaStreamSource(stream);
-    const workletNode = new AudioWorkletNode(ctx, "pcm-processor");
 
-    workletNode.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(e.data);
+    const sendPcm = (float32: Float32Array) => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      const buf = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) {
+        const s = Math.max(-1, Math.min(1, float32[i]));
+        buf[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
       }
+      ws.send(buf.buffer);
     };
 
-    source.connect(workletNode);
-    // Don't connect workletNode to destination (avoids mic feedback)
+    // Try AudioWorklet (preferred)
+    let workletOk = false;
+    if (typeof ctx.audioWorklet?.addModule === "function") {
+      try {
+        if (!workletBlobUrlRef.current) {
+          const blob = new Blob([WORKLET_CODE], { type: "application/javascript" });
+          workletBlobUrlRef.current = URL.createObjectURL(blob);
+        }
+        await ctx.audioWorklet.addModule(workletBlobUrlRef.current);
+        const workletNode = new AudioWorkletNode(ctx, "pcm-processor");
+        workletNode.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
+          sendPcm(new Float32Array(e.data));
+        };
+        source.connect(workletNode);
+        // Don't connect to destination — avoids mic feedback
+        workletOk = true;
+      } catch {
+        // fall through to ScriptProcessor
+      }
+    }
+
+    // ScriptProcessor fallback (deprecated but universally supported)
+    if (!workletOk) {
+      // eslint-disable-next-line @typescript-eslint/no-deprecated
+      const scriptNode = ctx.createScriptProcessor(4096, 1, 1);
+      scriptNode.onaudioprocess = (e) => {
+        sendPcm(e.inputBuffer.getChannelData(0));
+      };
+      source.connect(scriptNode);
+      scriptNode.connect(ctx.destination); // must be connected to run
+    }
   }, [getDgKey, stopSession]);
 
   const toggle = useCallback(() => {
