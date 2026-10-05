@@ -11,7 +11,7 @@ import {
   withAskAnswers,
 } from "../src/ask-user-question";
 import { approvalLabel } from "../src/child-approvals";
-import { formatMessage } from "../src/start-claude-code";
+import { formatMessage, permissionRequest } from "../src/start-claude-code";
 import {
   createThread,
   JARVIS_BOT_ID,
@@ -108,6 +108,37 @@ test("isAskUserQuestion needs both the tool name and a question-shaped input", (
   assert.equal(isAskUserQuestion("AskUserQuestion", askInput()), true);
   assert.equal(isAskUserQuestion("Bash", askInput()), false);
   assert.equal(isAskUserQuestion("AskUserQuestion", { command: "ls" }), false);
+});
+
+// --- What the browser is sent ---
+// The chat does no parsing of its own: a question card is drawn when, and only
+// when, the permission_request event carries `questions`. The same payload is
+// stored and replayed, so a rejoined turn draws the same card.
+
+test("a permission_request carries an AskUserQuestion already parsed", () => {
+  const ev = permissionRequest("tu-1", "AskUserQuestion", askInput());
+  assert.deepEqual(ev.questions, parseAskUserQuestion(askInput()));
+  // The raw input rides along: approving still answers through updatedInput.
+  assert.deepEqual(ev, {
+    toolUseID: "tu-1",
+    toolName: "AskUserQuestion",
+    input: askInput(),
+    questions: ev.questions,
+  });
+});
+
+test("a permission_request omits questions for anything that is not one", () => {
+  // Another tool, and a question whose input does not parse: both must fall
+  // back to the plain approval card, which is the absence of the field.
+  for (const [toolName, input] of [
+    ["Bash", { command: "ls" }],
+    ["AskUserQuestion", { command: "ls" }],
+    ["AskUserQuestion", { questions: [] }],
+    ["AskUserQuestion", askInput({ questions: [{ question: "Why?", options: [] }] })],
+  ] as const) {
+    const ev = permissionRequest("tu-2", toolName, input);
+    assert.equal("questions" in ev, false, `${toolName} ${JSON.stringify(input)}`);
+  }
 });
 
 // --- The answer the SDK reads ---

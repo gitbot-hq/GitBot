@@ -17,7 +17,7 @@ import { bindSession } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcome } from "./bot-prompt";
 import { isJarvisTool, jarvisQueryOptions, stripJarvisReminder, withJarvisReminder } from "./jarvis";
 import { contextUsage, tokensInContext, DEFAULT_CLAUDE_MODEL, type ContextUsage } from "./context-window";
-import { ASK_USER_QUESTION, askUserQuestionLabel } from "./ask-user-question";
+import { ASK_USER_QUESTION, askUserQuestionLabel, parseAskUserQuestion } from "./ask-user-question";
 
 export async function initAgent(): Promise<boolean> {
   try {
@@ -122,7 +122,7 @@ export async function runAgent(store: SessionStore): Promise<void> {
 
             store.pendingPermissions.set(toolUseID, { resolve, input, toolName, toolUseID });
             notifyPermissionsChanged();
-            emitEvent(store, "permission_request", { toolUseID, toolName, input });
+            emitEvent(store, "permission_request", permissionRequest(toolUseID, toolName, input));
 
             signal.addEventListener("abort", () => {
               const p = store.pendingPermissions.get(toolUseID);
@@ -231,6 +231,25 @@ export async function continueAgent(store: SessionStore, prompt: string): Promis
   store.status = "running";
   notifyPermissionsChanged();
   await runAgent(store);
+}
+
+/**
+ * The permission_request event's payload, live and replayed alike — it is what
+ * goes into store.events, so a client rejoining a turn reads the same thing.
+ *
+ * An AskUserQuestion carries its questions already parsed. Parsing happens
+ * here, once, and only here: the browser reads the normalized array off the
+ * wire and never learns the tool's own input shape. The field is absent for
+ * every other tool, and for a question that does not parse, which is what
+ * tells the chat to draw a plain approval card instead of a question card.
+ */
+export function permissionRequest(
+  toolUseID: string,
+  toolName: string,
+  input: unknown,
+): Record<string, unknown> {
+  const questions = toolName === ASK_USER_QUESTION ? parseAskUserQuestion(input) : null;
+  return { toolUseID, toolName, input, ...(questions ? { questions } : {}) };
 }
 
 /** Denies every tool call that is not on the bot's allow-list. */

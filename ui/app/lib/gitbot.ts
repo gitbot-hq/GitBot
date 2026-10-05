@@ -78,10 +78,34 @@ export type HistoryMsg = {
  *  (the server's allow-all-edits mode auto-approves exactly these). */
 export const EDIT_TOOLS = ["Edit", "Write", "NotebookEdit"];
 
+export type AskOption = { label: string; description: string };
+
+/**
+ * One question from Claude Code's AskUserQuestion, as the server sends it.
+ * The server parses the tool's raw input (src/ask-user-question.ts) and puts
+ * the result on the wire, so nothing here has to know the tool's own schema —
+ * these fields are already normalized and present.
+ */
+export type AskQuestion = {
+  /** Short chip label ("Auth method"); the server falls back to the question. */
+  header: string;
+  question: string;
+  multiSelect: boolean;
+  options: AskOption[];
+};
+
+/** What the client sends back: question text → the labels chosen (or the
+ *  words typed under "Other"). The server turns these into the tool's own
+ *  `answers` map; see POST /permission in lib/api.ts. */
+export type AskAnswers = Record<string, string[]>;
+
 export type PermRequest = {
   toolUseID: string;
   toolName: string;
   input: unknown;
+  /** Set only on an AskUserQuestion the server could parse: the chat draws a
+   *  question card instead of an allow/deny card. Absent otherwise. */
+  questions?: AskQuestion[];
 };
 
 export type Message = {

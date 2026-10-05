@@ -2,21 +2,46 @@
 
 import { useMemo, useState } from "react";
 import { IconCheck, IconHelpCircle } from "@tabler/icons-react";
-import {
-  isComplete,
-  pick,
-  type AskAnswers,
-  type AskQuestion,
-} from "../lib/ask-user-question";
+import type { AskAnswers, AskQuestion } from "../lib/gitbot";
 
 // The bot asking the user something, as a card in the conversation. It stands
 // where a plain approval card would: the agent is stopped until this is
 // answered, so it reads as a question and not as a permission to grant.
 //
+// The questions arrive already parsed, on the permission_request event. The
+// only AskUserQuestion parser is the server's (src/ask-user-question.ts); this
+// file knows how to *ask* them and nothing about the tool's input shape.
+//
 // Chosen option labels and the free-text "Other" are held apart, and joined
 // only when the answer is sent. Keeping them separate is what lets a
 // multi-select carry both two options and some typed words without the text
 // box having to find and replace its own earlier value on every keystroke.
+
+/**
+ * Every question has something chosen. The tool offers "Other" on every
+ * question, so there is always a way to answer; an empty "Other" box is not
+ * an answer, and `pick` drops it before it gets here.
+ */
+function isComplete(questions: AskQuestion[], answers: AskAnswers): boolean {
+  return questions.every((q) => (answers[q.question] ?? []).length > 0);
+}
+
+/** Add or remove one value, honouring single- vs multi-select. */
+function pick(answers: AskAnswers, q: AskQuestion, value: string, on: boolean): AskAnswers {
+  const current = answers[q.question] ?? [];
+  if (!q.multiSelect) {
+    const next = { ...answers };
+    if (on && value) next[q.question] = [value];
+    else delete next[q.question];
+    return next;
+  }
+  const without = current.filter((v) => v !== value);
+  const list = on && value ? [...without, value] : without;
+  const next = { ...answers };
+  if (list.length) next[q.question] = list;
+  else delete next[q.question];
+  return next;
+}
 
 type Props = {
   questions: AskQuestion[];

@@ -25,7 +25,6 @@ import LoadingState from "./loading-state";
 import BotFace from "./bot-face";
 import BotName from "./bot-name";
 import AskQuestionCard, { AskAnswerNote } from "./ask-question-card";
-import { isAskUserQuestion, parseAskUserQuestion, type AskAnswers } from "../lib/ask-user-question";
 import {
   ApiError,
   getMessages,
@@ -40,7 +39,14 @@ import {
   type ChatPermissionMode,
   type ContextUsage,
 } from "../lib/api";
-import { EDIT_TOOLS, type HistoryMsg, type PermRequest, type ThreadFull } from "../lib/gitbot";
+import {
+  EDIT_TOOLS,
+  type AskAnswers,
+  type AskQuestion,
+  type HistoryMsg,
+  type PermRequest,
+  type ThreadFull,
+} from "../lib/gitbot";
 import type { AvatarPref } from "../lib/avatar-prefs";
 import { useMascotPointerFollow } from "../lib/use-mascot-pointer-follow";
 import { useScrollEdge } from "../lib/use-scroll-edge";
@@ -1338,13 +1344,19 @@ export default function Chat({
       // On rejoin, only still-pending approvals are offered again.
       if (replayed(ev) && pendingFilter.current && pendingFilter.current.indexOf(d.toolUseID) === -1) return;
       const toolName = String(d.toolName ?? "tool");
+      // The server parses AskUserQuestion and sends the questions normalized;
+      // their presence is what makes this a question rather than an approval.
+      // Replayed events carry the field too — it is part of the stored event.
+      const questions: AskQuestion[] | undefined = Array.isArray(d.questions) && d.questions.length
+        ? (d.questions as AskQuestion[])
+        : undefined;
       setPerms((prev) =>
         prev.some((p) => p.toolUseID === d.toolUseID)
           ? prev
-          : [...prev, { toolUseID: d.toolUseID, toolName, input: d.input }],
+          : [...prev, { toolUseID: d.toolUseID, toolName, input: d.input, questions }],
       );
       // A question wants an answer, not an approval; say which is wanted.
-      setActivity(isAskUserQuestion(toolName, d.input) ? "Waiting for your answer…" : "Waiting for your approval…");
+      setActivity(questions ? "Waiting for your answer…" : "Waiting for your approval…");
     });
     // The agent reported a problem (provider refused, bad model, a connection
     // retry). Not terminal on its own, so the reason is kept only until the
@@ -1619,7 +1631,7 @@ export default function Chat({
     }, 1500);
   }
 
-  /** `answers` only ever comes from a question card; see lib/ask-user-question. */
+  /** `answers` only ever comes from a question card; see ask-question-card. */
   function answerPerm(p: PermRequest, approved: boolean, answers?: AskAnswers) {
     const sid = sessionRef.current;
     if (!sid) return;
@@ -1983,9 +1995,10 @@ export default function Chat({
         )}
         {perms.map((p) => {
           // A question is not a permission to grant: it gets a card that can
-          // be answered. Anything that does not parse as one falls back to
-          // the plain allow/deny card below.
-          const questions = isAskUserQuestion(p.toolName, p.input) ? parseAskUserQuestion(p.input) : null;
+          // be answered. The server sends `questions` only for an input it
+          // parsed as one; anything else falls back to the plain allow/deny
+          // card below.
+          const questions = p.questions;
           if (questions) {
             return p.verdict === undefined ? (
               <AskQuestionCard
