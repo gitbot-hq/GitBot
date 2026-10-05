@@ -73,7 +73,7 @@ export async function runAgent(store: SessionStore): Promise<void> {
 
     // Settle the model before the run so the context meter can name it and
     // size its window correctly from the first assistant message.
-    store.model = store.model ?? "claude-sonnet-4-6";
+    store.model = store.model ?? "claude-opus-5";
 
     const q = query({
       prompt: promptParam,
