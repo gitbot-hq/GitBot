@@ -50,6 +50,7 @@ import {
 import type { AvatarPref } from "../lib/avatar-prefs";
 import { useMascotPointerFollow } from "../lib/use-mascot-pointer-follow";
 import { useScrollEdge } from "../lib/use-scroll-edge";
+import { useStickToBottom } from "../lib/use-stick-to-bottom";
 import { useStatusFavicon } from "../lib/status-favicon";
 import { groupTools, type ToolChip } from "../lib/tool-ui";
 import { parseMarketplaceListing, type MarketplaceListing } from "../lib/marketplace-publish";
@@ -621,9 +622,9 @@ export default function Chat({
   const stopRequestedRef = useRef(false);
   const lastPrompt = useRef("");
   const scrollRef = useRef<HTMLElement | null>(null);
-  const stick = useRef(true);
-  // Render mirror of stick: drives the jump-to-latest button.
-  const [stuck, setStuck] = useState(true);
+  // Follows the newest content, but only while the reader is already at the
+  // tail. `stuck` is the render mirror that drives the jump-to-latest button.
+  const { stuck, onScroll, forceBottom } = useStickToBottom(scrollRef);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
   const reloadTimer = useRef<number | null>(null);
   const escapeStopTimer = useRef<number | null>(null);
@@ -802,11 +803,6 @@ export default function Chat({
     esRef.current = null;
   }
 
-  function scrollDown() {
-    const el = scrollRef.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }
-
   /** `quiet`: refresh what is on screen without the loading skeleton. */
   function loadHistory(tid: string, scroll = false, quiet = false) {
     if (!quiet) setLoading(true);
@@ -827,7 +823,8 @@ export default function Chat({
       .finally(() => {
         if (threadRef.current !== tid) return;
         setLoading(false);
-        if (scroll) requestAnimationFrame(scrollDown);
+        // Opening a thread always lands on its tail, wherever the reader was.
+        if (scroll) forceBottom();
       });
   }
 
@@ -915,8 +912,7 @@ export default function Chat({
     setContextInfo({ model: null, context: null });
     setStreaming(false);
     setOpenGroups({});
-    setStuck(true);
-    stick.current = true;
+    forceBottom();
     catchupRef.current = false;
     pendingFilter.current = null;
     pendingTools.current = [];
@@ -1070,13 +1066,8 @@ export default function Chat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread?.id, autoSend, loading, streaming, msgs.length]);
 
-  // A new or answered approval row follows the conversation down, as a
-  // message would (only while the reader is at the bottom).
-  const approvalsKey = approvals?.map((r) => `${r.id}:${r.state}`).join(",") ?? "";
-  useEffect(() => {
-    if (approvalsKey) requestAnimationFrame(scrollDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [approvalsKey]);
+  // Approval rows follow the conversation down like any other content: the
+  // stick-to-bottom layout effect re-pins after the commit that adds them.
 
   // Report turn activity upward so avatars can react to work.
   useEffect(() => {
@@ -1244,7 +1235,6 @@ export default function Chat({
       setLive((prev) =>
         prev ? { ...prev, shown: liveTextLen(prev.segs) } : prev,
       );
-      requestAnimationFrame(scrollDown);
       reloadTimer.current = window.setTimeout(() => {
         if (threadRef.current !== tid) return;
         getMessages(tid)
@@ -1286,7 +1276,6 @@ export default function Chat({
       onTurnDone();
     } else {
       setLive(null);
-      requestAnimationFrame(scrollDown);
       maybeFlush(tid);
       onTurnDone();
     }
@@ -1430,8 +1419,8 @@ export default function Chat({
     draftRef.current = "";
     if (viewRef.current) drafts.current[viewRef.current] = "";
     resetBox();
-    stick.current = true;
-    requestAnimationFrame(scrollDown);
+    // Queueing a follow-up is a "show me the latest" moment, as sending is.
+    forceBottom();
   }
 
   async function startTurn(prompt: string) {
@@ -1460,8 +1449,8 @@ export default function Chat({
     ]);
     setStreaming(true);
     setActivity("Thinking…");
-    stick.current = true;
-    requestAnimationFrame(scrollDown);
+    // Your own message always brings you back down.
+    forceBottom();
     const epoch = viewEpoch.current;
     const startKey = viewRef.current;
     let tid = thread?.id ?? null;
@@ -1839,13 +1828,10 @@ export default function Chat({
     <button
       type="button"
       className="jump-latest"
-      onClick={() => {
-        const el = scrollRef.current;
-        el?.scrollTo({
-          top: el.scrollHeight,
-          behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-        });
-      }}
+      // Jumps rather than glides: a smooth scroll leaves the reader
+      // un-pinned for its whole animation, so content arriving mid-glide
+      // would be ignored and the landing would fall short of the new tail.
+      onClick={forceBottom}
       aria-label="Jump to latest"
       data-tip="Jump to latest"
       data-tip-pos="above"
@@ -1862,12 +1848,7 @@ export default function Chat({
       <section
         className={setup ? "chat-body setup-chat-body" : "chat-body"}
         ref={scrollRef}
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 96;
-          stick.current = pinned;
-          setStuck(pinned);
-        }}
+        onScroll={onScroll}
       >
         {setup && (
           <SetupIntro
