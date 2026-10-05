@@ -15,7 +15,7 @@ import {
 } from "./server-common";
 import { bindSession } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcome } from "./bot-prompt";
-import { isJarvisTool, jarvisQueryOptions } from "./jarvis";
+import { isJarvisTool, jarvisQueryOptions, stripJarvisReminder, withJarvisReminder } from "./jarvis";
 
 export async function initAgent(): Promise<boolean> {
   try {
@@ -39,7 +39,9 @@ export async function runAgent(store: SessionStore): Promise<void> {
     let modelLogged = false;
 
     const lastUserEvent = [...store.events].reverse().find(e => e.type === "user_prompt");
-    const promptText = (lastUserEvent?.prompt as string) ?? "";
+    const shownText = (lastUserEvent?.prompt as string) ?? "";
+    // Jarvis's turn reminder goes to the agent, not into the shown message.
+    const promptText = store.botPreset?.jarvis ? withJarvisReminder(shownText) : shownText;
     const attachments = lastUserEvent?.attachments as Array<{ url: string }> | undefined;
 
     let promptParam: string | AsyncIterable<any>;
@@ -377,10 +379,12 @@ export async function loadTranscript(
         const rawContent = entry.message?.content;
         const blocks: any[] = [];
         if (typeof rawContent === "string") {
-          if (rawContent) blocks.push({ type: "text", text: rawContent });
+          const text = stripJarvisReminder(rawContent);
+          if (text) blocks.push({ type: "text", text });
         } else if (Array.isArray(rawContent)) {
           for (const b of rawContent) {
-            if (b.type === "text" && b.text) blocks.push({ type: "text", text: b.text });
+            const text = b.type === "text" && b.text ? stripJarvisReminder(b.text) : "";
+            if (text) blocks.push({ type: "text", text });
             else if (b.type === "image" && b.source?.url) blocks.push({ type: "image_url", url: b.source.url });
           }
         }

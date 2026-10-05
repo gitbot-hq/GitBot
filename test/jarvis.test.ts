@@ -25,6 +25,9 @@ import {
   JARVIS_SERVER,
   jarvisQueryOptions,
   listBotsForJarvis,
+  jarvisSystemPrompt,
+  stripJarvisReminder,
+  withJarvisReminder,
 } from "../src/jarvis";
 import { createSession, sessions, type IRequest, type IResponse } from "../src/server-common";
 import { handleRequest } from "../src/server";
@@ -287,6 +290,25 @@ test("Jarvis's prompt replaces the bot framing, and only its own tools are auto-
   assert.ok(isJarvisTool("mcp__gitbot__get_bots"));
   assert.ok(!isJarvisTool("mcp__other__list_bots"));
   assert.ok(!isJarvisTool("Bash"));
+});
+
+test("Jarvis's prompt sorts each request, and delegates code reading with briefs it does not research", () => {
+  const prompt = jarvisSystemPrompt();
+  for (const section of ["YOUR ROLE:", "WHY YOU DELEGATE:", "BASIC TASKS", "YOU DO NOT READ CODE:", "FOLLOW-UPS:", "UPDATES:", "LAST CHECK, EVERY TURN:"]) {
+    assert.ok(prompt.includes(section), section);
+  }
+  assert.match(prompt, /not from your own research/);
+  assert.match(prompt, /checking\s+blast radius or callsites/);
+  // Behaviour first, the tool reference after it.
+  assert.ok(prompt.indexOf("REPORTS:") < prompt.indexOf("YOUR TOOLS"));
+});
+
+test("Jarvis's turn reminder reaches the agent and is stripped from history", () => {
+  const sent = withJarvisReminder("review those changes");
+  assert.match(sent, /^review those changes\n\n<gitbot-reminder>/);
+  assert.equal(stripJarvisReminder(sent), "review those changes");
+  assert.equal(stripJarvisReminder(withJarvisReminder("")), "");
+  assert.equal(stripJarvisReminder("a message that mentions <gitbot-reminder> mid-text"), "a message that mentions <gitbot-reminder> mid-text");
 });
 
 // --- A live Jarvis session's settings ---
