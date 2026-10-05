@@ -1,6 +1,6 @@
 import AppProviders from "./components/app-providers";
 import DesktopNotice from "./components/desktop-notice";
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import "./components/mascot-depth.css";
 import { MascotDepthDefs } from "./components/mascot-depth";
@@ -26,6 +26,21 @@ export const metadata: Metadata = {
       },
     ],
   },
+};
+
+// Locks the page at 1x on Android, where the reported accidental pinching
+// happened: Chrome honours `userScalable: false`. iOS Safari does NOT — it has
+// ignored both `user-scalable` and `maximum-scale` for user-initiated pinch
+// since iOS 10, and `touch-action` does not reach the page-level gesture
+// either, so pinch still works there. `maximumScale: 1` does one thing on iOS:
+// it suppresses the auto zoom-to-fit when an input under 16px takes focus.
+// GitBot is a dense two-pane tool, not a document — an accidental pinch leaves
+// the shell half off-screen with no obvious way back.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
 };
 
 // Runs before paint: restores saved theme, else follows the OS.

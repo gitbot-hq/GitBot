@@ -132,6 +132,19 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  /* Both scroll axes stay live; pinch-zoom and double-tap-zoom do not.
+     NOT `manipulation` — that value explicitly preserves pinch-zoom (it only
+     drops double-tap). NEVER `none` — that kills touch scrolling outright. */
+  touch-action: pan-x pan-y;
+  /* Opts out of mobile text autosizing, which inflates the font in wide text
+     blocks (iOS Safari, notably on rotation to landscape). Independent of the
+     viewport meta. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
   background: var(--bg);
