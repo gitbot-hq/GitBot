@@ -16,7 +16,7 @@ import {
 import { bindSession } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcome } from "./bot-prompt";
 import { isJarvisTool, jarvisQueryOptions, stripJarvisReminder, withJarvisReminder } from "./jarvis";
-import { contextUsage, tokensInContext, type ContextUsage } from "./context-window";
+import { contextUsage, tokensInContext, DEFAULT_CLAUDE_MODEL, type ContextUsage } from "./context-window";
 
 export async function initAgent(): Promise<boolean> {
   try {
@@ -73,7 +73,7 @@ export async function runAgent(store: SessionStore): Promise<void> {
 
     // Settle the model before the run so the context meter can name it and
     // size its window correctly from the first assistant message.
-    store.model = store.model ?? "claude-opus-5";
+    store.model = store.model ?? DEFAULT_CLAUDE_MODEL;
 
     const q = query({
       prompt: promptParam,

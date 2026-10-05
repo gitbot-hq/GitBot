@@ -22,6 +22,14 @@ const MILLION = 1_000_000;
 /** What Claude Code assumes for any model that does not ask for the long window. */
 const DEFAULT_WINDOW = 200_000;
 
+/**
+ * The model a Claude Code thread runs when neither the thread nor its bot pins
+ * one. The [1m] suffix is load-bearing: a bare `claude-opus-5` still resolves
+ * to the 200k window, so the long window has to be asked for by name rather
+ * than assumed from the model generation.
+ */
+export const DEFAULT_CLAUDE_MODEL = "claude-opus-5[1m]";
+
 /** The [1m] suffix is how the SDK is told to budget a 1M window; mirror that rule. */
 export function contextWindowFor(model?: string): number {
   return model?.includes("[1m]") ? MILLION : DEFAULT_WINDOW;

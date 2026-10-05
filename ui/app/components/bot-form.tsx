@@ -466,7 +466,7 @@ export default function BotForm({
             <input
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder="claude-sonnet-4-6"
+              placeholder="claude-opus-5[1m]"
             />
           </Field>
           <Field label="Allowed tools" tip="comma-separated; blank means all">

@@ -74,7 +74,7 @@ All three agents get the same bot framing — the job prompt, the setup prompt a
 
 `allowedTools` is a restriction, not an auto-approve list: whether a tool needs approval is decided by the permission mode alone. It is not applied to a bot's setup run, which may need tools the job itself never uses.
 
-**Claude Code** (`claude-code`) uses `@anthropic-ai/claude-agent-sdk`'s `query()`. The default model is `claude-sonnet-4-6`. Approvals come through the SDK's `canUseTool` callback. It loads your Claude settings, so bots can use the MCP servers you have configured; a bot's allow-list is enforced with the SDK's `tools` option plus a pre-tool hook, which is what covers MCP tools.
+**Claude Code** (`claude-code`) uses `@anthropic-ai/claude-agent-sdk`'s `query()`. The default model is `claude-opus-5[1m]`; the `[1m]` suffix is what selects the 1M context window, as a bare `claude-opus-5` still gets 200k. Approvals come through the SDK's `canUseTool` callback. It loads your Claude settings, so bots can use the MCP servers you have configured; a bot's allow-list is enforced with the SDK's `tools` option plus a pre-tool hook, which is what covers MCP tools.
 
 **OpenCode** (`opencode`) uses `@opencode-ai/sdk`. gitbot starts an OpenCode server (or connects to one already on port 4096), keeps one client per folder, and listens to OpenCode's event stream, reconnecting after two seconds if it drops. Bots need a `model` in `provider/model` form; OpenCode's free default model refuses requests made through the SDK.
 

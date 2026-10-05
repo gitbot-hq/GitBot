@@ -3,7 +3,7 @@ import { BOT_AGENTS, getBot, getThread, isJarvisBot, listBots, listThreads, type
 import { projectId, projectIdForFolder, projectNames } from "./project-index";
 import { sessions, type SessionStore } from "./server-common";
 import { loadTranscript as loadClaudeTranscript, loadTranscriptContext } from "./start-claude-code";
-import type { ContextUsage } from "./context-window";
+import { DEFAULT_CLAUDE_MODEL, type ContextUsage } from "./context-window";
 import { loadTranscript as loadCodexTranscript } from "./start-codex";
 import { getSessionHistory as loadOpencodeHistory } from "./start-opencode";
 
@@ -44,7 +44,11 @@ export async function threadContext(thread: Thread): Promise<ContextUsage | null
   const live = [...sessions.values()].reverse().find((s) => s.threadId === thread.id && s.context);
   if (live?.context) return live.context;
   if (!thread.sdkSessionId) return null;
-  return loadTranscriptContext(thread.sdkSessionId, thread.repoPath, getBot(thread.botId)?.model);
+  // A bot that pins no model runs the default, so the meter has to size itself
+  // the same way: the transcript's own model name is the bare API one and never
+  // carries the [1m] suffix, so falling back to it would read 200k.
+  const model = getBot(thread.botId)?.model ?? DEFAULT_CLAUDE_MODEL;
+  return loadTranscriptContext(thread.sdkSessionId, thread.repoPath, model);
 }
 
 // --- Caps ---
