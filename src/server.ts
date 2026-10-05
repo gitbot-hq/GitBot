@@ -145,6 +145,7 @@ export async function handleRequest(
         model: store.model ?? null,
         mode: store.mode ?? null,
         permissionMode: store.permissionMode,
+        context: store.context ?? null,
       });
       return;
     }

@@ -36,6 +36,7 @@ import {
   postPermission,
   streamUrl,
   type ChatPermissionMode,
+  type ContextUsage,
 } from "../lib/api";
 import { EDIT_TOOLS, type HistoryMsg, type PermRequest, type ThreadFull } from "../lib/gitbot";
 import type { AvatarPref } from "../lib/avatar-prefs";
@@ -562,6 +563,8 @@ export default function Chat({
   const [copyErrorId, setCopyErrorId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [escapeStopArmed, setEscapeStopArmed] = useState(false);
+  /** Model name and context-window occupancy for the current session. */
+  const [contextInfo, setContextInfo] = useState<{ model: string | null; context: ContextUsage | null }>({ model: null, context: null });
   const [activeMenu, setActiveMenu] = useState<"share" | "more" | "permissions" | null>(null);
   const setShareOpen = useCallback((open: boolean) => setActiveMenu(open ? "share" : null), []);
   const moreButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -897,6 +900,7 @@ export default function Chat({
     setLoading(false);
     setTurnError(null);
     setActivity(null);
+    setContextInfo({ model: null, context: null });
     setStreaming(false);
     setOpenGroups({});
     setStuck(true);
@@ -966,9 +970,15 @@ export default function Chat({
         // its own, not the bot's default.
         const adoptMode = () =>
           getSessionConfig(sid)
-            .then(({ permissionMode, mode }) => {
+            .then(({ permissionMode, mode, model, context }) => {
               if (threadRef.current !== tid) return;
               rememberMode(tid, mode === "plan" ? "plan" : permissionMode);
+              if (model !== undefined) {
+                setContextInfo(prev => ({
+                  model: model ?? prev.model,
+                  context: context ?? prev.context,
+                }));
+              }
             })
             .catch(() => {});
         if (!streaming) {
@@ -1335,6 +1345,15 @@ export default function Chat({
       if (shown(ev)) return;
       setTurnError(String(data(ev).message ?? "The agent reported an error"));
     });
+    es.addEventListener("context", (ev) => {
+      const d = data(ev) as Partial<ContextUsage>;
+      if (d.used && d.window) {
+        setContextInfo(prev => ({
+          model: (d.model ?? prev.model) || prev.model,
+          context: { used: d.used!, window: d.window!, model: d.model ?? "", label: d.label ?? "" },
+        }));
+      }
+    });
     es.addEventListener("aborted", () => {
       setMsgs((prev) => [
         ...prev,
@@ -1673,8 +1692,34 @@ export default function Chat({
     enabled: !!botId && !setup && (!thread || showThreadEmpty),
   });
 
+  const { model: ctxModel, context: ctx } = contextInfo;
+  const ctxPct = ctx && ctx.window > 0 ? Math.min(100, Math.round((ctx.used / ctx.window) * 100)) : 0;
+  const ctxFull = ctxPct >= 75;
+  const ctxLit = ctx ? Math.min(10, Math.max(1, Math.ceil(ctxPct / 10))) : 0;
+  const fmtTokens = (n: number) => n < 1000 ? String(n) : `${Math.round(n / 1000)}k`;
+  const ctxLabel = ctx
+    ? `${ctx.label || ctxModel || ""} — ${ctx.used.toLocaleString()} of ${ctx.window.toLocaleString()} tokens in context (${ctxPct}% used)`
+    : undefined;
+  // Strip "(1M context)" tail — "/1000k" already implies it.
+  const ctxModelDisplay = (() => {
+    const name = ctx?.label || ctxModel || "";
+    const tail = name.indexOf(" (1M");
+    return tail === -1 ? name : name.slice(0, tail);
+  })();
+
   const toolbar = (onShare || onOpenBot || onNewThread) && (
     <div className="chat-toolbar" aria-label="Chat actions">
+      {ctx && (
+        <div className={`chat-ctx${ctxFull ? " chat-ctx-full" : ""}`} title={ctxLabel} aria-label={ctxLabel}>
+          {ctxModelDisplay && <span className="chat-ctx-model">{ctxModelDisplay}</span>}
+          <span className="chat-ctx-dots" aria-hidden="true">
+            {Array.from({ length: 10 }, (_, i) => (
+              <i key={i} className={i < ctxLit ? "on" : undefined} />
+            ))}
+          </span>
+          <span className="chat-ctx-num">{fmtTokens(ctx.used)}/{fmtTokens(ctx.window)} ({ctxPct}%)</span>
+        </div>
+      )}
       {onShare && <ShareDropdown open={activeMenu === "share"} onOpenChange={setShareOpen} onShare={onShare} />}
       {(onOpenBot || onNewThread) && (
         <div className="chat-toolbar-action">

@@ -109,8 +109,15 @@ export function patchPermissionMode(sessionId: string, permissionMode: SessionPe
   );
 }
 
+export interface ContextUsage {
+  used: number;
+  window: number;
+  model: string;
+  label: string;
+}
+
 export function getSessionConfig(sessionId: string) {
-  return req<{ permissionMode: SessionPermissionMode; mode?: string | null }>(
+  return req<{ permissionMode: SessionPermissionMode; mode?: string | null; model?: string | null; context?: ContextUsage | null }>(
     `/sessions/${encodeURIComponent(sessionId)}/config`,
   );
 }

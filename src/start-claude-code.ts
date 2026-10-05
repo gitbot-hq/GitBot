@@ -16,6 +16,7 @@ import {
 import { bindSession } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcome } from "./bot-prompt";
 import { isJarvisTool, jarvisQueryOptions, stripJarvisReminder, withJarvisReminder } from "./jarvis";
+import { contextUsage, tokensInContext } from "./context-window";
 
 export async function initAgent(): Promise<boolean> {
   try {
@@ -70,10 +71,14 @@ export async function runAgent(store: SessionStore): Promise<void> {
     const preset = store.botPreset;
     const append = presetSystemPrompt(preset);
 
+    // Settle the model before the run so the context meter can name it and
+    // size its window correctly from the first assistant message.
+    store.model = store.model ?? "claude-sonnet-4-6";
+
     const q = query({
       prompt: promptParam,
       options: {
-        model: store.model ?? "claude-sonnet-4-6",
+        model: store.model,
         permissionMode: store.mode === "plan" ? "plan" : "default",
         abortController,
         includePartialMessages: true,
@@ -146,6 +151,17 @@ export async function runAgent(store: SessionStore): Promise<void> {
         }
 
         if (msg.type === "result") receivedResult = true;
+
+        // Context meter: an assistant message reports what the request carried
+        // and what it wrote — together that is what the next request will resend.
+        // The result message tells us the window the SDK actually budgeted.
+        if (msg.type === "assistant") {
+          const used = tokensInContext((msg as any).message?.usage);
+          if (used > 0) reportContext(store, used);
+        } else if (msg.type === "result") {
+          const window = (msg as any).modelUsage?.[store.model ?? ""]?.contextWindow;
+          reportContext(store, store.context?.used ?? 0, window);
+        }
 
         if (!modelLogged && msg.type === "assistant" && (msg as any).message?.model) {
           modelLogged = true;
@@ -233,6 +249,19 @@ function allowListHooks(allowedTools: string[], botName: string): Options["hooks
       }],
     }],
   };
+}
+
+/**
+ * Publishes how full the context window is: live to the open SSE stream,
+ * and stored on the session so a reconnecting client can read it from
+ * GET /sessions/:id/config.
+ */
+function reportContext(store: SessionStore, used: number, window?: number): void {
+  if (!used && window === undefined) return;
+  const next = contextUsage(used || store.context?.used || 0, store.model, window);
+  const changed = JSON.stringify(next) !== JSON.stringify(store.context);
+  store.context = next;
+  if (changed) emitEvent(store, "context", next as unknown as Record<string, unknown>);
 }
 
 export function formatMessage(

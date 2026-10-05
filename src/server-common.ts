@@ -229,6 +229,8 @@ export interface SessionStore {
   model?: string;
   mode?: "plan" | "build";
   permissionMode: PermissionMode;
+  /** Most recent context-window snapshot, updated live during a turn. */
+  context?: import("./context-window").ContextUsage;
   seq: number;
   events: StoredEvent[];
   status: "running" | "done" | "error";

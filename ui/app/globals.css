@@ -564,6 +564,59 @@ pre {
   color: var(--text);
 }
 
+/* Context meter: model chip + 10-dot fill bar + token count. */
+.chat-ctx {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.chat-ctx-model {
+  font-weight: 500;
+  color: var(--text);
+  font-size: var(--text-xs);
+}
+
+.chat-ctx-dots {
+  display: flex;
+  gap: 2px;
+  flex: none;
+}
+
+.chat-ctx-dots i {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--border);
+  font-style: normal;
+}
+
+.chat-ctx-dots i.on {
+  background: var(--muted);
+}
+
+/* Past three-quarters full the meter turns red. */
+.chat-ctx-full .chat-ctx-dots i.on {
+  background: var(--danger);
+}
+
+.chat-ctx-full .chat-ctx-num {
+  color: var(--danger);
+}
+
+.chat-ctx-num {
+  font-variant-numeric: tabular-nums;
+}
+
 .chat-options-menu {
   position: absolute;
   top: calc(100% + 6px);
