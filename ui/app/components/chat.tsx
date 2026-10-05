@@ -802,8 +802,10 @@ export default function Chat({
     if (!quiet) setLoading(true);
     setHistoryError(null);
     getMessages(tid)
-      .then(({ messages }) => {
+      .then(({ messages, context }) => {
         if (threadRef.current !== tid) return;
+        // The thread's last context reading, so the meter shows on open.
+        if (context) setContextInfo(prev => ({ model: context.model || prev.model, context }));
         const flat = flattenMsgs(messages);
         applyOverlays(tid, flat);
         setMsgs(flat);

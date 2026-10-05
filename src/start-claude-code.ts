@@ -16,7 +16,7 @@ import {
 import { bindSession } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcome } from "./bot-prompt";
 import { isJarvisTool, jarvisQueryOptions, stripJarvisReminder, withJarvisReminder } from "./jarvis";
-import { contextUsage, tokensInContext } from "./context-window";
+import { contextUsage, tokensInContext, type ContextUsage } from "./context-window";
 
 export async function initAgent(): Promise<boolean> {
   try {
@@ -155,7 +155,8 @@ export async function runAgent(store: SessionStore): Promise<void> {
         // Context meter: an assistant message reports what the request carried
         // and what it wrote — together that is what the next request will resend.
         // The result message tells us the window the SDK actually budgeted.
-        if (msg.type === "assistant") {
+        // A subagent's messages carry its own window, not this session's.
+        if (msg.type === "assistant" && !(msg as any).parent_tool_use_id) {
           const used = tokensInContext((msg as any).message?.usage);
           if (used > 0) reportContext(store, used);
         } else if (msg.type === "result") {
@@ -450,6 +451,53 @@ export async function loadTranscript(
     console.error("Error reading transcript:", err.message);
     return [];
   }
+}
+
+/**
+ * How full a session's context window was at the end of its transcript: the
+ * last main-thread assistant message's usage, as the live meter reads it. For
+ * a thread opened when no turn has run since gitbot started. `model` is the
+ * one the run was configured with, when known: only it carries the [1m]
+ * suffix that sizes a long window.
+ */
+export async function loadTranscriptContext(
+  sessionId: string,
+  cwd: string,
+  model?: string,
+): Promise<ContextUsage | null> {
+  const transcriptPath = join(projectDir(cwd), `${sessionId}.jsonl`);
+  if (!existsSync(transcriptPath)) return null;
+  let used = 0;
+  let seenModel: string | undefined;
+  try {
+    const rl = createInterface({
+      input: createReadStream(transcriptPath, { encoding: "utf-8" }),
+      crlfDelay: Infinity,
+    });
+    for await (const line of rl) {
+      // Cheap pre-filter: most lines are not assistant messages.
+      if (!line.includes('"assistant"')) continue;
+      let entry: any;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (entry.type !== "assistant" || entry.isSidechain) continue;
+      const tokens = tokensInContext(entry.message?.usage);
+      if (tokens > 0) {
+        used = tokens;
+        seenModel = entry.message?.model;
+      }
+    }
+  } catch (err: any) {
+    console.error("Error reading transcript context:", err.message);
+    return null;
+  }
+  if (!used) return null;
+  const usage = contextUsage(used, model ?? seenModel);
+  // More than the default window can only mean the run had the long one.
+  return used > usage.window ? contextUsage(used, model ?? seenModel, 1_000_000) : usage;
 }
 
 async function getSessionPreview(filePath: string): Promise<string> {

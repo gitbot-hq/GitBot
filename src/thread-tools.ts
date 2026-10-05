@@ -2,7 +2,8 @@ import { basename } from "path";
 import { BOT_AGENTS, getBot, getThread, isJarvisBot, listBots, listThreads, type Bot, type BotAgent, type Thread } from "./bot-store";
 import { projectId, projectIdForFolder, projectNames } from "./project-index";
 import { sessions, type SessionStore } from "./server-common";
-import { loadTranscript as loadClaudeTranscript } from "./start-claude-code";
+import { loadTranscript as loadClaudeTranscript, loadTranscriptContext } from "./start-claude-code";
+import type { ContextUsage } from "./context-window";
 import { loadTranscript as loadCodexTranscript } from "./start-codex";
 import { getSessionHistory as loadOpencodeHistory } from "./start-opencode";
 
@@ -32,6 +33,18 @@ export async function loadThreadMessages(thread: Thread): Promise<TranscriptMess
   // Older threads, or an agent this build does not know: Claude Code, as ever.
   const load = transcriptLoaders[thread.agent as BotAgent] ?? transcriptLoaders["claude-code"];
   return load(thread.sdkSessionId, thread.repoPath);
+}
+
+/**
+ * How full a thread's context window is, for the meter: the live reading when
+ * a session in memory has one, else the transcript's last. Claude Code only.
+ */
+export async function threadContext(thread: Thread): Promise<ContextUsage | null> {
+  if ((thread.agent ?? "claude-code") !== "claude-code") return null;
+  const live = [...sessions.values()].reverse().find((s) => s.threadId === thread.id && s.context);
+  if (live?.context) return live.context;
+  if (!thread.sdkSessionId) return null;
+  return loadTranscriptContext(thread.sdkSessionId, thread.repoPath, getBot(thread.botId)?.model);
 }
 
 // --- Caps ---

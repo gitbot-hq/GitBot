@@ -36,7 +36,7 @@ import {
   type Thread,
 } from "./bot-store";
 import { existsSync, statSync } from "fs";
-import { loadThreadMessages } from "./thread-tools";
+import { loadThreadMessages, threadContext } from "./thread-tools";
 
 /**
  * REST surface for the bot hub: bots, their threads, and a thread's messages.
@@ -190,7 +190,9 @@ export async function handleBotRoutes(
     const thread = getThread(messagesId);
     if (!thread) { jsonError(res, 404, "Thread not found"); return true; }
     // A thread that has not had a turn yet has no transcript on disk.
-    jsonOk(res, { messages: await loadThreadMessages(thread) });
+    // The context meter rides along, so a thread shows it as soon as it opens.
+    const [messages, context] = await Promise.all([loadThreadMessages(thread), threadContext(thread)]);
+    jsonOk(res, { messages, context });
     return true;
   }
 

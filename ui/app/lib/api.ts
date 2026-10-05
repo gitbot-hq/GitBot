@@ -53,7 +53,7 @@ export function getThread(threadId: string) {
 }
 
 export function getMessages(threadId: string) {
-  return req<{ messages: import("./gitbot").HistoryMsg[] }>(
+  return req<{ messages: import("./gitbot").HistoryMsg[]; context?: ContextUsage | null }>(
     `/threads/${encodeURIComponent(threadId)}/messages`,
   );
 }
