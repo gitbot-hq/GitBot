@@ -31,6 +31,7 @@ import { releaseToUser } from "./send-to-thread";
 import { watchChildReports } from "./reports";
 import { noteChildStopped } from "./child-lock";
 import { answerChildApprovals, watchChildApprovals } from "./child-approvals";
+import { isAskUserQuestion, withAskAnswers, type AskAnswers } from "./ask-user-question";
 import { recoverInterruptedChildren, watchRunningMarks } from "./restart-recovery";
 import { watchJarvisActivity } from "./attention";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
@@ -233,7 +234,7 @@ export async function handleRequest(
         ?? [...sessions.values()].find(s => s.sdkSessionId === permBase);
       if (!store) { jsonError(res, 404, "Session not found"); return; }
       const body = await readBody(req);
-      const { toolUseID, approved, updatedInput } = body;
+      const { toolUseID, approved, updatedInput, answers } = body;
       if (!toolUseID) { jsonError(res, 400, "toolUseID is required"); return; }
       console.log(`[permission] id=${toolUseID} approved=${approved}`);
 
@@ -241,9 +242,16 @@ export async function handleRequest(
         const pending = store.pendingPermissions.get(toolUseID);
         if (pending) {
           store.pendingPermissions.delete(toolUseID);
+          // An answered question is still an "allow": the tool reads what the
+          // user chose out of its own input (see ask-user-question.ts), so the
+          // answers ride back as updatedInput rather than as a tool result.
+          const question = isAskUserQuestion(pending.toolName, pending.input);
+          const allowInput = question && answers && typeof answers === "object"
+            ? withAskAnswers(pending.input, answers as AskAnswers)
+            : updatedInput ?? pending.input;
           pending.resolve(approved
-            ? { behavior: "allow", updatedInput: updatedInput ?? pending.input }
-            : { behavior: "deny", message: "User denied" }
+            ? { behavior: "allow", updatedInput: allowInput }
+            : { behavior: "deny", message: question ? "User declined to answer the questions" : "User denied" }
           );
           // A Jarvis-owned child's row says how, before the change is broadcast.
           answerChildApprovals(store, [toolUseID], !!approved);

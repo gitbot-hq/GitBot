@@ -3,6 +3,7 @@ import {
   IconFilePlus,
   IconFileText,
   IconFolder,
+  IconHelpCircle,
   IconPencil,
   IconSearch,
   IconTerminal2,
@@ -29,6 +30,7 @@ export const TOOL_ICONS: Record<string, typeof IconBolt> = {
   Glob: IconFolder,
   Edit: IconPencil,
   Write: IconFilePlus,
+  AskUserQuestion: IconHelpCircle,
 };
 
 // Verb + singular/plural noun per known tool for grouped rows.
@@ -40,6 +42,7 @@ const VERB_MAP: Record<string, [string, string, string]> = {
   Bash: ["Running", "command", "commands"],
   Edit: ["Editing", "edit", "edits"],
   Write: ["Writing", "file", "files"],
+  AskUserQuestion: ["Asking", "question", "questions"],
 };
 
 export function pluralNoun(name: string, count: number): string {

@@ -1,5 +1,6 @@
 import { getBot, getThread, setThreadApprovals, type ChildApproval } from "./bot-store";
 import { isShuttingDown, permissionsEmitter, sessions, turnReportsTo, type SessionStore } from "./server-common";
+import { askUserQuestionLabel, isAskUserQuestion } from "./ask-user-question";
 
 // Approvals in Jarvis. A child that Jarvis owns and that waits on an approval
 // shows up as a row in its Jarvis thread. gitbot places the row; Jarvis never
@@ -17,6 +18,12 @@ const recorded = new Map<string, string>();
 export function approvalLabel(toolName: string, input: unknown): string {
   const i = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
   const pick = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  // A question is not a thing to run: name what was asked, so the row says
+  // why the child stopped rather than "AskUserQuestion".
+  if (isAskUserQuestion(toolName, input)) {
+    const asked = askUserQuestionLabel(input);
+    return asked.length > 120 ? `${asked.slice(0, 119)}…` : asked;
+  }
   const command = pick(i.command);
   const file = pick(i.file_path) ?? pick(i.filePath) ?? pick(i.notebook_path) ?? pick(i.path);
   const text = command ?? (file ? `${toolName} ${file}` : toolName);

@@ -24,6 +24,8 @@ import remarkGfm from "remark-gfm";
 import LoadingState from "./loading-state";
 import BotFace from "./bot-face";
 import BotName from "./bot-name";
+import AskQuestionCard, { AskAnswerNote } from "./ask-question-card";
+import { isAskUserQuestion, parseAskUserQuestion, type AskAnswers } from "../lib/ask-user-question";
 import {
   ApiError,
   getMessages,
@@ -549,7 +551,9 @@ export default function Chat({
   const [stoppingSession, setStoppingSession] = useState<string | null>(null);
   const stoppingChild = !!lock && stoppingSession === lock.sessionId;
   const [activity, setActivity] = useState<string | null>(null);
-  const [perms, setPerms] = useState<(PermRequest & { verdict?: boolean })[]>([]);
+  // `answers` is kept after the fact so an answered question can still say
+  // what was chosen: the transcript has the tool call, not the reply.
+  const [perms, setPerms] = useState<(PermRequest & { verdict?: boolean; answers?: AskAnswers; busy?: boolean })[]>([]);
   const [turnError, setTurnError] = useState<string | null>(null);
   // Single "up next" slot: the server runs one turn per thread (a second
   // POST /chat mid-turn is a 409), so follow-ups sent while streaming wait
@@ -1333,12 +1337,14 @@ export default function Chat({
       if (!d.toolUseID) return;
       // On rejoin, only still-pending approvals are offered again.
       if (replayed(ev) && pendingFilter.current && pendingFilter.current.indexOf(d.toolUseID) === -1) return;
+      const toolName = String(d.toolName ?? "tool");
       setPerms((prev) =>
         prev.some((p) => p.toolUseID === d.toolUseID)
           ? prev
-          : [...prev, { toolUseID: d.toolUseID, toolName: String(d.toolName ?? "tool"), input: d.input }],
+          : [...prev, { toolUseID: d.toolUseID, toolName, input: d.input }],
       );
-      setActivity("Waiting for your approval…");
+      // A question wants an answer, not an approval; say which is wanted.
+      setActivity(isAskUserQuestion(toolName, d.input) ? "Waiting for your answer…" : "Waiting for your approval…");
     });
     // The agent reported a problem (provider refused, bad model, a connection
     // retry). Not terminal on its own, so the reason is kept only until the
@@ -1613,16 +1619,20 @@ export default function Chat({
     }, 1500);
   }
 
-  function answerPerm(p: PermRequest, approved: boolean) {
+  /** `answers` only ever comes from a question card; see lib/ask-user-question. */
+  function answerPerm(p: PermRequest, approved: boolean, answers?: AskAnswers) {
     const sid = sessionRef.current;
     if (!sid) return;
-    postPermission(sid, p.toolUseID, approved)
-      .then(() =>
-        setPerms((prev) =>
-          prev.map((x) => (x.toolUseID === p.toolUseID ? { ...x, verdict: approved } : x)),
-        ),
-      )
-      .catch((e) => setTurnError(errText(e)));
+    const mark = (patch: Partial<(typeof perms)[number]>) =>
+      setPerms((prev) => prev.map((x) => (x.toolUseID === p.toolUseID ? { ...x, ...patch } : x)));
+    mark({ busy: true });
+    postPermission(sid, p.toolUseID, approved, answers)
+      .then(() => mark({ verdict: approved, busy: false, answers }))
+      .catch((e) => {
+        // The agent is still waiting: leave the card up so it can be answered again.
+        mark({ busy: false });
+        setTurnError(errText(e));
+      });
   }
 
   /** Remember the thread's chosen mode; the bot's own default = no entry. */
@@ -1971,8 +1981,29 @@ export default function Chat({
             </div>
           </div>
         )}
-        {perms.map((p) =>
-          p.verdict === undefined ? (
+        {perms.map((p) => {
+          // A question is not a permission to grant: it gets a card that can
+          // be answered. Anything that does not parse as one falls back to
+          // the plain allow/deny card below.
+          const questions = isAskUserQuestion(p.toolName, p.input) ? parseAskUserQuestion(p.input) : null;
+          if (questions) {
+            return p.verdict === undefined ? (
+              <AskQuestionCard
+                key={p.toolUseID}
+                questions={questions}
+                busy={p.busy}
+                onSubmit={(answers) => answerPerm(p, true, answers)}
+                onDecline={() => answerPerm(p, false)}
+              />
+            ) : (
+              <AskAnswerNote
+                key={p.toolUseID}
+                questions={questions}
+                answers={p.verdict ? p.answers ?? {} : {}}
+              />
+            );
+          }
+          return p.verdict === undefined ? (
             <div key={p.toolUseID} className="perm-card">
               <b>Allow {p.toolName}?</b>
               <pre>{JSON.stringify(p.input, null, 2)}</pre>
@@ -2004,8 +2035,8 @@ export default function Chat({
             <p key={p.toolUseID} className="perm-note">
               {(p.verdict ? "Allowed " : "Denied ") + p.toolName}
             </p>
-          ),
-        )}
+          );
+        })}
         {turnError && (
           <p className="chat-error">
             {turnError}{" "}

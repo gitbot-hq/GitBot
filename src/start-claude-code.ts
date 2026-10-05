@@ -17,6 +17,7 @@ import { bindSession } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcome } from "./bot-prompt";
 import { isJarvisTool, jarvisQueryOptions, stripJarvisReminder, withJarvisReminder } from "./jarvis";
 import { contextUsage, tokensInContext, DEFAULT_CLAUDE_MODEL, type ContextUsage } from "./context-window";
+import { ASK_USER_QUESTION, askUserQuestionLabel } from "./ask-user-question";
 
 export async function initAgent(): Promise<boolean> {
   try {
@@ -607,6 +608,10 @@ function formatToolInput(toolName: string, input: Record<string, unknown>): stri
       return `"${input.query}"`;
     case "NotebookEdit":
       return `${input.notebook_path} (${input.edit_mode || "replace"})`;
+    // A question reads as what was asked, both live and replayed from the
+    // transcript, where the chip is all that is left of it.
+    case ASK_USER_QUESTION:
+      return askUserQuestionLabel(input);
     case "TodoWrite": {
       const todos = input.todos as { content: string; status: string }[] | null | undefined;
       if (!Array.isArray(todos)) return JSON.stringify(input);

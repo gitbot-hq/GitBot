@@ -122,14 +122,18 @@ export function getSessionConfig(sessionId: string) {
   );
 }
 
+/** `answers` is for AskUserQuestion only (question text → the labels chosen
+ *  or the words typed). The server turns it into the shape that tool reads;
+ *  every other approval is just approved or not. */
 export function postPermission(
   sessionId: string,
   toolUseID: string,
   approved: boolean,
+  answers?: Record<string, string[]>,
 ) {
   return req<{ ok: boolean }>(
     `/sessions/${encodeURIComponent(sessionId)}/permission`,
-    { method: "POST", body: JSON.stringify({ toolUseID, approved }) },
+    { method: "POST", body: JSON.stringify({ toolUseID, approved, ...(answers ? { answers } : {}) }) },
   );
 }
 

@@ -180,6 +180,12 @@ export type PermissionMode = "ask-permissions" | "allow-all-edits" | "yolo";
 
 export const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
 
+/**
+ * Tools no permission mode may auto-approve, not even yolo. Their whole point
+ * is to reach the person: an AskUserQuestion approved without being read is a
+ * question answered with nothing, and the agent is told so. These always wait
+ * for an answer, however permissive the mode.
+ */
 export const TOOL_BLACKLIST: Record<"claude-code" | "opencode" | "codex", Set<string>> = {
   "claude-code": new Set(["ExitPlanMode", "AskUserQuestion"]),
   "opencode": new Set(),
