@@ -815,6 +815,34 @@ pre {
   color: #f5f5f5;
 }
 
+/* --- Plan panel --- */
+/* The agent's todo list, kept above the composer so the current step is always
+   in view. Collapsed to a single line by default; the list it hides is capped
+   in height so a long plan can never crowd out the conversation.
+   .plan-bar carries its own button reset — GitBot has no global one. */
+.plan { margin-bottom: 9px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); overflow: hidden; }
+.plan-bar {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 9px 12px; text-align: left;
+  font: inherit; font-size: 12.5px; color: inherit; cursor: pointer; background: none; border: 0;
+}
+.plan-now { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.plan.active .plan-now { color: var(--accent); font-weight: 500; }
+.plan-count { flex: none; color: var(--faint); font-variant-numeric: tabular-nums; }
+.plan-chev { flex: none; color: var(--faint); font-size: 15px; line-height: 1; transition: transform .15s ease; }
+.plan.open .plan-chev { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .plan-chev { transition: none; } }
+.plan-list {
+  margin: 0; padding: 3px 12px 10px; list-style: none;
+  max-height: 33vh; overflow-y: auto; border-top: 1px solid var(--border);
+}
+.plan-item { display: flex; gap: 9px; align-items: baseline; padding: 4px 0; font-size: 13px; }
+.plan-mark { flex: none; width: 13px; text-align: center; color: var(--faint); }
+.plan-item.in_progress .plan-mark, .plan-item.in_progress { color: var(--accent); }
+.plan-item.in_progress { font-weight: 500; }
+.plan-item.completed { color: var(--faint); text-decoration: line-through; }
+.plan-item.completed .plan-mark { color: var(--ok); text-decoration: none; }
+
 /* Queued-message tray: compact cap docked above the composer pill.
    Narrower than the pill (24px inset each side), top corners rounded.
    A 1px gap below lets the pill's own border remain visible, creating
