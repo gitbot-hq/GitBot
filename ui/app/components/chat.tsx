@@ -46,6 +46,7 @@ import {
   type HistoryMsg,
   type PermRequest,
   type ThreadFull,
+  type TodoItem,
 } from "../lib/gitbot";
 import type { AvatarPref } from "../lib/avatar-prefs";
 import { useMascotPointerFollow } from "../lib/use-mascot-pointer-follow";
@@ -60,6 +61,8 @@ import { stripGitbotNotes } from "../lib/gitbot-note";
 import type { ThreadSessionStatus } from "../lib/use-thread-sessions";
 import RunSummary, { ActionRow } from "./run-summary";
 import QueueTray from "./queue-tray";
+import PlanPanel from "./plan-panel";
+import { nextPlan } from "../lib/plan";
 import { useDictation } from "../lib/use-dictation";
 
 // Ordered segments: text and tool calls interleave exactly as they
@@ -557,6 +560,11 @@ export default function Chat({
   const [stoppingSession, setStoppingSession] = useState<string | null>(null);
   const stoppingChild = !!lock && stoppingSession === lock.sessionId;
   const [activity, setActivity] = useState<string | null>(null);
+  // The agent's own plan, as TodoWrite last wrote it. Whole-list replacement:
+  // TodoWrite always supplies the entire plan, so there is nothing to merge.
+  // `planOpen` is sticky across updates and reset when a thread opens.
+  const [todos, setTodos] = useState<TodoItem[] | null>(null);
+  const [planOpen, setPlanOpen] = useState(false);
   // `answers` is kept after the fact so an answered question can still say
   // what was chosen: the transcript has the tool call, not the reply.
   const [perms, setPerms] = useState<(PermRequest & { verdict?: boolean; answers?: AskAnswers; busy?: boolean })[]>([]);
@@ -819,6 +827,7 @@ export default function Chat({
         const flat = flattenMsgs(messages);
         applyOverlays(tid, flat);
         setMsgs(flat);
+        seedPlan(messages);
       })
       .catch((e) => {
         if (threadRef.current !== tid) return;
@@ -829,6 +838,13 @@ export default function Chat({
         setLoading(false);
         if (scroll) requestAnimationFrame(scrollDown);
       });
+  }
+
+  /** The last plan the thread ever wrote, so reopening it days later still
+   *  shows where the work got to rather than an empty panel. Seeds only —
+   *  see `nextPlan`. */
+  function seedPlan(messages: HistoryMsg[]) {
+    setTodos((prev) => nextPlan(prev, messages));
   }
 
   function flattenMsgs(messages: HistoryMsg[]): Msg[] {
@@ -912,6 +928,8 @@ export default function Chat({
     setLoading(false);
     setTurnError(null);
     setActivity(null);
+    setTodos(null);
+    setPlanOpen(false);
     setContextInfo({ model: null, context: null });
     setStreaming(false);
     setOpenGroups({});
@@ -1277,6 +1295,7 @@ export default function Chat({
             applyOverlays(tid, flat);
             setLive(null);
             setMsgs(flat);
+            seedPlan(messages);
             maybeFlush(tid);
           })
           // History failed to load; the turn is still over, so release the
@@ -1331,6 +1350,8 @@ export default function Chat({
       const d = data(ev);
       setActivity(`Running ${d.tool_name || "tool"}…`);
       appendLiveTool({ name: String(d.tool_name ?? "tool"), input: d.tool_input });
+      // A TodoWrite carries the whole plan alongside its chip summary.
+      if (d.todos) setTodos(d.todos);
     });
     es.addEventListener("status", (ev) => {
       const d = data(ev);
@@ -1855,6 +1876,12 @@ export default function Chat({
     </button>
   );
 
+  // Docked above the composer in every one of its states — setup, locked and
+  // normal — so the current step stays in view whatever the composer is doing.
+  const planPanel = (
+    <PlanPanel todos={todos} open={planOpen} onToggle={() => setPlanOpen((o) => !o)} />
+  );
+
   return (
     <main className="chat" aria-label={setup ? "Bot setup" : "Chat"}>
       {toolbar}
@@ -2070,6 +2097,7 @@ export default function Chat({
       {setup && streaming ? (
         <div className="composer setup-resume-composer">
           {jumpLatest}
+          {planPanel}
           <div className="setup-resume-card" role="status">
             <span>
               <b>Setup in progress</b>
@@ -2088,6 +2116,7 @@ export default function Chat({
       ) : setup && !setupAwaitingInput ? (
         <div className="composer setup-resume-composer">
           {jumpLatest}
+          {planPanel}
           <div className="setup-resume-card" role="status">
             <span>
               <b>{setup.paused ? "Setup pending" : autoSend ? "Starting setup" : "Setup incomplete"}</b>
@@ -2113,6 +2142,7 @@ export default function Chat({
       ) : lock && !streaming ? (
         <div className="composer">
           {jumpLatest}
+          {planPanel}
           <div className="composer-pill composer-locked" role="status">
             <span className="composer-locked-status">
               <LoadingState label={lock.status} variant="Drive" />
@@ -2154,6 +2184,7 @@ export default function Chat({
           }}
         >
           {jumpLatest}
+          {planPanel}
           <QueueTray
             text={queue}
             /* Steering disabled — kept for reference. */

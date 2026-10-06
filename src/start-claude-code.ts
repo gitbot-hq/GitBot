@@ -315,6 +315,11 @@ export function formatMessage(
             type: "tool_use",
             tool_name: block.name,
             tool_input: formatToolInput(block.name, block.input),
+            // The plan panel mirrors the main agent's list only: a Task
+            // sub-agent keeps its own todos, and letting those through would
+            // swap the plan (and its done/total) mid-turn and then swap back.
+            // The sub-agent's chip still renders, like any other of its calls.
+            ...(parent ? {} : todoList(block.name, block.input)),
             ...from,
           });
         }
@@ -454,7 +459,15 @@ export async function loadTranscript(
               } catch {
                 tool_input = JSON.stringify(b.input) ?? "";
               }
-              blocks.push({ type: "tool_use", tool_name: b.name, tool_input });
+              // Sidechain entries are a sub-agent's: their chips belong in the
+              // transcript, but their todos must not seed the plan panel —
+              // the same rule the live path applies via `parent_tool_use_id`.
+              blocks.push({
+                type: "tool_use",
+                tool_name: b.name,
+                tool_input,
+                ...(entry.isSidechain ? {} : todoList(b.name, b.input)),
+              });
             }
           }
         }
@@ -602,6 +615,26 @@ export async function listSessions(
     return [];
   }
 }
+
+/**
+ * The plan panel needs the list as a list, not as the one-line summary the tool
+ * chip shows. Carried as a separate field so the chip keeps rendering unchanged,
+ * and spread in so every other tool's payload stays exactly as it was.
+ */
+function todoList(toolName: string, input: Record<string, unknown>): { todos?: TodoItem[] } {
+  if (toolName !== "TodoWrite") return {};
+  const todos = (input as { todos?: unknown }).todos;
+  if (!Array.isArray(todos)) return {};
+  return {
+    todos: todos.map((t: any) => ({
+      content: String(t?.content ?? ""),
+      status: String(t?.status ?? "pending"),
+      activeForm: String(t?.activeForm ?? ""),
+    })),
+  };
+}
+
+type TodoItem = { content: string; status: string; activeForm: string };
 
 function formatToolInput(toolName: string, input: Record<string, unknown>): string {
   switch (toolName) {

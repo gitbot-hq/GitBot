@@ -60,11 +60,22 @@ export type ThreadFull = Thread & {
   updatedAt: string;
 };
 
+/** One line of the agent's own plan, as TodoWrite writes it. `activeForm` is
+ *  the present-continuous wording ("Running tests"), which is what a status
+ *  line wants; `content` is the imperative form, and the fallback. */
+export type TodoItem = {
+  content: string;
+  status: string;
+  activeForm: string;
+};
+
 export type HistoryBlock = {
   type: string;
   text?: string;
   tool_name?: string;
   tool_input?: unknown;
+  /** Set on a TodoWrite block only: the whole plan, as a list. */
+  todos?: TodoItem[];
 };
 
 export type HistoryMsg = {
