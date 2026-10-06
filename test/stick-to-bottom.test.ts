@@ -216,6 +216,34 @@ test("expanding the plan panel does not strand a reader at the tail", () => {
   assert.equal(r.fromBottom, 0, "the tail must stay visible");
 });
 
+test("noticing silent growth records the height it pinned to", () => {
+  const r = reader();
+  stream(r, 10);
+  r.growSilently(300);
+  r.noticeViewport();
+  assert.equal(r.fromBottom, 0);
+
+  // Forgetting to record would leave that 300px looking like growth still to
+  // come, and the next commit would pin a reader who had eased into the slack.
+  r.userScrollBy(-50);
+  assert.equal(r.stuck, true, "still inside the slack band");
+  r.commit();
+  assert.equal(r.fromBottom, 50, "a zero-growth commit must not re-pin");
+});
+
+test("exactly SLACK from the bottom is still the tail", () => {
+  const r = reader();
+  stream(r, 20);
+
+  r.userScrollBy(-SLACK);
+  assert.equal(r.fromBottom, SLACK);
+  assert.equal(r.stuck, true, "the boundary is inclusive");
+
+  r.userScrollBy(-1);
+  assert.equal(r.fromBottom, SLACK + 1);
+  assert.equal(r.stuck, false, "one px beyond is not");
+});
+
 test("collapsing the plan panel again keeps following", () => {
   const r = reader();
   stream(r, 20);

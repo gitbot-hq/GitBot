@@ -16,6 +16,9 @@ import {
 /** The export is prerendered, where a layout effect would only warn. */
 const useBeforePaint = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
+/** No resetKey can equal this, so the first commit always arms. */
+const UNSET = Symbol("unset");
+
 export type StickToBottom = {
   /** Render mirror of the internal flag: the reader is following the tail. */
   stuck: boolean;
@@ -87,11 +90,29 @@ export function useStickToBottom(
     apply(el, afterScroll(state.current, measure(el)));
   }, [ref, apply, measure]);
 
-  // Declared first so it lands before `onCommit` on the commit that swaps the
-  // scroller, which is the whole point of arming.
-  useBeforePaint(() => { state.current = armNextCommit(state.current); }, [resetKey]);
+  /**
+   * Controls inside the transcript transition on hover — `.act-row` carries
+   * seven properties through `--transition-control`, `.file-chip` another —
+   * and every one of them bubbles a `transitionend` to the scroller. Letting
+   * those through would snap a reader parked in the slack band to the bottom
+   * just for mousing over a tool card. Only the card's reveal changes height,
+   * and `grid-template-rows` is the one property of it that does.
+   */
+  const onTransitionEnd = useCallback((e: Event) => {
+    if ((e as TransitionEvent).propertyName === "grid-template-rows") onViewportChange();
+  }, [onViewportChange]);
 
-  useBeforePaint(onCommit);
+  // Arming is folded into the commit effect rather than sitting in one of its
+  // own above it: the two must run in that order, and a single effect makes
+  // that structural instead of a property of the declaration order here.
+  const armedFor = useRef<unknown>(UNSET);
+  useBeforePaint(() => {
+    if (armedFor.current !== resetKey) {
+      armedFor.current = resetKey;
+      state.current = armNextCommit(state.current);
+    }
+    onCommit();
+  });
 
   useEffect(() => {
     const el = ref.current;
@@ -110,9 +131,10 @@ export function useStickToBottom(
     // the set of children turns over on every commit.
     //   load          — a markdown image arriving late (capture: `load` does
     //                   not bubble, but it does reach ancestors capturing).
-    //   transitionend — a tool card's 280ms grid-template-rows reveal.
+    //   transitionend — a tool card's 280ms grid-template-rows reveal, and
+    //                   only that: see `onTransitionEnd`.
     el.addEventListener("load", onViewportChange, { capture: true });
-    el.addEventListener("transitionend", onViewportChange);
+    el.addEventListener("transitionend", onTransitionEnd);
 
     // The on-screen keyboard shrinks the viewport; iOS Safari does not
     // reliably report that through window resize.
@@ -128,11 +150,11 @@ export function useStickToBottom(
       alive = false;
       observer.disconnect();
       el.removeEventListener("load", onViewportChange, { capture: true });
-      el.removeEventListener("transitionend", onViewportChange);
+      el.removeEventListener("transitionend", onTransitionEnd);
       window.removeEventListener("resize", onViewportChange);
       viewport?.removeEventListener("resize", onViewportChange);
     };
-  }, [ref, onViewportChange, resetKey]);
+  }, [ref, onViewportChange, onTransitionEnd, resetKey]);
 
   return { stuck, onScroll, forceBottom };
 }
