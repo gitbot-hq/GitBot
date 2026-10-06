@@ -632,7 +632,13 @@ export default function Chat({
   const scrollRef = useRef<HTMLElement | null>(null);
   // Follows the newest content, but only while the reader is already at the
   // tail. `stuck` is the render mirror that drives the jump-to-latest button.
-  const { stuck, onScroll, forceBottom } = useStickToBottom(scrollRef);
+  // Keyed on the view, not the thread: a thread-less chat returns early with a
+  // different, un-ref'd <section>, so the observers have to rebind whenever
+  // that swaps — including no-thread to new-thread, where the id stays null.
+  // Approval rows, plan updates and the end-of-turn swap of the live bubble
+  // for history all follow the conversation down through this — each is a
+  // commit, and the hook re-pins after every commit that added height.
+  const { stuck, onScroll, forceBottom } = useStickToBottom(scrollRef, viewKey);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
   const reloadTimer = useRef<number | null>(null);
   const escapeStopTimer = useRef<number | null>(null);
@@ -1083,9 +1089,6 @@ export default function Chat({
     sendPrompt(autoSend);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread?.id, autoSend, loading, streaming, msgs.length]);
-
-  // Approval rows follow the conversation down like any other content: the
-  // stick-to-bottom layout effect re-pins after the commit that adds them.
 
   // Report turn activity upward so avatars can react to work.
   useEffect(() => {
