@@ -705,7 +705,15 @@ export default function Chat({
   >({});
   // Expanded activity groups (live turn), keyed by segment + group.
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
-  const scrollEdge = useScrollEdge(scrollRef, thread?.id ?? "no-thread");
+  // Keyed on the view for the same reason as the stick-to-bottom hook above:
+  // `thread?.id ?? "no-thread"` is "no-thread" in both the thread-less and the
+  // new-thread state, so it did not change on the one swap that first creates
+  // the scroller — the listeners bailed on a null ref at mount and never
+  // rebound, leaving the fades dead for the session. `viewKey` is "" exactly
+  // while the un-ref'd early-return <section> is up, so it always changes when
+  // the scroller appears. Message arrivals deliberately do not re-key it: a
+  // rebind resets `edge` to null, which would blink the fade off mid-read.
+  const scrollEdge = useScrollEdge(scrollRef, viewKey);
 
   useEffect(() => {
     try {
