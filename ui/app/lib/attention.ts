@@ -22,6 +22,19 @@ export function hasNews(thread: Pick<AttentionThread, "lastActivityAt" | "lastSe
   return Date.parse(thread.lastActivityAt) > Date.parse(thread.lastSeenAt);
 }
 
+/**
+ * A re-read thread list, keeping the later lastSeenAt where this page holds
+ * one: a read sent before a thread was marked seen can land after it, and
+ * would bring the cleared dot back.
+ */
+export function keepLaterSeen<T extends { id: string; lastSeenAt?: string }>(loaded: T[], local: readonly T[]): T[] {
+  const seen = new Map(local.map((t) => [t.id, t.lastSeenAt]));
+  return loaded.map((t) => {
+    const mine = seen.get(t.id);
+    return mine && (!t.lastSeenAt || Date.parse(mine) > Date.parse(t.lastSeenAt)) ? { ...t, lastSeenAt: mine } : t;
+  });
+}
+
 /** How many Jarvis threads have a child waiting on an approval. */
 export function needsYouCount(pending: Record<string, readonly string[]> | null): number {
   if (!pending) return 0;

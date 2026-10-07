@@ -61,6 +61,7 @@ export const agentRunners: Record<SessionStore["agent"], (store: SessionStore) =
  * status broadcast, which the UI derives a Jarvis thread's lock from.
  */
 function startTurnFlags(store: SessionStore, request: TurnRequest): void {
+  store.turn += 1;
   store.abortRequested = false;
   store.reportable = !!request.reportable;
   // Who the report goes to is fixed now, not when the turn ends.

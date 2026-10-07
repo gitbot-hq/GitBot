@@ -33,10 +33,21 @@ import { noteChildStopped } from "./child-lock";
 import { answerChildApprovals, watchChildApprovals } from "./child-approvals";
 import { isAskUserQuestion, withAskAnswers, type AskAnswers } from "./ask-user-question";
 import { recoverInterruptedChildren, watchRunningMarks } from "./restart-recovery";
-import { watchJarvisActivity } from "./attention";
+import { watchThreadActivity } from "./attention";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
 import { uiFileFor } from "./static-ui";
 import { EFFORT_LEVELS, isEffortLevel, isModelValue, MODEL_MAX_LENGTH } from "./claude-models";
+
+/**
+ * How the stop route reaches an agent that is stopped by a call rather than
+ * an AbortController. A seam: tests swap it to end the turn mid-call.
+ */
+/** How long a stopped OpenCode turn's own end is waited for (opencodeLifecycleEvent). Tests shorten it. */
+export const opencodeStaleEnd = { ms: 5000 };
+
+export const abortCalls = {
+  opencode: (sdkSessionId: string, repoPath: string): Promise<void> => opencodeAbort(sdkSessionId, repoPath),
+};
 
 export async function handleRequest(
   req: IRequest,
@@ -215,12 +226,33 @@ export async function handleRequest(
       } else if (store.agent === "codex" && store.abortController) {
         store.abortController.abort();
       } else if (store.agent === "opencode" && store.sdkSessionId) {
-        await opencodeAbort(store.sdkSessionId, store.repoPath).catch(() => {});
-        store.status = "done";
-        store.pendingPermissions.clear();
-        notifyPermissionsChanged();
-        emitEvent(store, "aborted", { message: "Aborted by user" });
-        scheduleCleanup(store);
+        const stopping = store.turn;
+        await abortCalls.opencode(store.sdkSessionId, store.repoPath).catch(() => {});
+        // A new turn started on this store while the abort was in flight
+        // (opencode ended this one on its own, and the user sent the next):
+        // that turn is not ours to end, even if it is being stopped too.
+        if (store.turn === stopping && store.abortRequested) {
+          // The event first, then the status and the broadcast, so every
+          // snapshot from here on reads stopped — whether or not opencode's
+          // own loop ended the turn (session.idle) while the abort was in
+          // flight. (turnStopped reads the flag too, so even that loop's own
+          // broadcast already says stopped.)
+          emitEvent(store, "aborted", { message: "Aborted by user" });
+          // Ended here, ahead of opencode: its own end of this turn is still
+          // to come, and must not end the next one.
+          if (store.status === "running") {
+            store.opencodeStaleEnd = stopping;
+            // A backstop: should those events never come, stop waiting, so
+            // a later turn's own end is never ignored for good.
+            setTimeout(() => {
+              if (store.opencodeStaleEnd === stopping) delete store.opencodeStaleEnd;
+            }, opencodeStaleEnd.ms).unref?.();
+          }
+          store.status = "done";
+          store.pendingPermissions.clear();
+          notifyPermissionsChanged();
+          scheduleCleanup(store);
+        }
       }
       console.log(`[abort] session ${abortId}`);
       jsonOk(res, { ok: true });
@@ -576,7 +608,7 @@ export async function start(network: string = "local", portOverride?: number, ca
   watchChildReports(availableAgents);
   watchChildApprovals();
   // A Jarvis turn ending is news on its thread until someone views it.
-  watchJarvisActivity();
+  watchThreadActivity();
 
   const { server, caffeinatePid } = await createHttpServer({
     portOverride,

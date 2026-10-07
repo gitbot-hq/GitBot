@@ -1,7 +1,7 @@
 import { basename } from "path";
 import { BOT_AGENTS, getBot, getThread, isJarvisBot, listBots, listThreads, type Bot, type BotAgent, type Thread } from "./bot-store";
 import { projectId, projectIdForFolder, projectNames } from "./project-index";
-import { sessions, type SessionStore } from "./server-common";
+import { sessions, turnStopped, type SessionStore } from "./server-common";
 import { loadTranscript as loadClaudeTranscript, loadTranscriptContext } from "./start-claude-code";
 import { DEFAULT_CLAUDE_MODEL, type ContextUsage } from "./context-window";
 import { isModelValue } from "./claude-models";
@@ -161,6 +161,8 @@ export interface ThreadListing {
   project: string;
   projectId: string;
   updatedAt: string;
+  /** How the thread stands now: thread_status's status, without its details. */
+  status: ThreadState;
   /** Set when this Jarvis thread started it. */
   startedByYou?: true;
 }
@@ -212,6 +214,7 @@ export function listThreadsForJarvis(
       project: names.get(pid) ?? basename(thread.repoPath),
       projectId: pid,
       updatedAt: thread.updatedAt,
+      status: threadState(thread.id),
       ...(jarvisThreadId && thread.reportTo === jarvisThreadId ? { startedByYou: true as const } : {}),
     });
   }
@@ -239,11 +242,17 @@ export function liveStoreFor(threadId: string): SessionStore | undefined {
   return latest;
 }
 
+/** A thread's state now: its live session's, else idle. */
+export function threadState(threadId: string): ThreadState {
+  const store = liveStoreFor(threadId);
+  return store ? sessionState(store) : "idle";
+}
+
 /** How a session's state reads to Jarvis. A turn the user aborted is stopped, not failed. */
 export function sessionState(store: SessionStore): ThreadState {
   if (store.pendingPermissions.size > 0) return "waiting on approval";
   if (store.status === "running") return "running";
-  if (store.events.some((e) => e.type === "aborted")) return "stopped";
+  if (turnStopped(store)) return "stopped";
   return store.status === "error" ? "failed" : "done";
 }
 

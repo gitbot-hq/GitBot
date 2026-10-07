@@ -14,7 +14,8 @@ import {
 } from "../src/bot-store";
 import { addProject } from "../src/project-index";
 import { handleBotRoutes } from "../src/bot-routes";
-import { createSession, emitEvent, sessions, type IRequest, type IResponse } from "../src/server-common";
+import { buildSessionsDump, createSession, emitEvent, sessions, type IRequest, type IResponse } from "../src/server-common";
+import { byThread, threadIndicator } from "../ui/app/lib/use-thread-sessions";
 import {
   LIST_THREADS_CAP,
   listThreadsForJarvis,
@@ -167,7 +168,48 @@ test("thread_status maps each session state", async () => {
     assert.equal(status.lastMessage, `last words of ${label}`, label);
     if (expected === "waiting on approval") assert.deepEqual(status.waitingOn, ["Bash"]);
     if (expected === "failed") assert.equal(status.error, "boom");
+
+    // list_threads carries the same status.
+    const listed = listThreadsForJarvis({ bot: thread.botId });
+    assert.ok(listed.ok, label);
+    assert.equal(listed.threads[0].status, expected, label);
+
+    // So does the UI's row indicator, read from the session stream's snapshot
+    // (an ending shows while the thread is unseen).
+    const rowStates: Record<string, string> = {
+      running: "running", "waiting on approval": "waiting", done: "done", failed: "failed", stopped: "stopped",
+    };
+    const { states } = byThread(buildSessionsDump());
+    assert.equal(threadIndicator(states[thread.id], { unseen: true }), rowStates[expected], label);
   }
+});
+
+test("the thread row indicator: needing you beats running beats an unseen ending", () => {
+  assert.equal(threadIndicator(undefined), null);
+  assert.equal(threadIndicator("done", { childRunning: true }), "running");
+  assert.equal(threadIndicator("running", { needsYou: true }), "waiting");
+  assert.equal(threadIndicator(undefined, { needsYou: true }), "waiting");
+  // Running and waiting show whether or not the thread has been seen.
+  assert.equal(threadIndicator("running", { unseen: false }), "running");
+  assert.equal(threadIndicator("waiting", { unseen: false }), "waiting");
+  // An ending is an unread marker: it shows until the thread is seen.
+  for (const ended of ["done", "failed", "stopped"] as const) {
+    assert.equal(threadIndicator(ended, { unseen: true }), ended);
+    assert.equal(threadIndicator(ended), null);
+  }
+  // After a reload or a restart the stream knows nothing: the stored outcome speaks.
+  assert.equal(threadIndicator(undefined, { unseen: true, lastOutcome: "failed" }), "failed");
+  assert.equal(threadIndicator(undefined, { unseen: false, lastOutcome: "failed" }), null);
+  // The stream's ending is fresher than a stored one.
+  assert.equal(threadIndicator("done", { unseen: true, lastOutcome: "failed" }), "done");
+  // News with no outcome (a Jarvis thread whose child a restart interrupted).
+  assert.equal(threadIndicator(undefined, { unseen: true }), "done");
+  // A live session wins over an older finished one on the same thread.
+  const { states } = byThread([
+    { gitbotId: "a", status: "running", threadId: "t" },
+    { gitbotId: "b", status: "done", threadId: "t" },
+  ]);
+  assert.equal(states.t, "running");
 });
 
 test("thread_status prefers a running session over an older finished one", async () => {

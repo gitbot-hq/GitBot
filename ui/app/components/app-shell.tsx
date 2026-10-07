@@ -56,9 +56,10 @@ import { getAvatarPref, setAvatarPref, resolveAvatar, defaultMascotFor, type Ava
 import { JARVIS_BOT_ID, type Bot, type ThreadFull } from "../lib/gitbot";
 import { setupPrompt, type SetupRunKind } from "../lib/setup";
 import { useScrollEdge } from "../lib/use-scroll-edge";
-import { rowLabel, useThreadSessions } from "../lib/use-thread-sessions";
+import { rowLabel, threadIndicator, useThreadSessions } from "../lib/use-thread-sessions";
+import ThreadStatus from "./thread-status";
 import { approvalRows, type ChildApproval } from "../lib/approvals";
-import { attentionRows, hasNews, needsYouCount, needsYouLabel } from "../lib/attention";
+import { attentionRows, hasNews, keepLaterSeen, needsYouCount, needsYouLabel } from "../lib/attention";
 import { useAttentionTitle } from "../lib/tab-title";
 import { useTabVisible } from "../lib/use-tab-visible";
 import { coalesce } from "../lib/coalesce";
@@ -483,7 +484,7 @@ export default function V2() {
         const missing = createdThreads.current.filter((t) => t.botId === botId && !has(t));
         createdThreads.current = createdThreads.current.filter((t) => !has(t));
         const threads = [...missing, ...loaded];
-        setThreads(threads);
+        setThreads((prev) => keepLaterSeen(threads, prev));
         setThreadByBot((prev) => {
           if (
             prev[botId] &&
@@ -581,24 +582,26 @@ export default function V2() {
 
   // Attention signals (lib/attention.ts), all derived. "Needs you" is the
   // stream's approvals, by Jarvis thread. "Has news" is the thread list's
-  // lastActivityAt > lastSeenAt; the server stamps a Jarvis turn's end
-  // before it broadcasts, so the list is re-read, quietly, whenever the
-  // stream shows a listed Jarvis thread start or end a turn or its children's
-  // approvals change, and whenever someone comes back to the tab (another
-  // device may have viewed a thread meanwhile).
+  // lastActivityAt > lastSeenAt, on any bot's thread: it is what keeps a
+  // finished thread's dot showing until it is seen. The server stamps a
+  // turn's end before it broadcasts, so the list is re-read, quietly,
+  // whenever the stream shows a listed thread start or end a turn (or a
+  // Jarvis thread's children's approvals change), and whenever someone
+  // comes back to the tab (another device may have viewed a thread meanwhile).
   const needsYou = needsYouCount(threadSessions.pendingApprovals);
   useAttentionTitle(needsYou);
   // One quiet re-read at a time, however many reasons arrive together.
   const [quietRefresh] = useState(() =>
-    coalesce(() => (selectedRef.current === JARVIS_BOT_ID ? refreshThreads(JARVIS_BOT_ID, true) : Promise.resolve())),
+    coalesce(() => (selectedRef.current ? refreshThreads(selectedRef.current, true) : Promise.resolve())),
   );
   const tabVisible = useTabVisible(quietRefresh);
-  const attentionKey = isJarvis
+  const attentionKey = bot
     ? workThreads
         .map((t) => {
           const status = threadSessions.statuses[t.id];
           const live = status === "running" || status === "awaiting_permissions";
-          return `${t.id}:${live ? 1 : 0}:${threadSessions.pendingApprovals?.[t.id]?.join(",") ?? ""}`;
+          const pending = isJarvis ? threadSessions.pendingApprovals?.[t.id]?.join(",") ?? "" : "";
+          return `${t.id}:${live ? 1 : 0}:${pending}`;
         })
         .join("|")
     : null;
@@ -611,10 +614,16 @@ export default function V2() {
     if (!attentionKey || !before || before === attentionKey) return;
     quietRefresh();
   }, [attentionKey, quietRefresh]);
-  // The open Jarvis thread, while the tab is shown and focused, is being looked at:
-  // whatever news it has (a turn there just ended, here or elsewhere) is
-  // marked seen, which clears it on every device.
-  const viewing = isJarvis && tabVisible ? activeThread?.id ?? null : null;
+  // Seen, which clears a thread's news on every device: the open thread,
+  // while the tab is shown and focused, nothing covers the chat (the mobile
+  // drawers, the bot profile or studio, the new-thread panel, the user
+  // panel, a modal or Learn more), and the chat is at its newest message
+  // (where opening a thread lands). Scrolled up in it, the latest is not
+  // seen yet; leaving the thread for another (below) counts as seen.
+  const [chatAtLatest, setChatAtLatest] = useState(true);
+  const chatCovered = !!(mobilePanel || threadPanel || editing || showProfile || userOpen || modal || learnMore);
+  const chatOnScreen = tabVisible && !chatCovered;
+  const viewing = chatOnScreen && chatAtLatest ? activeThread?.id ?? null : null;
   const viewingNews = viewing && activeThread && hasNews(activeThread) ? `${viewing}@${activeThread.lastActivityAt}` : null;
   // The news last marked seen, so it is sent once; cleared on failure, so
   // the next re-read of the list (a new activeThread) tries again.
@@ -628,6 +637,24 @@ export default function V2() {
       () => { if (seenSent.current === sent) seenSent.current = null; },
     );
   }, [viewing, viewingNews, activeThread]);
+  // Left for another thread (or bot): news the one left behind still has
+  // is seen, if it was on screen with that news (a turn that ended while
+  // scrolled up). News that came while the chat was covered or the tab away
+  // was never in front of anyone: it stays. `shown` is the news (its
+  // lastActivityAt) last on screen, kept while the news is the same.
+  const leaving = useRef<{ id: string; shown: string | null } | null>(null);
+  useEffect(() => {
+    const left = leaving.current;
+    const id = activeThread?.id;
+    const news = activeThread && hasNews(activeThread) ? activeThread.lastActivityAt ?? null : null;
+    const shown = news && chatOnScreen ? news : left?.id === id && left?.shown === news ? news : null;
+    leaving.current = id ? { id, shown } : null;
+    if (!left?.shown || left.id === id) return;
+    markThreadSeen(left.id).then(
+      ({ thread }) => setThreads((prev) => prev.map((t) => (t.id === thread.id ? { ...t, lastSeenAt: thread.lastSeenAt } : t))),
+      () => {},
+    );
+  }, [activeThread, chatOnScreen]);
   const threadRows = attentionRows(visibleThreads, isJarvis ? threadSessions.pendingApprovals : null, viewing);
 
   // When the selected bot also appears in the empty chat panel, both
@@ -1549,7 +1576,14 @@ export default function V2() {
                   ) : (
                     <>
                       {threadsError && <p className="threads-empty">{threadsError}</p>}
-                      {threadRows.map(({ thread: t, needsYou: rowNeedsYou, hasNews: rowHasNews, preview }) => (
+                      {threadRows.map(({ thread: t, needsYou: rowNeedsYou, hasNews: rowHasNews, preview }) => {
+                        const indicator = threadIndicator(threadSessions.states[t.id], {
+                          needsYou: rowNeedsYou,
+                          childRunning: isJarvis && !!threadSessions.runningChildren[t.id],
+                          unseen: rowHasNews,
+                          lastOutcome: t.lastOutcome,
+                        });
+                        return (
                         <div
                           key={t.id}
                           className={`${t.id === activeThread?.id ? "thread-row active" : "thread-row"}${threadSearchText ? "" : " msg-in"}${rowNeedsYou ? " needs-you" : ""}${rowHasNews ? " has-news" : ""}`}
@@ -1565,14 +1599,7 @@ export default function V2() {
                               closeMobilePanel(() => document.querySelector<HTMLElement>(".chat-col .composer textarea"));
                             }}
                           >
-                            {(rowNeedsYou || rowHasNews) && (
-                              <span
-                                className={rowNeedsYou ? "thread-attn thread-attn-needs" : "thread-attn thread-attn-news"}
-                                role="img"
-                                aria-label={rowNeedsYou ? "Needs you" : "New activity"}
-                                title={rowNeedsYou ? "Needs you" : "New activity"}
-                              />
-                            )}
+                            <ThreadStatus state={indicator} />
                             <span className="thread-row-copy">
                               <span className="thread-row-title">{t.title}</span>
                               {isJarvis && preview && <span className="thread-row-preview">{preview}</span>}
@@ -1589,7 +1616,8 @@ export default function V2() {
                             <AnimatedActionIcon icon={TrashIcon} size={14} aria-hidden="true" />
                           </button>
                         </div>
-                      ))}
+                        );
+                      })}
                       {!threadsError && workThreads.length === 0 && (
                         setupRequired ? (
                           <p className="threads-empty">Threads unlock when setup is complete.</p>
@@ -1650,7 +1678,7 @@ export default function V2() {
                 </button>
               </div>
               {isJarvis && activeThread && (
-                <JarvisChildren key={activeThread.id} jarvisThreadId={activeThread.id} bots={bots} working={chatWorking} onOpen={openThread} />
+                <JarvisChildren key={activeThread.id} jarvisThreadId={activeThread.id} bots={bots} working={chatWorking} states={threadSessions.states} onOpen={openThread} />
               )}
               <Chat
                 thread={activeThread}
@@ -1669,6 +1697,7 @@ export default function V2() {
                 onAutoSent={() => setAutoSend(null)}
                 onActivityChange={setBotActivity}
                 onWorkingChange={setChatWorking}
+                onAtLatestChange={setChatAtLatest}
                 onTurnDone={refreshAfterTurn}
                 onShare={bot && !bot.builtin ? (view) => setModal({ kind: "share", bot, view }) : undefined}
                 onLearnMorePermissions={() => openLearnMore("permissions")}

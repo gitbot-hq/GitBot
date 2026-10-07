@@ -7,7 +7,7 @@ import { join } from "path";
 import { createBot, createThread, getThread, JARVIS_BOT_ID, jarvisDir, setRunningFor } from "../src/bot-store";
 import { recoverInterruptedChildren } from "../src/restart-recovery";
 import { coalesce } from "../ui/app/lib/coalesce";
-import { latestLine, watchJarvisActivity } from "../src/attention";
+import { latestLine, watchThreadActivity } from "../src/attention";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
 import {
@@ -43,7 +43,7 @@ before(() => {
   for (const agent of Object.keys(agentRunners) as SessionStore["agent"][]) {
     agentRunners[agent] = async (store) => { runs.push(store); };
   }
-  unwatch = watchJarvisActivity();
+  unwatch = watchThreadActivity();
 });
 afterEach(() => {
   for (const s of runs) sessions.delete(s.gitbotId);
@@ -236,12 +236,37 @@ test("a Jarvis turn's end stamps lastActivityAt and the preview, not updatedAt",
   // (turn() checks the end left updatedAt alone.)
 });
 
-test("a plain bot's turn is not stamped", async () => {
+test("a plain bot's turn is stamped with how it ended, but keeps its preview", async () => {
   const bot = createBot({ name: "Plain", agent: "claude-code" });
   const folder = realpathSync(mkdtempSync(join(tmpdir(), "gitbot-plain-")));
   const plain = createThread(bot.id, folder, undefined, "chat", "claude-code");
-  await turn(plain.id, "done");
-  assert.equal(getThread(plain.id)!.lastActivityAt, undefined);
+  await turn(plain.id, "All done here.");
+  const first = getThread(plain.id)!;
+  assert.ok(first.lastActivityAt);
+  assert.equal(first.lastOutcome, "done");
+  assert.equal(hasNews(first), true);
+  // The preview stays the prompt that started the turn.
+  assert.equal(first.preview, "hello");
+
+  // Seen, it has no news; the next turn's end is news again, with its own outcome.
+  assert.equal((await request("POST", `/threads/${plain.id}/seen`)).status, 200);
+  assert.equal(hasNews(getThread(plain.id)!), false);
+  await pause(5);
+  await turn(plain.id, "It broke.", "error");
+  assert.equal(getThread(plain.id)!.lastOutcome, "failed");
+  assert.equal(hasNews(getThread(plain.id)!), true);
+
+  // A turn the user stopped is stopped, whatever status it ended on.
+  await pause(5);
+  const started = startTurn({ threadId: plain.id, prompt: "again" }, ALL_AGENTS);
+  assert.ok(started.ok);
+  const store = runs[runs.length - 1];
+  await tick();
+  emitEvent(store, "aborted", { message: "Aborted by user" });
+  store.status = "error";
+  notifyPermissionsChanged();
+  await tick();
+  assert.equal(getThread(plain.id)!.lastOutcome, "stopped");
 });
 
 test("a turn our shutdown killed is not news", async () => {
@@ -266,6 +291,8 @@ test("a child a restart interrupted is news on its Jarvis thread", () => {
   const after = getThread(jarvis.id)!;
   assert.ok(after.lastActivityAt);
   assert.equal(hasNews(after), true);
+  // Not a turn of its own: no outcome to show.
+  assert.equal(after.lastOutcome, undefined);
   assert.equal(after.updatedAt, listedAt);
 });
 

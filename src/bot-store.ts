@@ -59,6 +59,9 @@ export interface Bot {
   updatedAt: string;
 }
 
+/** How a turn ended, for the thread list: the user stopped it, it failed, or it finished. */
+export type TurnOutcome = "done" | "failed" | "stopped";
+
 export interface Thread {
   id: string;
   botId: string;
@@ -113,10 +116,13 @@ export interface Thread {
    */
   runningFor?: RunningMark;
   /**
-   * Jarvis threads only: when a turn here last ended. Not updatedAt, which
-   * renames and other edits bump too. Has news while it is past lastSeenAt.
+   * When a turn here last ended. Not updatedAt, which renames and other
+   * edits bump too. Has news while it is past lastSeenAt: the thread list's
+   * unread marker.
    */
   lastActivityAt?: string;
+  /** How the turn at lastActivityAt ended; absent when news came from elsewhere. */
+  lastOutcome?: TurnOutcome;
   /** When someone last viewed the thread (POST /threads/:id/seen), on any device. */
   lastSeenAt?: string;
   createdAt: string;
@@ -512,11 +518,13 @@ export function setThreadApprovals(id: string, edit: (rows: ChildApproval[]) => 
  * Records that a turn on a thread ended: lastActivityAt, and the preview
  * when the turn said something. Attention, not an edit: updatedAt stays.
  */
-export function setThreadActivity(id: string, at: string, preview?: string): Thread | undefined {
+export function setThreadActivity(id: string, at: string, preview?: string, outcome?: TurnOutcome): Thread | undefined {
   const threads = readCollection<Thread>(THREADS_FILE);
   const thread = threads.find((t) => t.id === id);
   if (!thread) return undefined;
   thread.lastActivityAt = at;
+  if (outcome) thread.lastOutcome = outcome;
+  else delete thread.lastOutcome;
   if (preview) thread.preview = preview;
   writeCollection(THREADS_FILE, threads);
   return thread;
@@ -583,6 +591,7 @@ export function settleRunningMarks(
         owner.pendingNote = appendNote(owner.pendingNote, note(thread));
         // News on the Jarvis thread: its child stopped, though no turn ended there.
         owner.lastActivityAt = now();
+        delete owner.lastOutcome;
       }
       delete thread.runningFor;
       settled.push(thread.id);

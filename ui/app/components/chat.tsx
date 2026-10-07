@@ -512,6 +512,7 @@ export default function Chat({
   onAutoSent,
   onTurnDone,
   onWorkingChange,
+  onAtLatestChange,
   onActivityChange,
   onShare,
   onLearnMorePermissions,
@@ -554,6 +555,8 @@ export default function Chat({
   onAutoSent: () => void;
   onTurnDone: () => void;
   onWorkingChange?: (working: boolean) => void;
+  /** Whether the reader is at the newest message: what counts as having seen it. */
+  onAtLatestChange?: (atLatest: boolean) => void;
   /** Live activity sentence ("Thinking…", "Running Bash…", null when idle).
    *  Lets the shell show what the bot is doing outside the chat. */
   onActivityChange?: (activity: string | null) => void;
@@ -696,6 +699,9 @@ export default function Chat({
   // for history all follow the conversation down through this — each is a
   // commit, and the hook re-pins after every commit that added height.
   const { stuck, onScroll, forceBottom } = useStickToBottom(scrollRef, viewKey);
+  useEffect(() => {
+    onAtLatestChange?.(stuck);
+  }, [stuck, onAtLatestChange]);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
   const reloadTimer = useRef<number | null>(null);
   const escapeStopTimer = useRef<number | null>(null);

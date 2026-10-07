@@ -378,6 +378,61 @@ async function resolveParentStore(client: any, sdkSessionId: string): Promise<Se
   return promise;
 }
 
+/**
+ * The parent session's lifecycle events: what ends a turn. OpenCode's ends
+ * name the session, not the turn, so an end only counts while the store's
+ * turn is running and is the one OpenCode is on:
+ * - a turn already done (the stop route ended it, or an earlier idle: OpenCode
+ *   sends both session.status idle and session.idle) takes no further end,
+ *   and an error no longer changes a turn that has ended. A failed turn's
+ *   error is still followed by its idle, which closes its stream;
+ * - after the stop route ended a turn ahead of OpenCode, OpenCode's own end
+ *   of it is still to come, and may arrive after the next turn has started.
+ *   OpenCode answers a stop only once it has set the session idle, which
+ *   always publishes session.status idle and then session.idle (1.18.32:
+ *   SessionRunState.cancel, SessionStatus.set), and its events reach us in
+ *   publish order. So that stale end, any error with it, comes first and ends
+ *   with session.idle: ends are ignored up to and including it, and nothing
+ *   after it is stale. Seeing the next turn's user message also clears the
+ *   wait, and the stop route gives up on it after a few seconds, in case the
+ *   events never come (a reconnect of our event stream loses them).
+ */
+export function opencodeLifecycleEvent(store: SessionStore, type: string, props: any): void {
+  if (type === "message.updated" && props?.info?.role === "user" && store.status === "running") {
+    delete store.opencodeStaleEnd;
+    return;
+  }
+  const error = type === "session.error";
+  const idle = type === "session.idle" || (type === "session.status" && props?.status?.type === "idle");
+  if (!error && !idle) return;
+  if (store.opencodeStaleEnd !== undefined) {
+    if (type === "session.idle") delete store.opencodeStaleEnd;
+    return;
+  }
+
+  if (error) {
+    if (store.status !== "running") return;
+    const err = props?.error;
+    const message = err?.data?.message || err?.message || err?.name || "Session error";
+    emitEvent(store, "agent_error", { message });
+    store.status = "error";
+    store.pendingPermissions.clear();
+    notifyPermissionsChanged();
+    scheduleCleanup(store);
+    return;
+  }
+
+  // A failed turn's error is followed by its idle, which closes the turn's
+  // stream with "done", as it always has. Only a second end does nothing.
+  if (store.status === "done") return;
+  recordSetupOutcomeFromEvents(store);
+  store.status = "done";
+  store.pendingPermissions.clear();
+  notifyPermissionsChanged();
+  emitEvent(store, "done", {});
+  scheduleCleanup(store);
+}
+
 async function startEventStream(client: any, directory: string) {
   try {
     const events = await client.event.subscribe();
@@ -511,25 +566,7 @@ async function startEventStream(client: any, directory: string) {
       // the parent's own session.idle/error governs the thread's lifecycle.
       if (isChildEvent) continue;
 
-      if (type === "session.error") {
-        const err = props?.error;
-        const message = err?.data?.message || err?.message || err?.name || "Session error";
-        emitEvent(store, "agent_error", { message });
-        store.status = "error";
-        store.pendingPermissions.clear();
-        notifyPermissionsChanged();
-        scheduleCleanup(store);
-      }
-
-      if (type === "session.idle" || (type === "session.status" && props?.status?.type === "idle")) {
-        if (store.status === "done") continue;
-        recordSetupOutcomeFromEvents(store);
-        store.status = "done";
-        store.pendingPermissions.clear();
-        notifyPermissionsChanged();
-        emitEvent(store, "done", {});
-        scheduleCleanup(store);
-      }
+      opencodeLifecycleEvent(store, type, props);
     }
   } catch (err: any) {
     console.error("[event-stream] error:", err.message);

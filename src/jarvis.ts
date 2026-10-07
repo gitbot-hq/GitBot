@@ -566,7 +566,7 @@ export function jarvisToolServer(availableAgents: readonly string[], jarvisThrea
       ),
       tool(
         "list_threads",
-        "List gitbot threads, newest first (at most 30): id, title, bot, project and last update. Filter by project id and/or bot id. Jarvis threads and setup threads are not listed.",
+        "List gitbot threads, newest first (at most 30): id, title, bot, project, last update and status (as thread_status gives it). Filter by project id and/or bot id. Jarvis threads and setup threads are not listed.",
         {
           project: z.string().optional().describe("Project id from list_projects"),
           bot: z.string().optional().describe("Bot id from list_bots"),

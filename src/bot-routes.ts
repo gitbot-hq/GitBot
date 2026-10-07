@@ -222,7 +222,7 @@ export async function handleBotRoutes(
       const existing = getThread(threadId);
       // Ownership, a Stop's note, the running marker, approval rows and the
       // attention stamps are gitbot's to set, on any thread.
-      for (const key of ["reportTo", "pendingNote", "runningFor", "approvals", "lastActivityAt", "lastSeenAt"]) delete body[key];
+      for (const key of ["reportTo", "pendingNote", "runningFor", "approvals", "lastActivityAt", "lastSeenAt", "lastOutcome"]) delete body[key];
       if (existing && isJarvisBot(getBot(existing.botId))) {
         for (const key of ["repoPath", "agent", "kind", "sdkSessionId"]) delete body[key];
       }

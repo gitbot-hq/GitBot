@@ -261,6 +261,19 @@ export interface SessionStore {
   // turn reports to the thread's Jarvis when it ends (Jarvis started it).
   abortRequested?: boolean;
   reportable?: boolean;
+  /**
+   * Counts this store's turns (startTurn bumps it), so a stop belongs to the
+   * turn it stopped: an abort call still in flight when the next turn starts
+   * must not end that one.
+   */
+  turn: number;
+  /**
+   * OpenCode only: the turn the stop route ended before OpenCode said so
+   * itself. OpenCode's own end of it (session.error, session.idle) is still
+   * to come and carries no turn of its own, so ends are ignored until
+   * OpenCode records the next turn's user message (start-opencode.ts).
+   */
+  opencodeStaleEnd?: number;
   /** The Jarvis thread a reportable turn reports to, fixed when it starts. */
   reportOwner?: string;
 }
@@ -340,6 +353,22 @@ export interface SessionSummaryItem {
   reportTo: string | null;
   /** The bot that owns threadId; null for a session with no thread. */
   botId: string | null;
+  /** The user stopped this session's turn: its "done" or "error" was not its own. */
+  stopped: boolean;
+}
+
+/**
+ * The user stopped this turn. The stop route sets abortRequested before it
+ * awaits anything, so this holds from the moment a stop is accepted, however
+ * the turn then ends: the agent finishing anyway, the agent ending it on
+ * the abort, or the stream closing with no result. The "aborted" event the
+ * harness records comes later, if at all. Both are per turn: startTurn
+ * resets the flag and replaces the events. Takes a store or an EndedTurn.
+ * The one rule for the UI's stream, thread_status, list_threads, the stored
+ * lastOutcome and the report to Jarvis.
+ */
+export function turnStopped(turn: { abortRequested?: boolean; events: StoredEvent[] }): boolean {
+  return !!turn.abortRequested || turn.events.some((e) => e.type === "aborted");
 }
 
 /** The Jarvis thread a store's current (or last) turn reports to, if any. */
@@ -355,6 +384,7 @@ export function buildSessionsDump(): SessionSummaryItem[] {
     threadId: store.threadId ?? null,
     reportTo: turnReportsTo(store),
     botId: store.botId ?? null,
+    stopped: store.status !== "running" && turnStopped(store),
   }));
 }
 
@@ -374,6 +404,12 @@ export interface EndedTurn {
   abortRequested: boolean;
   reportable: boolean;
   reportOwner?: string;
+  /**
+   * Set by the report watcher once this turn's report has started on its
+   * Jarvis thread: Jarvis has been told, so the thread counts as seen.
+   * Turn-end listeners share the one object; read by the activity stamp.
+   */
+  reportDelivered?: boolean;
 }
 
 type TurnEndListener = (store: SessionStore, turn: EndedTurn) => void;
@@ -435,6 +471,7 @@ export function createSession(
     mode,
     permissionMode: permissionMode ?? "ask-permissions",
     seq: 0,
+    turn: 0,
     events: [],
     status: "running",
     emitter: new EventEmitter(),

@@ -1,6 +1,6 @@
 import { basename } from "path";
-import { getBot, getThread } from "./bot-store";
-import { isShuttingDown, onTurnEnd, type EndedTurn, type StoredEvent } from "./server-common";
+import { getBot, getThread, markThreadSeen } from "./bot-store";
+import { isShuttingDown, onTurnEnd, turnStopped, type EndedTurn, type StoredEvent } from "./server-common";
 import { startTurn } from "./turns";
 
 // A finished child wakes its Jarvis: when a turn ends in a thread Jarvis
@@ -46,7 +46,7 @@ export function reportFor(turn: EndedTurn): { owner: string; prompt: string; chi
   if (!turn.reportable) return null;
   if (status !== "done" && status !== "error") return null;
   // Stopped by the user: the sequence stops with it (slice 08 builds Stop).
-  if (turn.abortRequested || events.some((e) => e.type === "aborted")) return null;
+  if (turnStopped(turn)) return null;
   // The owner as the turn started: a later change of hands does not redirect it.
   const owner = turn.reportOwner;
   const child = turn.threadId ? getThread(turn.threadId) : undefined;
@@ -72,16 +72,35 @@ export function deliverReport(turn: EndedTurn, availableAgents: readonly string[
   if (!report) return;
   let refused: string;
   try {
-    const turn = startTurn({ threadId: report.owner, prompt: report.prompt, report: true }, availableAgents);
-    if (turn.ok) {
+    const started = startTurn({ threadId: report.owner, prompt: report.prompt, report: true }, availableAgents);
+    if (started.ok) {
       console.log(`[report] thread ${report.child} reported to Jarvis thread ${report.owner}`);
+      reportedIsSeen(turn, report.child);
       return;
     }
-    refused = `${turn.status} ${turn.message}`;
+    refused = `${started.status} ${started.message}`;
   } catch (err: any) {
     refused = err?.message ?? "failed to start";
   }
   console.warn(`[report] dropped: thread ${report.child} finished, but Jarvis thread ${report.owner} refused its report (${refused})`);
+}
+
+/**
+ * A thread Jarvis started counts as seen once its result is in front of
+ * Jarvis: its report turn has started on the Jarvis thread. The user reads it
+ * there, so the child's own dot, in its bot's list and in "Started N
+ * threads", would only pile up. A report Jarvis refused is not delivered,
+ * and a stopped child makes none: those keep their dot.
+ *
+ * Either turn-end listener may run first. If the activity stamp already ran,
+ * seen is stamped no earlier than it; if not, it reads the flag and stamps
+ * seen with its own time (attention.ts).
+ */
+function reportedIsSeen(turn: EndedTurn, childId: string): void {
+  turn.reportDelivered = true;
+  const now = new Date().toISOString();
+  const stamped = getThread(childId)?.lastActivityAt;
+  markThreadSeen(childId, stamped && stamped > now ? stamped : now);
 }
 
 /** Wires reports to every turn end, whichever agent ran it. Call once at start. */
