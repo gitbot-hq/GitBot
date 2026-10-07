@@ -79,7 +79,7 @@ import QueueTray from "./queue-tray";
 import PlanPanel from "./plan-panel";
 import { nextPlan } from "../lib/plan";
 import SubagentPanel from "./subagent-panel";
-import { nextSubagents, stopRunning, type Subagent } from "../lib/subagents";
+import { nextSubagents, seedSubagents, stopRunning, type Subagent } from "../lib/subagents";
 import { useDictation } from "../lib/use-dictation";
 
 // Ordered segments: text and tool calls interleave exactly as they
@@ -1022,6 +1022,8 @@ export default function Chat({
    *  see `nextPlan`. */
   function seedPlan(messages: HistoryMsg[]) {
     setTodos((prev) => nextPlan(prev, messages));
+    // The sub-agents too, merged with any the live stream already shows.
+    setSubagents((prev) => seedSubagents(prev, messages));
   }
 
   function flattenMsgs(messages: HistoryMsg[]): Msg[] {

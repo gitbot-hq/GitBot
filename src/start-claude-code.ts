@@ -509,6 +509,16 @@ export async function loadTranscript(
   // AskUserQuestion rows by tool_use_id, so the answer in a later tool_result
   // lands on the row that asked.
   const asks = new Map<string, any>();
+  // Top-level Agent blocks by tool_use_id, so their result settles the row
+  // that started it. Notifications are applied in order once all is read (the
+  // CLI can log one ahead of the call it ends), so the last one wins: a
+  // resumed sub-agent notifies again.
+  const agents = new Map<string, any>();
+  const notices: TaskNotification[] = [];
+  const notified = (text: unknown) => {
+    const n = parseTaskNotification(text);
+    if (n) notices.push(n);
+  };
 
   try {
     const rl = createInterface({
@@ -531,10 +541,27 @@ export async function loadTranscript(
         for (const b of entry.message.content) {
           const row = b?.type === "tool_result" ? asks.get(b.tool_use_id) : undefined;
           if (row) Object.assign(row.ask, askResult(entry.toolUseResult, b.content, b.is_error === true));
+          const agent = b?.type === "tool_result" ? agents.get(b.tool_use_id) : undefined;
+          if (agent && settleSubagent(agent.subagent, entry, b) === "drop") {
+            delete agent.subagent;
+            agents.delete(b.tool_use_id);
+          }
         }
       }
 
-      if (entry.type === "user" && entry.userType === "external" && !entry.isMeta) {
+      // A background sub-agent's end. The CLI records it as a queued command
+      // when it lands mid-turn, as a user turn of its own when it wakes the
+      // agent, and as a queue entry when it is enqueued — any one will do.
+      if (entry.type === "attachment" && entry.attachment?.type === "queued_command") notified(entry.attachment.prompt);
+      if (entry.type === "queue-operation" && entry.operation === "enqueue") notified(entry.content);
+      const notice = entry.type === "user" && (entry.origin?.kind === "task-notification" || parseTaskNotification(extractText(entry.message?.content)));
+      if (notice) notified(extractText(entry.message?.content));
+
+      // Not shown as a bubble: the CLI wrote it, not the user, and the panel
+      // already shows the outcome — as the live stream, which never sends it.
+      // Older CLIs mark it with no origin: then only text that opens with the
+      // tag and names a task and a status counts, which no user types.
+      if (entry.type === "user" && entry.userType === "external" && !entry.isMeta && !notice) {
         const rawContent = entry.message?.content;
         const blocks: any[] = [];
         if (typeof rawContent === "string") {
@@ -573,8 +600,11 @@ export async function loadTranscript(
                 tool_use_id: b.id,
                 ...askField(b.name, b.input),
                 ...(entry.isSidechain ? {} : todoList(b.name, b.input)),
+                // Only the main agent's sub-agents are rows, as live.
+                ...(entry.isSidechain || entry.parent_tool_use_id ? {} : subagentField(b.name, b.input)),
               };
               if (block.ask && b.id) asks.set(b.id, block);
+              if (block.subagent && b.id) agents.set(b.id, block);
               blocks.push(block);
             }
           }
@@ -587,6 +617,13 @@ export async function loadTranscript(
       }
     }
 
+    // By tool call; older CLIs name only the task, which is the agent id.
+    const byTask = new Map<string, SubagentRecord>();
+    for (const block of agents.values()) if (block.subagent?.taskId) byTask.set(block.subagent.taskId, block.subagent);
+    for (const n of notices) {
+      const rec: SubagentRecord | undefined = (n.toolUseId && agents.get(n.toolUseId)?.subagent) || (n.taskId && byTask.get(n.taskId)) || undefined;
+      if (rec) rec.status = n.status;
+    }
     return messages;
   } catch (err: any) {
     console.error("Error reading transcript:", err.message);
@@ -758,6 +795,61 @@ function todoList(toolName: string, input: Record<string, unknown>): { todos?: T
 
 type TodoItem = { content: string; status: string; activeForm: string };
 
+// --- Sub-agents in the transcript ---
+// The live panel runs on task events, which the transcript never records, so
+// history rebuilds each top-level sub-agent from what it does record: the
+// Agent call, its tool_result, and — for one that ran in the background — the
+// <task-notification> the CLI hands the main agent when it ends.
+
+type SubagentStatus = "completed" | "failed" | "stopped";
+/** On an Agent block. `status` absent: the transcript shows no end. */
+type SubagentRecord = { description: string; type?: string; taskId?: string; status?: SubagentStatus };
+
+const NOTIFIED: Record<string, SubagentStatus> = { completed: "completed", failed: "failed", stopped: "stopped", killed: "stopped" };
+
+function subagentField(toolName: string, input: Record<string, unknown>): { subagent?: SubagentRecord } {
+  if (toolName !== "Agent" && toolName !== "Task") return {};
+  const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+  return { subagent: { description: str(input.description) ?? "Sub-agent", type: str(input.subagent_type) } };
+}
+
+// A call refused before it ran: the user's rejection (the CLI's own prompt,
+// or gitbot's canUseTool: "User denied", "Request aborted" on Stop) or the
+// auto-mode classifier. Live, no task starts for these, so no row either.
+const DENIED = /^(Error: )?(User denied|User rejected tool use|Request aborted)\b|doesn't want to proceed with this tool use|Permission for this action was denied/;
+
+/**
+ * What an Agent call's tool_result says about the run. A background launch
+ * ("async_launched") only names the task; its end comes as a notification.
+ * A denied call never ran and has no row; any other error is an end.
+ */
+function settleSubagent(rec: SubagentRecord, entry: any, block: any): "drop" | void {
+  const result = entry.toolUseResult;
+  const agentId = typeof result?.agentId === "string" ? result.agentId : undefined;
+  if (agentId) rec.taskId = agentId;
+  if (block.is_error === true) {
+    const text = extractText(block.content) || (typeof result === "string" ? result : "");
+    const kind = entry.toolDenialKind;
+    // Cut off mid-run: "[Tool call interrupted…]" (written on resume for a
+    // call left open), "[Request interrupted by user for tool use]".
+    if (kind === "interrupted" || /interrupted/i.test(text)) rec.status = "stopped";
+    else if ((kind && !agentId) || (!agentId && DENIED.test(text))) return "drop";
+    else rec.status = "failed";
+  } else if (result?.status === "completed") rec.status = "completed";
+}
+
+/** A notification names its tool call (current CLIs), its task (all), or both. */
+type TaskNotification = { toolUseId?: string; taskId?: string; status: SubagentStatus };
+
+/** A <task-notification>'s ids and outcome, if `text` is one. */
+export function parseTaskNotification(text: unknown): TaskNotification | undefined {
+  if (typeof text !== "string" || !text.trimStart().startsWith("<task-notification>")) return undefined;
+  const toolUseId = /<tool-use-id>([^<]+)<\/tool-use-id>/.exec(text)?.[1];
+  const taskId = /<task-id>([^<]+)<\/task-id>/.exec(text)?.[1];
+  const status = NOTIFIED[/<status>([^<]+)<\/status>/.exec(text)?.[1] ?? ""];
+  return (toolUseId || taskId) && status ? { toolUseId, taskId, status } : undefined;
+}
+
 function formatToolInput(toolName: string, input: Record<string, unknown>): string {
   switch (toolName) {
     case "Bash":
@@ -775,7 +867,8 @@ function formatToolInput(toolName: string, input: Record<string, unknown>): stri
     case "Grep":
       return input.path ? `/${input.pattern}/ in ${input.path}` : `/${input.pattern}/`;
     case "Task":
-      return `[${input.subagent_type}] ${input.description}`;
+    case "Agent":
+      return input.subagent_type ? `[${input.subagent_type}] ${input.description}` : `${input.description}`;
     case "WebFetch":
       return `${input.url}`;
     case "WebSearch":

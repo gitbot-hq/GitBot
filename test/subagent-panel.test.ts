@@ -64,10 +64,20 @@ test("a sub-agent's shells and nested agents are not rows", () => {
   assert.equal(run([notified("bash1", "completed")], list), list);
 });
 
-test("replaying the same events (a rejoin) changes nothing", () => {
+test("replaying the same events (a rejoin) ends where it was", () => {
   const events = [started("a"), updated("a", "completed"), notified("a", "completed")];
   const once = run(events);
-  assert.equal(run(events, once), once);
+  assert.deepEqual(run(events, once), once);
+  // Ends alone (no start in the replay) change nothing at all.
+  assert.equal(run(events.slice(1), once), once);
+});
+
+test("a resumed sub-agent runs again under its task id, and its new outcome counts", () => {
+  // Run 1 completed; SendMessage resumes it: the SDK starts the same task again.
+  const done = run([started("a"), notified("a", "completed")]);
+  const resumed = run([started("a")], done);
+  assert.deepEqual(resumed.map((s) => [s.taskId, s.status]), [["a", "running"]]);
+  assert.equal(run([notified("a", "failed")], resumed)[0].status, "failed");
 });
 
 test("killed reads as stopped; non-terminal patches are ignored", () => {

@@ -84,6 +84,9 @@ export type HistoryBlock = {
   tool_use_id?: string;
   /** Set on an AskUserQuestion block only: what was asked and what came back. */
   ask?: AskRecord;
+  /** Set on a main-agent Agent block only (Claude Code): the sub-agent it ran.
+   *  `taskId` is the live task id; `status` is absent when no end was seen. */
+  subagent?: { description: string; type?: string; taskId?: string; status?: "completed" | "failed" | "stopped" };
 };
 
 /**
