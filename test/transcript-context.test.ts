@@ -28,14 +28,28 @@ test("the meter reads the last main-thread assistant message of a transcript", a
     assistant({ input_tokens: 0, output_tokens: 0 }),
   ]);
   const ctx = await loadTranscriptContext("s1", cwd);
-  assert.deepEqual(ctx, { used: 1100, window: 200_000, model: "claude-opus-5-5", label: "Opus 5.5" });
+  assert.deepEqual(ctx, { used: 1100, window: 1_000_000, model: "claude-opus-5-5", label: "Opus 5.5" });
 });
 
-test("the configured model sizes the window; overflowing the default means the long one", async () => {
+test("the configured model sizes the window, even when the conversation no longer fits it", async () => {
+  // `model` here is the one the NEXT turn will run (threadContext passes
+  // thread.model), not the one that wrote the transcript. So a conversation
+  // larger than that model's window is a real reading — the thread has
+  // outgrown what it is set to run — and must survive as one. Promoting it to
+  // 1M would hide exactly the condition the picker greys Haiku out on, and
+  // would disagree with the live meter, which does not promote.
   transcript("s2", [assistant({ input_tokens: 1, cache_read_input_tokens: 300_000, output_tokens: 1 })]);
-  assert.equal((await loadTranscriptContext("s2", cwd))?.window, 1_000_000);
+  const outgrown = await loadTranscriptContext("s2", cwd, "haiku");
+  assert.equal(outgrown?.window, 200_000);
+  assert.equal(outgrown?.used, 300_002);
+
   transcript("s3", [assistant({ input_tokens: 1, output_tokens: 1 })]);
   assert.equal((await loadTranscriptContext("s3", cwd, "claude-opus-5-5[1m]"))?.window, 1_000_000);
+  // Haiku and the 4.6 pair are the short windows: a thread inside one reads 200k.
+  assert.equal((await loadTranscriptContext("s3", cwd, "haiku"))?.window, 200_000);
+  assert.equal((await loadTranscriptContext("s3", cwd, "claude-opus-4-6"))?.window, 200_000);
+  // And a thread that fits a long model reads against the long window.
+  assert.equal((await loadTranscriptContext("s2", cwd, "sonnet"))?.window, 1_000_000);
 });
 
 test("no transcript, or no usage in it, means no reading", async () => {

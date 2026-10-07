@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "fs";
 import { basename, join } from "path";
 import { homedir } from "os";
+import type { EffortLevel } from "./claude-models";
 
 // --- Types ---
 
@@ -71,6 +72,15 @@ export interface Thread {
   agent?: BotAgent;
   /** The agent's own session id — the resume handle. Null until the first turn completes. */
   sdkSessionId: string | null;
+  /**
+   * Claude Code threads: the model and reasoning effort picked in the composer.
+   * Per thread rather than per bot, and stored here rather than on the session,
+   * because sessions live only in memory — a pick has to survive a restart. A
+   * change applies from the next turn; `model` is the SDK's own value string,
+   * kept verbatim (suffixes and aliases alike).
+   */
+  model?: string;
+  effort?: EffortLevel;
   title: string;
   /** True while the title is still auto-derived, so a later turn may improve it. */
   titleIsAuto?: boolean;

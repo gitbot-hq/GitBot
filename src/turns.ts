@@ -14,6 +14,7 @@ import { runAgent as runCodex } from "./start-codex";
 import { resolveThreadTurn } from "./bot-routes";
 import { getBot, getThread, setRunningFor, touchThread, updateThread } from "./bot-store";
 import { childLabel, clearPendingNote, pendingNoteFor, runningChildOf, withNote } from "./child-lock";
+import type { EffortLevel } from "./claude-models";
 
 // Starting a turn: what POST /chat does once it has read the request, and what
 // gitbot itself does when it starts a turn without one (Jarvis's start_thread).
@@ -30,6 +31,8 @@ export interface TurnRequest {
   /** The session to continue, for a turn outside the bot hub. */
   sessionId?: string;
   model?: string;
+  /** Claude Code's reasoning effort. Ignored by the other agents. */
+  effort?: EffortLevel;
   permissionMode?: PermissionMode;
   mode?: "plan" | "build";
   /** A child's report to its Jarvis thread: a turn, but not the user's words. */
@@ -72,7 +75,7 @@ function startTurnFlags(store: SessionStore, request: TurnRequest): void {
  * Returns once the run has started — never waits for it to finish.
  */
 export function startTurn(request: TurnRequest, availableAgents: readonly string[]): TurnResult {
-  let { repoPath, agent, sessionId: existingId, model, permissionMode, mode } = request;
+  let { repoPath, agent, sessionId: existingId, model, effort, permissionMode, mode } = request;
   const { prompt, attachments, threadId } = request;
   // attachments: Array<{ url: string }> | undefined
 
@@ -86,9 +89,9 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
     botId = thread.botId;
     const bot = getBot(thread.botId);
     if (!bot) return { ok: false, status: 404, message: "Bot not found" };
-    const turn = resolveThreadTurn(thread, bot, { model, permissionMode, mode }, availableAgents);
+    const turn = resolveThreadTurn(thread, bot, { model, effort, permissionMode, mode }, availableAgents);
     if (!turn.ok) return { ok: false, status: turn.status, message: turn.message, extra: turn.extra };
-    ({ repoPath, agent, model, permissionMode, mode, preset: botPreset } = turn);
+    ({ repoPath, agent, model, effort, permissionMode, mode, preset: botPreset } = turn);
     if (thread.agent !== turn.agent) updateThread(threadId, { agent: turn.agent });
     existingId = thread.sdkSessionId ?? undefined;
   }
@@ -146,9 +149,10 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
     // never mistake the next turn's events for ones it has already seen.
     store.events = [];
     if (model) store.model = model;
+    if (effort) store.effort = effort;
     if (mode) store.mode = mode;
     if (permissionMode) store.permissionMode = permissionMode as PermissionMode;
-    if (botPreset?.jarvis) { store.model = undefined; store.mode = undefined; }
+    if (botPreset?.jarvis) { store.model = undefined; store.effort = undefined; store.mode = undefined; }
     emitEvent(store, 'user_prompt', { prompt: sent ?? '', ...(attachments?.length ? { attachments } : {}) });
   } else {
     // A thread's first turn has no SDK session id yet, so its store is keyed
@@ -156,6 +160,7 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
     // (docs/issues/future/first-turn-parallel-session.md).
     const gitbotId = existingId ?? randomUUID();
     store = createSession(gitbotId, agent, repoPath, model, mode, permissionMode as PermissionMode | undefined, { threadId, botId, preset: botPreset });
+    if (effort) store.effort = effort;
     if (existingId) {
       store.sdkSessionId = existingId;
     }

@@ -6,6 +6,7 @@ import { EventEmitter } from "events";
 import qrcode from "qrcode-terminal";
 import { serveUiFile, uiAvailable, uiFileFor } from "./static-ui";
 import { listRepos, cloneRepo, createFolder, listDir, readFile, getRepoDetails, browseDirs } from "./workspace";
+import { DEFAULT_CLAUDE_EFFORT, EFFORT_LEVELS, supportedClaudeModels } from "./claude-models";
 
 // --- Transport abstractions ---
 // These interfaces cover the exact surface area that route handlers use.
@@ -233,6 +234,9 @@ export interface SessionStore {
   agent: "claude-code" | "opencode" | "codex";
   repoPath: string;
   model?: string;
+  /** Claude Code only: the reasoning effort this turn runs at. Resolved from
+   *  the thread's stored pick, so it survives a restart (bot-store's Thread). */
+  effort?: import("./claude-models").EffortLevel;
   mode?: "plan" | "build";
   permissionMode: PermissionMode;
   /** Most recent context-window snapshot, updated live during a turn. */
@@ -646,6 +650,15 @@ export async function handleWorkspaceRoutes(
 
   if (method === "GET" && path === "/agents") {
     jsonOk(res, { agents: availableAgents });
+    return true;
+  }
+
+  // The account's own Claude Code model list, as the last live session reported
+  // it. `models: null` means no session has run in this process yet, and the
+  // picker shows its fallback list until one has.
+  if (method === "GET" && path === "/claude-models") {
+    const models = supportedClaudeModels();
+    jsonOk(res, { models, effortLevels: EFFORT_LEVELS, defaultEffort: DEFAULT_CLAUDE_EFFORT });
     return true;
   }
 

@@ -36,6 +36,7 @@ import { recoverInterruptedChildren, watchRunningMarks } from "./restart-recover
 import { watchJarvisActivity } from "./attention";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
 import { uiFileFor } from "./static-ui";
+import { EFFORT_LEVELS, isEffortLevel, isModelValue, MODEL_MAX_LENGTH } from "./claude-models";
 
 export async function handleRequest(
   req: IRequest,
@@ -144,6 +145,7 @@ export async function handleRequest(
         sessionId: store.sdkSessionId,
         agent: store.agent,
         model: store.model ?? null,
+        effort: store.effort ?? null,
         mode: store.mode ?? null,
         permissionMode: store.permissionMode,
         context: store.context ?? null,
@@ -402,9 +404,20 @@ Output only the cleaned text.`;
     // POST /chat
     if (method === "POST" && path === "/chat") {
       const body = await readBody(req);
-      const { repoPath, agent, sessionId, model, permissionMode, prompt, attachments, threadId, mode } = body;
+      const { repoPath, agent, sessionId, model, effort, permissionMode, prompt, attachments, threadId, mode } = body;
+      // Same checks as PATCH /threads/:id: this is the other write path to the
+      // same two fields, and an unchecked `model` reaches both the SDK's argv
+      // and the context meter's string handling.
+      if (model !== undefined && !isModelValue(model)) {
+        jsonError(res, 400, `model must be a non-empty string of at most ${MODEL_MAX_LENGTH} characters`);
+        return;
+      }
+      if (effort !== undefined && !isEffortLevel(effort)) {
+        jsonError(res, 400, `effort must be one of: ${EFFORT_LEVELS.join(", ")}`);
+        return;
+      }
       const turn = startTurn(
-        { repoPath, agent, sessionId, model, permissionMode, prompt, attachments, threadId, mode },
+        { repoPath, agent, sessionId, model, effort, permissionMode, prompt, attachments, threadId, mode },
         availableAgents,
       );
       if (!turn.ok) { jsonError(res, turn.status, turn.message, turn.extra); return; }

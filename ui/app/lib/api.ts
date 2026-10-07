@@ -89,8 +89,17 @@ export function browse(path?: string | null) {
  *  modes as-is, plus "plan" — yolo with the agent held to planning. */
 export type ChatPermissionMode = SessionPermissionMode | "plan";
 
-/** Starts a turn. Returns the session id to stream + abort + approve on. */
-export function postChat(threadId: string, prompt: string, permissionMode: ChatPermissionMode) {
+/** Starts a turn. Returns the session id to stream + abort + approve on.
+ *  `model`/`effort` are Claude Code's and are sent on every turn the picker
+ *  applies to: the thread record carries the same pick, and sending it here as
+ *  well means a pick made moments before Send cannot lose the race with its
+ *  own save. */
+export function postChat(
+  threadId: string,
+  prompt: string,
+  permissionMode: ChatPermissionMode,
+  claude?: { model?: string; effort?: string },
+) {
   return req<{ sessionId: string }>("/chat", {
     method: "POST",
     body: JSON.stringify({
@@ -98,7 +107,27 @@ export function postChat(threadId: string, prompt: string, permissionMode: ChatP
       prompt,
       permissionMode: permissionMode === "plan" ? "yolo" : permissionMode,
       mode: permissionMode === "plan" ? "plan" : "build",
+      ...(claude?.model ? { model: claude.model } : {}),
+      ...(claude?.effort ? { effort: claude.effort } : {}),
     }),
+  });
+}
+
+/** The account's Claude Code models, or `models: null` while no session has run
+ *  in this gitbot process and nothing has been able to ask for them. */
+export function getClaudeModels() {
+  return req<{
+    models: import("./claude-models").ClaudeModelInfo[] | null;
+    effortLevels: string[];
+    defaultEffort: string;
+  }>("/claude-models");
+}
+
+/** Saves the thread's model and effort pick. Applies from its next turn. */
+export function patchThread(threadId: string, patch: { model?: string; effort?: string }) {
+  return req<{ thread: import("./gitbot").ThreadFull }>(`/threads/${encodeURIComponent(threadId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
   });
 }
 
@@ -117,7 +146,7 @@ export interface ContextUsage {
 }
 
 export function getSessionConfig(sessionId: string) {
-  return req<{ permissionMode: SessionPermissionMode; mode?: string | null; model?: string | null; context?: ContextUsage | null }>(
+  return req<{ permissionMode: SessionPermissionMode; mode?: string | null; model?: string | null; effort?: string | null; context?: ContextUsage | null }>(
     `/sessions/${encodeURIComponent(sessionId)}/config`,
   );
 }

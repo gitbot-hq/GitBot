@@ -4,6 +4,7 @@ import { projectId, projectIdForFolder, projectNames } from "./project-index";
 import { sessions, type SessionStore } from "./server-common";
 import { loadTranscript as loadClaudeTranscript, loadTranscriptContext } from "./start-claude-code";
 import { DEFAULT_CLAUDE_MODEL, type ContextUsage } from "./context-window";
+import { isModelValue } from "./claude-models";
 import { loadTranscript as loadCodexTranscript } from "./start-codex";
 import { getSessionHistory as loadOpencodeHistory } from "./start-opencode";
 
@@ -44,11 +45,24 @@ export async function threadContext(thread: Thread): Promise<ContextUsage | null
   const live = [...sessions.values()].reverse().find((s) => s.threadId === thread.id && s.context);
   if (live?.context) return live.context;
   if (!thread.sdkSessionId) return null;
-  // A bot that pins no model runs the default, so the meter has to size itself
-  // the same way: the transcript's own model name is the bare API one and never
-  // carries the [1m] suffix, so falling back to it would read 200k.
-  const model = getBot(thread.botId)?.model ?? DEFAULT_CLAUDE_MODEL;
+  // The meter has to size itself the way the next turn will run, which means
+  // resolving the model exactly as resolveThreadTurn does: the thread's own
+  // pick, else the bot's, else the default — and Jarvis gets the default
+  // whatever is stored, because its turns clear both. The transcript names the
+  // model the last turn used, but that is the previous pick, not this one.
+  //
+  // Stored values are re-checked here as well as on the turn path: threads.json
+  // is a plain file, and an unusable `model` reaching contextWindowFor used to
+  // throw out of this read and make the whole thread unopenable (500).
+  const bot = getBot(thread.botId);
+  const pinned = isJarvisBot(bot) ? undefined : usable(thread.model) ?? usable(bot?.model);
+  const model = pinned ?? DEFAULT_CLAUDE_MODEL;
   return loadTranscriptContext(thread.sdkSessionId, thread.repoPath, model);
+}
+
+/** A stored model string, or undefined when it is not one we can use. */
+function usable(model: unknown): string | undefined {
+  return isModelValue(model) ? model : undefined;
 }
 
 // --- Caps ---

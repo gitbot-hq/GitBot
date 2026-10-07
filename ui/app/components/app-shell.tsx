@@ -1663,6 +1663,7 @@ export default function V2() {
                 botPermissionMode={bot?.permissionMode}
                 fixedPermissions={bot?.builtin === "jarvis"}
                 botAgent={bot?.agent}
+                botModel={bot?.model}
                 botAvatar={bot ? avatarFor(bot.id) : undefined}
                 autoSend={autoSend && autoSend.botId === bot?.id ? autoSend.prompt : null}
                 onAutoSent={() => setAutoSend(null)}

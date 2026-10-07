@@ -17,7 +17,17 @@ import { bindSession } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcome } from "./bot-prompt";
 import { isJarvisTool, jarvisQueryOptions, stripJarvisReminder, withJarvisReminder } from "./jarvis";
 import { contextUsage, tokensInContext, DEFAULT_CLAUDE_MODEL, type ContextUsage } from "./context-window";
+import { captureSupportedModels, DEFAULT_CLAUDE_EFFORT } from "./claude-models";
 import { ASK_USER_QUESTION, askUserQuestionLabel, parseAskUserQuestion } from "./ask-user-question";
+
+/**
+ * How a turn reaches the SDK. A seam, like `agentRunners` in turns.ts: a test
+ * swaps `run` for a stub and reads the `options` object the turn built —
+ * `model`, `effort` and `resume` are only true of a run if they are in there,
+ * and asserting them anywhere earlier asserts the plumbing rather than the
+ * result. Not for production use: nothing but tests should replace it.
+ */
+export const claudeQuery: { run: typeof query } = { run: query };
 
 export async function initAgent(): Promise<boolean> {
   try {
@@ -72,14 +82,25 @@ export async function runAgent(store: SessionStore): Promise<void> {
     const preset = store.botPreset;
     const append = presetSystemPrompt(preset);
 
-    // Settle the model before the run so the context meter can name it and
-    // size its window correctly from the first assistant message.
+    // Settle the model and effort before the run so the context meter can name
+    // the model and size its window correctly from the first assistant message.
     store.model = store.model ?? DEFAULT_CLAUDE_MODEL;
+    store.effort = store.effort ?? DEFAULT_CLAUDE_EFFORT;
 
-    const q = query({
+    const q = claudeQuery.run({
       prompt: promptParam,
       options: {
+        // Both are sent on every turn, `resume` included, which is the whole
+        // mechanism behind "a pick applies to the next turn": nothing has to be
+        // pushed into the running session. Sending `effort` explicitly also
+        // means a user's settings.json `effortLevel` and CLAUDE_CODE_EFFORT_LEVEL
+        // no longer reach a gitbot thread — the picker is the only source.
+        //
+        // No `fallbackModel`: a model the account cannot run has to fail where
+        // it can be seen, since the picker would otherwise keep showing a model
+        // that is not the one that ran.
         model: store.model,
+        effort: store.effort,
         permissionMode: store.mode === "plan" ? "plan" : "default",
         abortController,
         includePartialMessages: true,
@@ -137,7 +158,16 @@ export async function runAgent(store: SessionStore): Promise<void> {
       },
     });
 
+    // The account's model list for the picker. Only a live session can be asked
+    // for it, so the first turn of the process is what fills it in; awaited by
+    // nobody, so a failure cannot disturb the turn.
+    captureSupportedModels(q);
+
     let receivedResult = false;
+    // The canonical model id the main thread actually ran as, learned from its
+    // assistant messages. Needed to read the turn's real window back (see
+    // runtimeWindow): `result.modelUsage` does not key by an alias.
+    let ranAs: string | undefined;
     // A setup run says how it went in words; the marker is what the hub reads.
     let assistantText = "";
     try {
@@ -158,10 +188,14 @@ export async function runAgent(store: SessionStore): Promise<void> {
         // The result message tells us the window the SDK actually budgeted.
         // A subagent's messages carry its own window, not this session's.
         if (msg.type === "assistant" && !(msg as any).parent_tool_use_id) {
+          // The canonical id the turn actually ran as, which is how `result`
+          // keys its usage when an alias was configured. Kept from the main
+          // thread only: a sub-agent reports whatever model it was given.
+          ranAs = (msg as any).message?.model ?? ranAs;
           const used = tokensInContext((msg as any).message?.usage);
           if (used > 0) reportContext(store, used);
         } else if (msg.type === "result") {
-          const window = (msg as any).modelUsage?.[store.model ?? ""]?.contextWindow;
+          const window = runtimeWindow(msg, store.model, ranAs);
           reportContext(store, store.context?.used ?? 0, window);
         }
 
@@ -197,16 +231,15 @@ export async function runAgent(store: SessionStore): Promise<void> {
 
     if (!receivedResult) {
       console.log("[query] stream ended without result message — treating as error");
-      emitEvent(store, "error", { message: "Claude process exited unexpectedly" });
+      emitEvent(store, "error", { message: namingModel(store, "Claude process exited unexpectedly", stderrTail) });
       store.status = "error";
       scheduleCleanup(store);
       return;
     }
   } catch (err: any) {
     console.log("[query] outer error:", err?.message, err?.stack);
-    const detail = stderrTail.join("").trim();
     emitEvent(store, "error", {
-      message: detail ? `${err?.message ?? "Agent failed"}\n\n${detail}` : (err?.message ?? "Unknown error"),
+      message: namingModel(store, err?.message ?? "Unknown error", stderrTail),
     });
     store.status = "error";
     scheduleCleanup(store);
@@ -231,6 +264,57 @@ export async function continueAgent(store: SessionStore, prompt: string): Promis
   store.status = "running";
   notifyPermissionsChanged();
   await runAgent(store);
+}
+
+/**
+ * The window the turn was actually held to, from the `result` message — the one
+ * input that can correct `contextWindowFor`'s static table, so it is worth some
+ * care to find and worth saying so when it is missing.
+ *
+ * `result.modelUsage` is **not** keyed by the string the turn was configured
+ * with whenever that string is an alias. Measured 2026-10-07:
+ *
+ *     configured "default"           → keys ["claude-haiku-4-5-20251001", "claude-opus-5-5"]
+ *     configured "haiku"             → keys ["claude-haiku-4-5-20251001"]
+ *     configured "claude-opus-5[1m]" → keys ["claude-haiku-4-5-20251001", "claude-opus-5[1m]"]
+ *
+ * Three things follow. A literal id is echoed back as given, suffix and all, so
+ * an exact match is tried first. An alias is replaced by the canonical id the
+ * run resolved to, which is exactly what the main thread's assistant messages
+ * report, so that is the second key to try — note `claude-opus-5[1m]` resolves
+ * to `claude-opus-5`, so neither lookup subsumes the other. And **there is
+ * almost always a Haiku entry** from Claude Code's own small-model helper work,
+ * so "the only entry" and "the largest window" are both wrong.
+ */
+function runtimeWindow(result: SDKMessage, configured?: string, ranAs?: string): number | undefined {
+  const usage = (result as any).modelUsage as Record<string, { contextWindow?: number; canonicalModel?: string }> | undefined;
+  if (!usage) return undefined;
+  const entry =
+    (configured ? usage[configured] : undefined)
+    ?? (ranAs ? usage[ranAs] : undefined)
+    ?? (ranAs ? Object.values(usage).find((u) => u?.canonicalModel === ranAs) : undefined);
+  const window = entry?.contextWindow;
+  if (typeof window === "number" && window > 0) return window;
+  // A miss leaves the meter on the static table, which is a guess that goes
+  // stale silently — so say so here rather than let the two look alike.
+  console.warn(
+    `  context meter: no modelUsage entry for "${configured}"${ranAs && ranAs !== configured ? ` (ran as "${ranAs}")` : ""}`
+    + ` — keys were [${Object.keys(usage).join(", ")}]; falling back to the static window table`,
+  );
+  return undefined;
+}
+
+/**
+ * A failed turn's message: what went wrong, the child's own stderr, and — when
+ * the failure is about the model or the effort level — what this turn asked
+ * for. Nothing falls back to another model, so a rejected one has to be named
+ * here or the picker would go on showing a model that never ran.
+ */
+function namingModel(store: SessionStore, message: string, stderrTail: string[]): string {
+  const detail = stderrTail.join("").trim();
+  const text = detail ? `${message}\n\n${detail}` : message;
+  if (!/\bmodel\b|\beffort\b/i.test(text)) return text;
+  return `${text}\n\nThis turn asked for model "${store.model}" at effort "${store.effort}".`;
 }
 
 /**
@@ -487,11 +571,15 @@ export async function loadTranscript(
 }
 
 /**
- * How full a session's context window was at the end of its transcript: the
- * last main-thread assistant message's usage, as the live meter reads it. For
- * a thread opened when no turn has run since gitbot started. `model` is the
- * one the run was configured with, when known: only it carries the [1m]
- * suffix that sizes a long window.
+ * How full a thread's context window is at the end of its transcript: the last
+ * main-thread assistant message's usage, as the live meter reads it. For a
+ * thread opened when no turn has run since gitbot started.
+ *
+ * `model` is the one the **next** turn will run (see `threadContext`), not
+ * necessarily the one that wrote the transcript — the user may have changed the
+ * pick since. That is deliberate: the meter answers "will this conversation fit
+ * what it is about to run", so a thread that has outgrown a newly-picked model
+ * must read over 100% rather than be quietly re-sized to something that fits.
  */
 export async function loadTranscriptContext(
   sessionId: string,
@@ -520,7 +608,13 @@ export async function loadTranscriptContext(
       const tokens = tokensInContext(entry.message?.usage);
       if (tokens > 0) {
         used = tokens;
-        seenModel = entry.message?.model;
+        // Validated where it enters, not only where it is used. This is parsed
+        // JSONL written by another process: `entry` is `any`, so TypeScript
+        // never checks that `message.model` is the `string | undefined` the
+        // variable claims, and anything non-string would flow on into
+        // ContextUsage and out to the browser.
+        const parsed = entry.message?.model;
+        seenModel = typeof parsed === "string" && parsed ? parsed : undefined;
       }
     }
   } catch (err: any) {
@@ -528,9 +622,13 @@ export async function loadTranscriptContext(
     return null;
   }
   if (!used) return null;
-  const usage = contextUsage(used, model ?? seenModel);
-  // More than the default window can only mean the run had the long one.
-  return used > usage.window ? contextUsage(used, model ?? seenModel, 1_000_000) : usage;
+  // No promotion when `used` overruns the window. That rule existed when the
+  // window was 200k for every model without a [1m] suffix, so an overrun could
+  // only mean the table had guessed low. The table is now per model, and the
+  // model is the next turn's, so an overrun is a real reading — the thread does
+  // not fit what it is set to run — and it is the same condition the picker
+  // greys a short-window model out on. Hiding it here would contradict that.
+  return contextUsage(used, model ?? seenModel);
 }
 
 async function getSessionPreview(filePath: string): Promise<string> {

@@ -44,6 +44,10 @@ export type ThreadFull = Thread & {
   agent?: string;
   kind: string;
   sdkSessionId: string | null;
+  // Claude Code threads: the composer's model and effort pick, stored per
+  // thread so it survives a restart. Absent until the user picks.
+  model?: string;
+  effort?: string;
   titleIsAuto: boolean;
   repoPath: string;
   preview: string;

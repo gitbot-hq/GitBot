@@ -37,6 +37,7 @@ import {
 } from "./bot-store";
 import { existsSync, statSync } from "fs";
 import { loadThreadMessages, threadContext } from "./thread-tools";
+import { EFFORT_LEVELS, isEffortLevel, isModelValue, MODEL_MAX_LENGTH, type EffortLevel } from "./claude-models";
 
 /**
  * REST surface for the bot hub: bots, their threads, and a thread's messages.
@@ -225,6 +226,18 @@ export async function handleBotRoutes(
       if (existing && isJarvisBot(getBot(existing.botId))) {
         for (const key of ["repoPath", "agent", "kind", "sdkSessionId"]) delete body[key];
       }
+      // The composer's model and effort pick. The model is the SDK's own value
+      // string and is stored verbatim — there is no list to check it against
+      // here, and a model the account cannot run has to fail in the open on the
+      // turn that asks for it rather than be swapped for something else.
+      if (body.model !== undefined && !isModelValue(body.model)) {
+        jsonError(res, 400, `model must be a non-empty string of at most ${MODEL_MAX_LENGTH} characters`);
+        return true;
+      }
+      if (body.effort !== undefined && !isEffortLevel(body.effort)) {
+        jsonError(res, 400, `effort must be one of: ${EFFORT_LEVELS.join(", ")}`);
+        return true;
+      }
       const thread = updateThread(threadId, body);
       if (!thread) { jsonError(res, 404, "Thread not found"); return true; }
       jsonOk(res, { thread });
@@ -251,6 +264,8 @@ export type ThreadTurn =
       repoPath: string;
       agent: BotAgent;
       model?: string;
+      /** Claude Code only; undefined on every other agent. */
+      effort?: EffortLevel;
       permissionMode: PermissionMode;
       mode?: "plan" | "build";
       preset: BotPreset;
@@ -258,15 +273,15 @@ export type ThreadTurn =
   | { ok: false; status: number; message: string; extra?: Record<string, unknown> };
 
 /**
- * How /chat runs a turn on a hub thread: the thread supplies the folder and
- * agent, the bot its preset, and the request may override model and
- * permissions. Jarvis is fixed — its folder, the default model and
+ * How /chat runs a turn on a hub thread: the thread supplies the folder, agent,
+ * model and effort, the bot its preset, and the request may override model,
+ * effort and permissions. Jarvis is fixed — its folder, the default model and
  * auto-approve, whatever the thread record or the request says.
  */
 export function resolveThreadTurn(
   thread: Thread,
   bot: Bot,
-  body: { model?: string; permissionMode?: PermissionMode; mode?: "plan" | "build" },
+  body: { model?: string; effort?: EffortLevel; permissionMode?: PermissionMode; mode?: "plan" | "build" },
   availableAgents: readonly string[],
 ): ThreadTurn {
   const agent = threadAgent(thread, bot);
@@ -311,11 +326,30 @@ export function resolveThreadTurn(
   // Bot presets speak their own vocabulary ("auto-approve", "plan"); the
   // session speaks PermissionMode. Translate, or nothing auto-approves.
   const botPermission = botPermissionToSession(bot.permissionMode, agent);
+  // The thread's own pick comes from the composer and beats the bot's default.
+  // Both are Claude Code's: Codex reads `model` as providerID/modelID and
+  // OpenCode has its own names, so a Claude model string would break them.
+  const claude = agent === "claude-code";
+  // Stored values are re-checked on the way out, not just on the way in.
+  // threads.json is a plain file another tool (or an older build with a
+  // different enum) can write, and an effort outside the enum is accepted by
+  // the CLI and silently ignored — so it would run at a level nothing in the
+  // UI or the file agrees with. Dropping it degrades to the default instead,
+  // which is exactly what an absent value already does.
+  const storedModel = isModelValue(thread.model) ? thread.model : undefined;
+  const storedEffort = isEffortLevel(thread.effort) ? thread.effort : undefined;
+  if (claude && thread.effort !== undefined && storedEffort === undefined) {
+    console.warn(`  thread ${thread.id}: ignoring unknown stored effort ${JSON.stringify(thread.effort)}`);
+  }
+  if (claude && thread.model !== undefined && storedModel === undefined) {
+    console.warn(`  thread ${thread.id}: ignoring unusable stored model ${JSON.stringify(thread.model)}`);
+  }
   return {
     ok: true,
     repoPath: thread.repoPath,
     agent,
-    model: body.model ?? bot.model,
+    model: body.model ?? (claude ? storedModel : undefined) ?? bot.model,
+    ...(claude ? { effort: body.effort ?? storedEffort } : {}),
     permissionMode: body.permissionMode ?? botPermission.permissionMode,
     mode: body.mode ?? botPermission.mode,
     preset,

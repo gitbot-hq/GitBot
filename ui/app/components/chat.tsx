@@ -27,11 +27,13 @@ import BotName from "./bot-name";
 import AskQuestionCard, { AskAnswerNote } from "./ask-question-card";
 import {
   ApiError,
+  getClaudeModels,
   getMessages,
   getPendingPermissions,
   getSessionConfig,
   getSessionStatus,
   patchPermissionMode,
+  patchThread,
   postAbort,
   postChat,
   postPermission,
@@ -39,6 +41,16 @@ import {
   type ChatPermissionMode,
   type ContextUsage,
 } from "../lib/api";
+import {
+  DEFAULT_CLAUDE_EFFORT,
+  DEFAULT_CLAUDE_MODEL,
+  EFFORT_OPTIONS,
+  FALLBACK_CLAUDE_MODELS,
+  modelDisplayName,
+  modelFit,
+  type ClaudeModelInfo,
+  type EffortLevel,
+} from "../lib/claude-models";
 import {
   EDIT_TOOLS,
   type AskAnswers,
@@ -293,6 +305,18 @@ function permissionOptionsFor(agent: string) {
 
 const threadPermissionKey = "gitbot-thread-permissions";
 
+/**
+ * The account's real model list, once a session has reported one.
+ *
+ * First paint has no live list to show: `supportedModels()` needs a running
+ * session, and a thread that has never had a turn has none. So the menu renders
+ * the fallback list straight away and swaps to the live one when it arrives —
+ * no spinner, no empty menu, and no flash, because both lists are complete
+ * menus rather than one being a placeholder for the other. Held at module
+ * scope so the swap happens once per page rather than once per thread opened.
+ */
+let liveClaudeModels: ClaudeModelInfo[] | null = null;
+
 /** The bot's own vocabulary ("auto-approve") → the chat's. Mirrors the server's
  *  botPermissionToSession, including its codex case: "ask" is not a thing codex
  *  can do, so those bots run in the workspace-write sandbox. */
@@ -471,6 +495,7 @@ export default function Chat({
   botPermissionMode,
   fixedPermissions = false,
   botAgent,
+  botModel,
   botAvatar,
   autoSend,
   onAutoSent,
@@ -509,6 +534,10 @@ export default function Chat({
    *  always runs in auto-approve): the composer offers no permission menu. */
   fixedPermissions?: boolean;
   botAgent?: string;
+  /** The bot's pinned model, if it has one. The server resolves a turn's model
+   *  as `body ?? thread ?? bot ?? default` (resolveThreadTurn), so the composer
+   *  has to know about this layer or it names a model the turn will not run. */
+  botModel?: string;
   botAvatar?: AvatarPref;
   autoSend: string | null;
   onAutoSent: () => void;
@@ -584,7 +613,24 @@ export default function Chat({
   const [escapeStopArmed, setEscapeStopArmed] = useState(false);
   /** Model name and context-window occupancy for the current session. */
   const [contextInfo, setContextInfo] = useState<{ model: string | null; context: ContextUsage | null }>({ model: null, context: null });
-  const [activeMenu, setActiveMenu] = useState<"share" | "more" | "permissions" | null>(null);
+  const [activeMenu, setActiveMenu] = useState<"share" | "more" | "permissions" | "model" | "effort" | null>(null);
+  // The model menu's rows: the fallback list until a session has reported the
+  // account's own, then that one, verbatim and in the SDK's order.
+  const [claudeModels, setClaudeModels] = useState<ClaudeModelInfo[]>(() => liveClaudeModels ?? FALLBACK_CLAUDE_MODELS);
+  // The composer's picks, per thread, held here as well as on the thread record
+  // so a change shows at once and does not wait on the save. Refs for the send
+  // path, which reads them outside a render.
+  const modelPicksRef = useRef<Record<string, string>>({});
+  const [modelPicks, setModelPicks] = useState<Record<string, string>>({});
+  const effortPicksRef = useRef<Record<string, EffortLevel>>({});
+  const [effortPicks, setEffortPicks] = useState<Record<string, EffortLevel>>({});
+  /** Per-field save counter, so a failed save only rolls back a pick nothing
+   *  newer has replaced. See pickClaude. */
+  const pickSeqRef = useRef<{ model?: number; effort?: number }>({});
+  const modelButtonRef = useRef<HTMLButtonElement | null>(null);
+  const effortButtonRef = useRef<HTMLButtonElement | null>(null);
+  const modelMenuRef = useRef<HTMLDivElement | null>(null);
+  const effortMenuRef = useRef<HTMLDivElement | null>(null);
   const setShareOpen = useCallback((open: boolean) => setActiveMenu(open ? "share" : null), []);
   const moreButtonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -798,6 +844,43 @@ export default function Chat({
     };
   }, [activeMenu]);
 
+  useEffect(() => {
+    if (activeMenu !== "model" && activeMenu !== "effort") return;
+    const menu = activeMenu === "model" ? modelMenuRef : effortMenuRef;
+    const trigger = activeMenu === "model" ? modelButtonRef : effortButtonRef;
+    const frame = window.requestAnimationFrame(() => {
+      const checked = menu.current?.querySelector<HTMLButtonElement>('button[aria-checked="true"]:not(:disabled)');
+      (checked ?? menu.current?.querySelector<HTMLButtonElement>("button:not(:disabled)"))?.focus();
+    });
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setActiveMenu(null);
+      trigger.current?.focus();
+    }
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [activeMenu]);
+
+  // The account's own model list, swapped in for the fallback as soon as a
+  // session exists to report it. Re-asked at each turn boundary until it lands:
+  // the first turn of the gitbot process is what makes it available, so a thread
+  // that has never run gets the real list the moment its first turn starts.
+  useEffect(() => {
+    if (liveClaudeModels) return;
+    let dropped = false;
+    getClaudeModels()
+      .then(({ models }) => {
+        if (dropped || !models?.length) return;
+        liveClaudeModels = models;
+        setClaudeModels(models);
+      })
+      .catch(() => {});
+    return () => { dropped = true; };
+  }, [streaming]);
 
   function resetBox() {
     if (boxRef.current) boxRef.current.style.height = "auto";
@@ -1520,6 +1603,11 @@ export default function Chat({
         tid,
         prompt,
         permissionModesRef.current[tid] ?? safePermissionMode(botPermissionMode, agent),
+        // Claude Code only: the other agents read `model` in their own
+        // vocabulary, and Jarvis is pinned to the default.
+        agent === "claude-code" && !fixedPermissions
+          ? { model: modelPicksRef.current[tid], effort: effortPicksRef.current[tid] }
+          : undefined,
       );
       if (threadRef.current !== tid) return;
       sessionRef.current = sessionId;
@@ -1706,6 +1794,59 @@ export default function Chat({
       });
   }
 
+  /**
+   * Pick the thread's model or effort. Saved at once — to the thread record, so
+   * it outlives this gitbot process — and read by the turn after this one: the
+   * running turn's options were settled when it started, and nothing is pushed
+   * into it. That is why the control stays usable mid-turn.
+   */
+  function pickClaude(patch: { model?: string; effort?: EffortLevel }) {
+    if (!thread) return;
+    const tid = thread.id;
+    const beforeModel = modelPicksRef.current[tid];
+    const beforeEffort = effortPicksRef.current[tid];
+    // Which save this is, per field. A later pick supersedes an earlier one, so
+    // only the newest save for a field may roll that field back: without this,
+    // an earlier PATCH failing after a later one succeeded would wipe the newer
+    // pick from the UI while threads.json kept it — and the menu is meant to
+    // stay usable mid-turn, which is exactly when two picks land together.
+    const seq = { ...pickSeqRef.current };
+    if (patch.model !== undefined) seq.model = (seq.model ?? 0) + 1;
+    if (patch.effort !== undefined) seq.effort = (seq.effort ?? 0) + 1;
+    pickSeqRef.current = seq;
+    const mine = { model: seq.model, effort: seq.effort };
+
+    if (patch.model !== undefined) {
+      modelPicksRef.current = { ...modelPicksRef.current, [tid]: patch.model };
+      setModelPicks(modelPicksRef.current);
+    }
+    if (patch.effort !== undefined) {
+      effortPicksRef.current = { ...effortPicksRef.current, [tid]: patch.effort };
+      setEffortPicks(effortPicksRef.current);
+    }
+    patchThread(tid, patch).catch((e) => {
+      // Not saved: put the control back where it was rather than show a pick
+      // the next turn will not honour — but only the fields this call is still
+      // the newest save for, and only while the thread is still open.
+      if (threadRef.current !== tid) return;
+      const rollModel = patch.model !== undefined && pickSeqRef.current.model === mine.model;
+      const rollEffort = patch.effort !== undefined && pickSeqRef.current.effort === mine.effort;
+      if (rollModel) {
+        const models = { ...modelPicksRef.current };
+        if (beforeModel === undefined) delete models[tid]; else models[tid] = beforeModel;
+        modelPicksRef.current = models;
+        setModelPicks(models);
+      }
+      if (rollEffort) {
+        const efforts = { ...effortPicksRef.current };
+        if (beforeEffort === undefined) delete efforts[tid]; else efforts[tid] = beforeEffort;
+        effortPicksRef.current = efforts;
+        setEffortPicks(efforts);
+      }
+      setTurnError(errText(e));
+    });
+  }
+
   const visibleMsgs = setup
     ? msgs.filter((message) => {
         if (message.role !== "user") return true;
@@ -1751,6 +1892,131 @@ export default function Chat({
     const tail = name.indexOf(" (1M");
     return tail === -1 ? name : name.slice(0, tail);
   })();
+
+  // The model and effort picker is Claude Code's alone: Codex reads `model` as
+  // providerID/modelID, OpenCode has its own names, and a Jarvis thread's
+  // settings are fixed by gitbot (the same thing `fixedPermissions` says).
+  // The picker needs a stored thread to save to. The only composer that runs
+  // without one belongs to Jarvis, which hides the picker anyway.
+  const claudeControls = !!thread && agent === "claude-code" && !fixedPermissions;
+  // The same chain the server resolves a turn with (`resolveThreadTurn`):
+  // request ?? thread ?? bot ?? default. Without the bot layer the trigger
+  // names "Default (recommended)" on a bot-pinned thread while the turn runs
+  // the bot's model and the meter sizes from it.
+  const pickedModel = (thread && modelPicks[thread.id]) ?? thread?.model ?? botModel ?? DEFAULT_CLAUDE_MODEL;
+  const pickedEffort: EffortLevel = (thread && effortPicks[thread.id]) ?? (thread?.effort as EffortLevel | undefined) ?? DEFAULT_CLAUDE_EFFORT;
+  // How full the conversation is, as the context meter reads it — the meter
+  // lives in the toolbar, but the state behind it (`contextInfo`) is this
+  // component's and the picker needs the same number to decide what still fits.
+  const usedTokens = ctx?.used ?? 0;
+  const modelLabelFor = (value: string) => modelDisplayName(claudeModels, value);
+  const effortOption = EFFORT_OPTIONS.find((o) => o.level === pickedEffort) ?? EFFORT_OPTIONS[1];
+
+  /**
+   * Under the composer: what the next turn will run, and the controls that
+   * change it. Both menus stay live while a turn runs — a change saves straight
+   * away and the turn after this one picks it up.
+   */
+  const composerFooter = claudeControls && (
+    <div className="composer-footer">
+      {claudeControls && (
+        <div className="composer-pick">
+          <button
+            ref={modelButtonRef}
+            type="button"
+            className={`composer-pick-trigger${activeMenu === "model" ? " is-active" : ""}`}
+            onClick={() => setActiveMenu((menu) => (menu === "model" ? null : "model"))}
+            aria-label={`Model: ${modelLabelFor(pickedModel)}`}
+            aria-expanded={activeMenu === "model"}
+            aria-haspopup="menu"
+            aria-controls="chat-model-menu"
+          >
+            <span>{modelLabelFor(pickedModel)}</span>
+            <AnimatedActionIcon icon={ChevronDownIcon} size={12} />
+          </button>
+          {activeMenu === "model" && <>
+            <div ref={modelMenuRef} id="chat-model-menu" className="composer-pick-menu" role="menu" aria-label="Model" onKeyDown={moveMenuFocus}>
+              <div className="composer-pick-menu-title">Model</div>
+              {claudeModels.map((m) => {
+                const current = pickedModel === m.value;
+                // Whether this row still fits, and what to say about it, is
+                // decided in lib/claude-models so it can be tested without a
+                // React harness. The current pick is never blocked — see
+                // modelFit for why.
+                const { blocked, note: why } = modelFit(m, usedTokens, current);
+                return (
+                  <button
+                    key={m.value}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={pickedModel === m.value}
+                    disabled={blocked}
+                    title={why}
+                    onClick={() => {
+                      pickClaude({ model: m.value });
+                      setActiveMenu(null);
+                      modelButtonRef.current?.focus();
+                    }}
+                  >
+                    <span className="composer-pick-option-copy">
+                      <strong>{m.displayName}</strong>
+                      <small>{why ?? m.description}</small>
+                    </span>
+                    {pickedModel === m.value && <AnimatedActionIcon icon={CheckIcon} size={14} />}
+                  </button>
+                );
+              })}
+              <p>Applies from the next message in this conversation.</p>
+            </div>
+            <button type="button" className="menu-scrim" onClick={() => setActiveMenu(null)} aria-label="Close model menu" tabIndex={-1} />
+          </>}
+        </div>
+      )}
+      {claudeControls && (
+        <div className="composer-pick">
+          <button
+            ref={effortButtonRef}
+            type="button"
+            className={`composer-pick-trigger${activeMenu === "effort" ? " is-active" : ""}`}
+            onClick={() => setActiveMenu((menu) => (menu === "effort" ? null : "effort"))}
+            aria-label={`Thinking effort: ${effortOption.label}`}
+            aria-expanded={activeMenu === "effort"}
+            aria-haspopup="menu"
+            aria-controls="chat-effort-menu"
+          >
+            <span>{effortOption.label}</span>
+            <AnimatedActionIcon icon={ChevronDownIcon} size={12} />
+          </button>
+          {activeMenu === "effort" && <>
+            <div ref={effortMenuRef} id="chat-effort-menu" className="composer-pick-menu" role="menu" aria-label="Thinking effort" onKeyDown={moveMenuFocus}>
+              <div className="composer-pick-menu-title">Thinking effort</div>
+              {EFFORT_OPTIONS.map((option) => (
+                <button
+                  key={option.level}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={pickedEffort === option.level}
+                  onClick={() => {
+                    pickClaude({ effort: option.level });
+                    setActiveMenu(null);
+                    effortButtonRef.current?.focus();
+                  }}
+                >
+                  <span className="composer-pick-option-copy">
+                    <strong>{option.label}</strong>
+                    <small>{option.detail}</small>
+                  </span>
+                  {pickedEffort === option.level && <AnimatedActionIcon icon={CheckIcon} size={14} />}
+                </button>
+              ))}
+              <p>Applies from the next message in this conversation.</p>
+            </div>
+            <button type="button" className="menu-scrim" onClick={() => setActiveMenu(null)} aria-label="Close effort menu" tabIndex={-1} />
+          </>}
+        </div>
+      )}
+    </div>
+  );
 
   const toolbar = (onShare || onOpenBot || onNewThread) && (
     <div className="chat-toolbar" aria-label="Chat actions">
@@ -2104,6 +2370,7 @@ export default function Chat({
               Stop setup
             </button>
           </div>
+          {composerFooter}
         </div>
       ) : setup && !setupAwaitingInput ? (
         <div className="composer setup-resume-composer">
@@ -2130,6 +2397,7 @@ export default function Chat({
               {setup.retrying ? "Resuming" : "Resume setup"}
             </button>
           </div>
+          {composerFooter}
         </div>
       ) : lock && !streaming ? (
         <div className="composer">
@@ -2165,6 +2433,7 @@ export default function Chat({
               <span className="stop-glyph" aria-hidden="true" />
             </button>
           </div>
+          {composerFooter}
         </div>
       ) : (
         <form
@@ -2316,6 +2585,7 @@ export default function Chat({
               </button>
             )}
           </div>
+          {composerFooter}
         </form>
       )}
     </main>
