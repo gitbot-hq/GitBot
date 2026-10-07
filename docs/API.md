@@ -2,7 +2,7 @@
 
 The bot hub UI talks to the gitbot server over a plain REST + Server-Sent Events (SSE) API. You can use the same API to build your own client.
 
-- **Base URL:** `http://127.0.0.1:3000` on the machine itself, and `http://<machine-ip>:3000` from the network by default. `gitbot start -l` restricts it to the machine; `--host <ip>` binds one specific address.
+- **Base URL:** `http://127.0.0.1:3000` by default, reachable from the machine itself only. `gitbot start -l` also serves `http://<machine-ip>:3000` on the network; `--host <ip>` binds one specific address.
 - **Format:** JSON in, JSON out, unless noted. Errors are `{ "error": "<message>" }` with a 4xx/5xx status; some carry extra fields (noted below).
 - **Auth:** none. See [Security](../README.md#security-and-privacy) before enabling LAN access.
 - **CORS:** every origin is allowed for `GET`, `POST` and `PATCH`. `DELETE` is not in the allowed methods, so browser clients on another origin cannot delete; same-origin clients (the bundled UI) and non-browser clients can.

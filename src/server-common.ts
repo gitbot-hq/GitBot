@@ -105,14 +105,14 @@ function isWildcardHost(host: string): boolean {
 }
 
 /**
- * Which address the server binds. Nothing asked for → every interface, so
- * devices on the network can connect. `-l` → loopback, this computer only. An
- * explicit `--host` wins over `-l`, because naming one address is the more
- * specific request.
+ * Which address the server binds. Nothing asked for → loopback, so only this
+ * computer can connect. `-l` → every interface, so devices on the network can
+ * too. An explicit `--host` wins over `-l`, because naming one address is the
+ * more specific request.
  */
-export function resolveHost(opts: { local?: boolean; host?: string }): string {
+export function resolveHost(opts: { lan?: boolean; host?: string }): string {
   if (opts.host) return opts.host;
-  return opts.local ? LOOPBACK_HOST : LAN_HOST;
+  return opts.lan ? LAN_HOST : LOOPBACK_HOST;
 }
 
 function hostUrl(ip: string, port: number): string {
@@ -127,7 +127,7 @@ function hostUrl(ip: string, port: number): string {
 export async function showQR(host: string, port: number): Promise<void> {
   if (isLoopbackHost(host)) {
     console.log(`\n  Local    ${hostUrl(host, port)}`);
-    console.log(`  Only this computer can connect.\n`);
+    console.log(`  Only this computer can connect. Run with -l to open it to devices on your network.\n`);
     return;
   }
 
@@ -138,7 +138,7 @@ export async function showQR(host: string, port: number): Promise<void> {
   if (wildcard) console.log(`  Local    ${hostUrl(host === "::" ? "::1" : LOOPBACK_HOST, port)}`);
   console.log(`  Network  ${url}`);
   console.log(`  Anyone who can reach this address can use the agents on this machine. GitBot has no login.`);
-  console.log(`  Run with -l to keep it on this computer only.\n`);
+  console.log(`  Start without -l to keep it on this computer only.\n`);
 
   const qrCode = await new Promise<string>((resolve) => {
     qrcode.generate(url, { small: true }, (code: string) => {

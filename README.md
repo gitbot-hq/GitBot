@@ -50,9 +50,9 @@ cd /path/to/your/projects
 gitbot start
 ```
 
-Open **http://127.0.0.1:3000** on your computer. GitBot also listens on your network by default and prints a network address with a QR code, so you can open it from another device. To keep it on this computer only, run `gitbot start -l`. The workspace works best on desktop.
+Open **http://127.0.0.1:3000** on your computer. By default only this computer can connect. To open it from another device on your network, run `gitbot start -l`; GitBot then also prints a network address and a QR code. The workspace works best on desktop.
 
-> **Before you start on a shared network:** GitBot has no authentication, and by default anyone on the same network who can reach its port can use the agents running on your machine. On café, office or other shared Wi-Fi, start it with `gitbot start -l`. Never expose the port to the public internet. [Read the security notes](#security-and-privacy).
+> **Before using `-l`:** GitBot has no authentication. With `-l`, anyone on the same network who can reach its port can use the agents running on your machine, so use it only on a network you trust, not on café, office or other shared Wi-Fi. Never expose the port to the public internet. [Read the security notes](#security-and-privacy).
 
 <br><br><br>
 
@@ -150,7 +150,7 @@ An **Allowed tools** list limits which tools a bot can use; its permission mode 
 
 ## Security and privacy
 
-> **Important:** GitBot has no authentication. By default it listens on every network interface, and anyone who can reach its port can run agents using your machine's access. Use that only on a network you trust. `gitbot start -l` binds `127.0.0.1` so only your computer can connect. Never expose the port to the internet, and stop GitBot when you are not using it.
+> **Important:** GitBot has no authentication. By default it binds `127.0.0.1`, so only your computer can connect. `gitbot start -l` listens on every network interface, and then anyone who can reach its port can run agents using your machine's access. Use `-l` only on a network you trust, never expose the port to the internet, and stop GitBot when you are not using it.
 
 Bots act with your user account's file and shell access. Auto-approval removes a chance to inspect individual tool calls. Imported bots may include setup instructions that run when imported, so read them and their permission mode first.
 
@@ -164,13 +164,13 @@ GitBot has no account, telemetry, or hosted database. Bots and thread records li
 gitbot start                 # use port 3000
 gitbot start -p 4000         # choose another port
 gitbot start --caffeinate    # keep a Mac awake during long jobs
-gitbot start -l              # this computer only; nothing on the network can connect
+gitbot start -l              # also let devices on your network connect (prints the address and a QR code)
 gitbot start --host <ip>     # listen on one specific address only
 ```
 
 The folder where you run `gitbot start` becomes the workspace shown first in the folder picker. A thread can still run in another folder you can read.
 
-Without a flag GitBot listens on every interface and prints the local address, the network address and a QR code. `-l` (`--local`) listens on `127.0.0.1` and prints only the local address. `--host` takes an IPv4 or IPv6 address and overrides `-l`: use it to listen on a single interface, such as a VPN or Tailscale address, or on the loopback address a TLS-terminating proxy forwards to.
+Without a flag GitBot listens on `127.0.0.1` and prints only the local address. `-l` (`--lan`) listens on every interface and prints the local address, the network address and a QR code. `--host` takes an IPv4 or IPv6 address and overrides `-l`: use it to listen on a single interface, such as a VPN or Tailscale address, or on the loopback address a TLS-terminating proxy forwards to.
 
 <br><br><br>
 

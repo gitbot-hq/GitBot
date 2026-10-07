@@ -33,13 +33,13 @@ function cli(...args: string[]) {
 // A QR code is drawn with block characters; nothing else in the banner uses them.
 const hasQR = (logs: string[]) => logs.some(line => /[\u2580-\u259f]/.test(line));
 
-test("no flag binds every interface, -l binds loopback, --host wins over -l", () => {
-  assert.equal(resolveHost({}), "0.0.0.0");
-  assert.equal(resolveHost({ local: false }), "0.0.0.0");
-  assert.equal(resolveHost({ local: true }), "127.0.0.1");
+test("no flag binds loopback, -l binds every interface, --host wins over -l", () => {
+  assert.equal(resolveHost({}), "127.0.0.1");
+  assert.equal(resolveHost({ lan: false }), "127.0.0.1");
+  assert.equal(resolveHost({ lan: true }), "0.0.0.0");
   assert.equal(resolveHost({ host: "192.168.1.5" }), "192.168.1.5");
   assert.equal(resolveHost({ host: "127.0.0.1" }), "127.0.0.1");
-  assert.equal(resolveHost({ local: true, host: "100.64.0.7" }), "100.64.0.7");
+  assert.equal(resolveHost({ lan: true, host: "100.64.0.7" }), "100.64.0.7");
 
   assert.ok(isLoopbackHost("127.0.0.1"));
   assert.ok(isLoopbackHost("127.0.0.53"));
@@ -48,11 +48,11 @@ test("no flag binds every interface, -l binds loopback, --host wins over -l", ()
   assert.ok(!isLoopbackHost("192.168.1.5"));
 });
 
-test("-l keeps the hub unreachable from the network and prints no QR code", async () => {
+test("no flag keeps the hub unreachable from the network and prints no QR code", async () => {
   const lan = getLocalIP();
   let stop = async () => {};
   const logs = await captureLogs(async () => {
-    const { server, PORT } = await createHttpServer({ host: resolveHost({ local: true }), portOverride: 0, caffeinate: false, label: "test" });
+    const { server, PORT } = await createHttpServer({ host: resolveHost({}), portOverride: 0, caffeinate: false, label: "test" });
     server.on("request", (_req, res) => { if (!res.headersSent) res.end("ok"); });
     stop = () => new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve()));
     const address = server.address();
@@ -69,12 +69,12 @@ test("-l keeps the hub unreachable from the network and prints no QR code", asyn
   assert.ok(!hasQR(logs), "prints no QR code");
 });
 
-test("no flag makes the hub reachable on the LAN address and prints it with a QR code", async () => {
+test("-l makes the hub reachable on the LAN address and prints it with a QR code", async () => {
   const lan = getLocalIP();
   let stop = async () => {};
   let port = 0;
   const logs = await captureLogs(async () => {
-    const { server, PORT } = await createHttpServer({ host: resolveHost({}), portOverride: 0, caffeinate: false, label: "test" });
+    const { server, PORT } = await createHttpServer({ host: resolveHost({ lan: true }), portOverride: 0, caffeinate: false, label: "test" });
     port = PORT;
     server.on("request", (_req, res) => { if (!res.headersSent) res.end("ok"); });
     stop = () => new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve()));
@@ -88,7 +88,7 @@ test("no flag makes the hub reachable on the LAN address and prints it with a QR
   assert.ok(logs.some(line => line.includes(`Local    http://127.0.0.1:${port}`)), "still prints the local address");
   assert.ok(logs.some(line => line.includes(`Network  http://${lan}:${port}`)), "prints the network address");
   assert.ok(logs.some(line => line.includes("no login")), "warns that there is no login");
-  assert.ok(logs.some(line => line.includes("Run with -l")), "says how to keep it local");
+  assert.ok(logs.some(line => line.includes("without -l")), "says how to keep it local");
   assert.ok(hasQR(logs), "prints a QR code");
 });
 
@@ -97,7 +97,7 @@ test("--host binds exactly the address given", async () => {
   if (lan === "localhost") return; // no network interface to bind
   let stop = async () => {};
   const logs = await captureLogs(async () => {
-    const { server, PORT } = await createHttpServer({ host: resolveHost({ local: true, host: lan }), portOverride: 0, caffeinate: false, label: "test" });
+    const { server, PORT } = await createHttpServer({ host: resolveHost({ lan: true, host: lan }), portOverride: 0, caffeinate: false, label: "test" });
     server.on("request", (_req, res) => { if (!res.headersSent) res.end("ok"); });
     stop = () => new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve()));
     await connect(lan, PORT);
@@ -110,15 +110,15 @@ test("--host binds exactly the address given", async () => {
   assert.ok(hasQR(logs));
 });
 
-test("the CLI offers -l/--local and --host", () => {
+test("the CLI offers -l/--lan and --host", () => {
   const help = cli("start", "--help");
   assert.equal(help.status, 0);
-  assert.match(help.stdout, /-l, --local\b/);
+  assert.match(help.stdout, /-l, --lan\b/);
   assert.match(help.stdout, /--host <address>/);
 
   // A bad --host stops the CLI before it listens. Reaching that check proves the
   // flags in front of it were parsed rather than rejected as unknown.
-  for (const flags of [["-l"], ["--local"]]) {
+  for (const flags of [["-l"], ["--lan"]]) {
     const run = cli("start", ...flags, "--host", "not-an-ip");
     assert.equal(run.status, 1, `${flags.join(" ")} is accepted`);
     assert.match(run.stderr, /--host must be an IPv4 or IPv6 address/);
