@@ -2,7 +2,7 @@ import { test, after, afterEach, before, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "events";
 import { createECDH, randomBytes } from "crypto";
-import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { createBot, createThread, dataDir, JARVIS_BOT_ID, jarvisDir } from "../src/bot-store";
@@ -377,7 +377,6 @@ test("only endpoints on the known push services are accepted", async () => {
     "https://web.push.apple.com/QGx",
     "https://api.push.apple.com/3/device/abc",
     "https://wns2-par02p.notify.windows.com/w/?token=abc",
-    "https://FCM.GoogleAPIs.com/fcm/send/abc",
   ];
   for (const endpoint of ok) assert.ok(pushServiceOf(endpoint), endpoint);
   const bad = [
@@ -397,11 +396,30 @@ test("only endpoints on the known push services are accepted", async () => {
     "https://localhost/push",
     "ftp://fcm.googleapis.com/x",
     "not a url",
+    // Not in canonical form: WHATWG URL and web-push's url.parse() may read another host.
+    "https:fcm.googleapis.com/x",
+    "https:/web.push.apple.com/x",
+    "https:\\\\updates.push.services.mozilla.com/x",
+    "https:\\web.push.apple.com/x",
+    "https://FCM.GoogleAPIs.com/fcm/send/abc",
+    " https://fcm.googleapis.com/x",
+    "https://fcm.googleapis.com/a b",
+    // A port, even the default one written out.
+    "https://fcm.googleapis.com:8443/x",
+    "https://fcm.googleapis.com:443/x",
   ];
   for (const endpoint of bad) assert.equal(pushServiceOf(endpoint), null, endpoint);
 
   const keys = browserSubscription("x").keys;
-  for (const endpoint of ["https://evil.example/collect", "https://192.168.1.1:8443/push", "https://fcm.googleapis.com.evil.com/x"]) {
+  for (const endpoint of [
+    "https://evil.example/collect",
+    "https://192.168.1.1:8443/push",
+    "https://fcm.googleapis.com.evil.com/x",
+    "https:fcm.googleapis.com/x",
+    "https:/web.push.apple.com/x",
+    "https:\\\\updates.push.services.mozilla.com/x",
+    "https://fcm.googleapis.com:8443/x",
+  ]) {
     const res = await request("POST", "/push/subscribe", { subscription: { endpoint, keys } });
     assert.equal(res.status, 400, endpoint);
   }
@@ -503,18 +521,17 @@ test("the settings list shows a safe label per subscription, and deletes by id",
     ...browserSubscription("phone"),
     endpoint: "https://web.push.apple.com/QGxphone",
   };
-  // Saved before this change: no user agent, no date. And one from before
-  // endpoints were checked, pointing somewhere else.
+  // Saved before this change: no user agent, no date.
   const stored = listSubscriptions();
   writeFileSync(
     join(dataDir(), "push-subscriptions.json"),
-    JSON.stringify([...stored, { endpoint: iphone.endpoint, keys: iphone.keys }, { endpoint: "https://evil.example/collect", keys: iphone.keys }]),
+    JSON.stringify([...stored, { endpoint: iphone.endpoint, keys: iphone.keys }]),
   );
 
   const res = await request("POST", "/push/subscriptions", { endpoint: mine.endpoint });
   assert.equal(res.status, 200);
   const list = res.body.subscriptions;
-  assert.equal(list.length, 3);
+  assert.equal(list.length, 2);
   assert.deepEqual(list[0], {
     id: subscriptionId(mine.endpoint),
     service: "Google",
@@ -523,20 +540,14 @@ test("the settings list shows a safe label per subscription, and deletes by id",
     current: true,
   });
   assert.deepEqual(list[1], { id: subscriptionId(iphone.endpoint), service: "Apple", device: null, addedAt: null, current: false });
-  assert.equal(list[2].service, null);
   // Nothing secret goes to the page: no endpoint, no keys.
   const text = JSON.stringify(res.body);
-  for (const secret of [mine.endpoint, iphone.endpoint, "evil.example", mine.keys.auth, mine.keys.p256dh]) {
+  for (const secret of [mine.endpoint, iphone.endpoint, mine.keys.auth, mine.keys.p256dh]) {
     assert.ok(!text.includes(secret), secret);
   }
   // Without an endpoint, none is "this device".
   assert.ok((await request("POST", "/push/subscriptions", {})).body.subscriptions.every((s: any) => !s.current));
 
-  // The off-list one is never sent to.
-  assert.deepEqual((await request("POST", "/push/test", {})).body, { sent: 2, failed: 0, removed: 0 });
-  assert.ok(sent.every((s) => !s.endpoint.includes("evil.example")));
-
-  assert.deepEqual((await request("POST", "/push/subscriptions/delete", { id: list[2].id })).body, { removed: true });
   assert.deepEqual((await request("POST", "/push/subscriptions/delete", { id: list[1].id })).body, { removed: true });
   assert.deepEqual((await request("POST", "/push/subscriptions/delete", { id: list[1].id })).body, { removed: false });
   assert.equal((await request("POST", "/push/subscriptions/delete", {})).status, 400);
@@ -572,4 +583,29 @@ test("a browser deleted from settings stays deleted until it turns notifications
   assert.equal((await request("POST", "/push/subscribe", { subscription: phone })).body.subscribed, true);
   assert.equal((await request("POST", "/push/subscribe", { subscription: phone, refresh: true })).body.subscribed, true);
   assert.equal(listSubscriptions().length, 1);
+});
+
+test("invalid subscriptions saved by an older gitbot are dropped on load, freeing the cap", async () => {
+  const good = Array.from({ length: MAX_SUBSCRIPTIONS - 3 }, (_, i) => browserSubscription(`ok${i}`));
+  const keys = browserSubscription("x").keys;
+  const bad = [
+    { endpoint: "https://evil.example/collect", keys },
+    { endpoint: "https:fcm.googleapis.com/x", keys },
+    { endpoint: "https:/web.push.apple.com/x", keys },
+    { endpoint: "https://fcm.googleapis.com:8443/x", keys },
+    { endpoint: "https://fcm.googleapis.com/fcm/send/badkeys", keys: { p256dh: "short", auth: keys.auth } },
+    { nonsense: true },
+  ];
+  const file = join(dataDir(), "push-subscriptions.json");
+  writeFileSync(file, JSON.stringify([...bad.slice(0, 3), ...good, ...bad.slice(3)]));
+
+  assert.deepEqual(listSubscriptions().map((s) => s.endpoint), good.map((s) => s.endpoint));
+  // Saved without them.
+  assert.equal(JSON.parse(readFileSync(file, "utf-8")).length, good.length);
+  // 53 were in the file, 47 valid: a new browser fits.
+  assert.equal((await request("POST", "/push/subscribe", { subscription: browserSubscription("new") })).status, 200);
+  // And nothing is sent to the bad ones.
+  await request("POST", "/push/test", {});
+  assert.equal(sent.length, good.length + 1);
+  assert.ok(sent.every((s) => s.endpoint.startsWith("https://fcm.googleapis.com/fcm/send/")));
 });

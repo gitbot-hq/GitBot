@@ -1,6 +1,8 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
 import { createHash } from "crypto";
 import { join } from "path";
+// What web-push resolves the endpoint's host with when it sends.
+import { parse as legacyParse } from "url";
 import webpush from "web-push";
 import { latestLine, turnOutcome } from "./attention";
 import { dataDir, getBot, getThread } from "./bot-store";
@@ -154,9 +156,21 @@ export interface StoredSubscription {
 /** Enough for every browser one person uses; a cap so the file cannot grow without bound. */
 export const MAX_SUBSCRIPTIONS = 50;
 
+/**
+ * The stored subscriptions. Any that fail today's checks (parseSubscription),
+ * such as ones saved by an older gitbot that accepted any endpoint, are
+ * dropped and the file saved without them: they would never be sent to, and
+ * would only take up room under the cap.
+ */
 export function listSubscriptions(): StoredSubscription[] {
   const parsed = readJson(subscriptionsFile());
-  return Array.isArray(parsed) ? (parsed as StoredSubscription[]) : [];
+  if (!Array.isArray(parsed)) return [];
+  const valid = parsed.filter((s): s is StoredSubscription => parseSubscription(s) !== null);
+  if (valid.length !== parsed.length) {
+    saveSubscriptions(valid);
+    console.warn(`[push] dropped ${parsed.length - valid.length} invalid subscription(s) from ${subscriptionsFile()}`);
+  }
+  return valid;
 }
 
 function saveSubscriptions(subs: StoredSubscription[]): void {
@@ -180,7 +194,14 @@ const PUSH_SERVICES: { name: PushService; hosts: string[]; suffixes: string[] }[
 
 export type PushService = "Google" | "Mozilla" | "Apple" | "Microsoft";
 
-/** The push service an endpoint belongs to, or null when it is not an https: URL on one. */
+/**
+ * The push service an endpoint belongs to, or null when it is not a plain
+ * https: URL on one. web-push sends with the legacy url.parse(), which reads
+ * some strings differently from WHATWG URL: "https:fcm.googleapis.com/x" is
+ * fcm.googleapis.com to one and no host (so localhost) to the other. Only an
+ * endpoint already in canonical form, which both read alike, is accepted:
+ * exactly its own href, no port, no credentials, and one hostname to both.
+ */
 export function pushServiceOf(endpoint: string): PushService | null {
   let url: URL;
   try {
@@ -188,8 +209,10 @@ export function pushServiceOf(endpoint: string): PushService | null {
   } catch {
     return null;
   }
-  if (url.protocol !== "https:" || url.username || url.password) return null;
-  const host = url.hostname.toLowerCase();
+  if (url.href !== endpoint) return null;
+  if (url.protocol !== "https:" || url.username || url.password || url.port !== "") return null;
+  if (legacyParse(endpoint).hostname !== url.hostname) return null;
+  const host = url.hostname;
   for (const service of PUSH_SERVICES) {
     if (service.hosts.includes(host)) return service.name;
     if (service.suffixes.some((suffix) => host.endsWith(suffix) && host.length > suffix.length)) return service.name;
@@ -375,7 +398,9 @@ export function sendToAll(payload: PushPayload): Promise<SendResult> {
 
 async function sendTo(subs: StoredSubscription[], payload: PushPayload): Promise<SendResult> {
   const result: SendResult = { sent: 0, failed: 0, removed: 0 };
-  // One saved before endpoints were checked may point anywhere: never send there.
+  // A backstop to the checks on subscribe and on load: never send to an
+  // endpoint off the known push services, or one that web-push's url.parse()
+  // would resolve to another host than WHATWG URL does (pushServiceOf checks both).
   subs = subs.filter((s) => pushServiceOf(s.endpoint));
   if (!pushEnabled() || subs.length === 0) return result;
   const { publicKey, privateKey } = vapidKeys();
