@@ -36,14 +36,53 @@ export function pushEnabled(): boolean {
   return !OFF_VALUES.has((process.env.GITBOT_PUSH ?? "").trim().toLowerCase());
 }
 
+/** The VAPID subject when GITBOT_PUSH_SUBJECT gives none: the project's home. */
+export const DEFAULT_PUSH_SUBJECT = "https://github.com/gitbot-hq/GitBot";
+
+/** Hosts no push service can reach anyone at. */
+function localHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+  return (
+    h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal") ||
+    !h.includes(".") || /^[\d.]+$/.test(h) || h.includes(":")
+  );
+}
+
 /**
- * Who runs this push sender, for push services that need to reach someone.
- * Must be a mailto: or https: URL (Apple rejects anything else).
+ * True for a subject Apple's push service accepts: an https: URL or a
+ * mailto: address on a real, public domain. Apple answers anything else,
+ * `mailto:me@localhost` included, with 403 BadJwtToken.
  */
-function vapidSubject(): string {
+export function validPushSubject(subject: string): boolean {
+  const mailto = /^mailto:[^@\s/?#]+@([^@\s/?#]+)$/i.exec(subject);
+  if (mailto) return !localHost(mailto[1]);
+  if (!/^https:\/\//i.test(subject)) return false;
+  try {
+    return !localHost(new URL(subject).hostname);
+  } catch {
+    return false;
+  }
+}
+
+let warnedSubject: string | undefined;
+
+/**
+ * Who runs this push sender, for push services that need to reach someone
+ * (GITBOT_PUSH_SUBJECT, e.g. mailto:you@example.com). One they would reject
+ * is replaced by the default, with a warning, rather than breaking Safari.
+ */
+export function vapidSubject(): string {
   const configured = process.env.GITBOT_PUSH_SUBJECT?.trim();
-  if (configured && /^(mailto:|https:\/\/)/.test(configured)) return configured;
-  return "https://github.com/gitbot-hq/GitBot";
+  if (!configured) return DEFAULT_PUSH_SUBJECT;
+  if (validPushSubject(configured)) return configured;
+  if (warnedSubject !== configured) {
+    warnedSubject = configured;
+    console.warn(
+      `[push] GITBOT_PUSH_SUBJECT=${configured} is not an https: URL or a mailto: address on a public domain; ` +
+        `Apple would reject it, so using ${DEFAULT_PUSH_SUBJECT}`,
+    );
+  }
+  return DEFAULT_PUSH_SUBJECT;
 }
 
 // --- Storage: two small files in the data directory, readable by the owner only ---

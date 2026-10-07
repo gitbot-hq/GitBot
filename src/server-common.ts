@@ -609,6 +609,9 @@ export function sseHeaders(): Record<string, string> {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     "Connection": "keep-alive",
+    // Behind an nginx-style HTTPS proxy, stream events as they come rather
+    // than buffering the response (other proxies ignore it).
+    "X-Accel-Buffering": "no",
     "Access-Control-Allow-Origin": "*",
   };
 }

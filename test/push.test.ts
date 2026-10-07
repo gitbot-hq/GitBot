@@ -9,6 +9,7 @@ import { createBot, createThread, dataDir, JARVIS_BOT_ID, jarvisDir } from "../s
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
 import {
+  DEFAULT_PUSH_SUBJECT,
   listSubscriptions,
   parseSubscription,
   pushSender,
@@ -16,6 +17,8 @@ import {
   resetVapidCache,
   watchPush,
   type PushPayload,
+  validPushSubject,
+  vapidSubject,
   type StoredSubscription,
 } from "../src/push";
 import {
@@ -37,7 +40,7 @@ const ALL_AGENTS = ["claude-code", "opencode", "codex"];
 const realRunners = { ...agentRunners };
 const realSend = pushSender.send;
 let runs: SessionStore[] = [];
-let sent: Array<{ endpoint: string; payload: PushPayload; urgency?: string }> = [];
+let sent: Array<{ endpoint: string; payload: PushPayload; urgency?: string; subject?: string }> = [];
 /** Status codes the fake push service answers with, by endpoint. */
 let failWith: Record<string, number> = {};
 let unwatch: () => void = () => {};
@@ -49,7 +52,12 @@ before(() => {
   pushSender.send = async (sub, payload, options) => {
     const status = failWith[sub.endpoint];
     if (status) throw Object.assign(new Error(`status ${status}`), { statusCode: status, body: "" });
-    sent.push({ endpoint: sub.endpoint, payload: JSON.parse(payload), urgency: options.urgency });
+    sent.push({
+      endpoint: sub.endpoint,
+      payload: JSON.parse(payload),
+      urgency: options.urgency,
+      subject: options.vapidDetails?.subject,
+    });
   };
   unwatch = watchPush();
 });
@@ -62,6 +70,7 @@ afterEach(() => {
   for (const s of runs) sessions.delete(s.gitbotId);
   runs = [];
   delete process.env.GITBOT_PUSH;
+  delete process.env.GITBOT_PUSH_SUBJECT;
 });
 after(() => {
   unwatch();
@@ -181,6 +190,33 @@ test("GITBOT_PUSH=0 turns it all off", async () => {
   // Nor is anything sent for a turn end, even to a browser subscribed before.
   await turn(plainThread().id, "Done.");
   assert.equal(sent.length, 0);
+});
+
+test("the VAPID subject is one Apple accepts: GITBOT_PUSH_SUBJECT when valid, else the project's https URL", () => {
+  assert.equal(vapidSubject(), DEFAULT_PUSH_SUBJECT);
+  assert.ok(validPushSubject(DEFAULT_PUSH_SUBJECT));
+  for (const ok of ["mailto:you@example.com", "https://example.com", "https://gitbot.tail1234.ts.net/"]) {
+    assert.ok(validPushSubject(ok), ok);
+  }
+  // Apple answers each of these with 403 BadJwtToken.
+  for (const bad of [
+    "mailto:me@localhost", "mailto:me@mac.local", "mailto:nobody", "you@example.com",
+    "http://example.com", "https://localhost:3000", "https://192.168.1.10", "https://[::1]/", "mailto:a@b.com?x",
+  ]) {
+    assert.equal(validPushSubject(bad), false, bad);
+  }
+  process.env.GITBOT_PUSH_SUBJECT = "mailto:you@example.com";
+  assert.equal(vapidSubject(), "mailto:you@example.com");
+  process.env.GITBOT_PUSH_SUBJECT = "mailto:me@localhost";
+  assert.equal(vapidSubject(), DEFAULT_PUSH_SUBJECT);
+});
+
+test("pushes are signed with that subject", async () => {
+  process.env.GITBOT_PUSH_SUBJECT = "mailto:you@example.com";
+  await subscribe("a");
+  await turn(plainThread().id, "Done.");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].subject, "mailto:you@example.com");
 });
 
 // --- What gets sent ---
