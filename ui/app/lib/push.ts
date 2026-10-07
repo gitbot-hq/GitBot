@@ -3,7 +3,15 @@
 // server about it (api.ts). The server decides what is worth a notification
 // (src/push.ts); this only turns them on and off for this browser.
 
-import { getPushKey, pushSubscribe, pushTest, pushUnsubscribe } from "./api";
+import {
+  deletePushSubscription,
+  getPushKey,
+  getPushSubscriptions,
+  pushSubscribe,
+  pushTest,
+  pushUnsubscribe,
+  type PushSubscriptionSummary,
+} from "./api";
 import { currentPushEnvironment, pushBlocker, type PushBlocker } from "./push-support";
 
 export type PushState =
@@ -60,7 +68,12 @@ export async function pushState(): Promise<PushState> {
   if (!sub || Notification.permission !== "granted") return "off";
   // Subscribed under another key (the server's keys were remade): stale.
   if (!sameKey(sub, keyBytes(publicKey))) return "off";
-  await pushSubscribe(sub.toJSON());
+  const { subscribed } = await pushSubscribe(sub.toJSON(), true);
+  if (!subscribed) {
+    // Deleted in settings, maybe from another device: off here too.
+    await sub.unsubscribe().catch(() => {});
+    return "off";
+  }
   return "on";
 }
 
@@ -100,6 +113,26 @@ export async function disablePush(): Promise<PushState> {
     await pushUnsubscribe(sub.endpoint).catch(() => {});
     await sub.unsubscribe();
   }
+  return "off";
+}
+
+/** Every subscribed browser, this one marked. */
+export async function listPushSubscriptions(): Promise<PushSubscriptionSummary[]> {
+  let endpoint: string | undefined;
+  if (!blocker()) endpoint = (await currentSubscription().catch(() => null))?.endpoint;
+  return (await getPushSubscriptions(endpoint)).subscriptions;
+}
+
+/**
+ * Deletes a subscribed browser on the server. This browser's own is ended in
+ * the browser too, and the state to show is returned: "off". For another
+ * one, null: its own page turns off when it next opens (see pushState).
+ */
+export async function deleteSubscription(entry: PushSubscriptionSummary): Promise<PushState | null> {
+  await deletePushSubscription(entry.id);
+  if (!entry.current) return null;
+  const sub = await currentSubscription().catch(() => null);
+  await sub?.unsubscribe().catch(() => {});
   return "off";
 }
 

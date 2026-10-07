@@ -2,7 +2,7 @@ import { test, after, afterEach, before, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "events";
 import { createECDH, randomBytes } from "crypto";
-import { mkdtempSync, realpathSync, statSync, writeFileSync } from "fs";
+import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { createBot, createThread, dataDir, JARVIS_BOT_ID, jarvisDir } from "../src/bot-store";
@@ -67,6 +67,7 @@ before(() => {
 });
 beforeEach(() => {
   removeSubscriptions(listSubscriptions().map((s) => s.endpoint));
+  rmSync(join(dataDir(), "push-deleted.json"), { force: true });
   sent = [];
   failWith = {};
 });
@@ -555,4 +556,20 @@ test("user agents become a browser and a system", () => {
     [undefined, null],
   ];
   for (const [ua, want] of cases) assert.equal(describeUserAgent(ua), want, String(ua));
+});
+
+test("a browser deleted from settings stays deleted until it turns notifications on again", async () => {
+  const phone = await subscribe("phone");
+  const id = subscriptionId(phone.endpoint);
+  assert.deepEqual((await request("POST", "/push/subscriptions/delete", { id })).body, { removed: true });
+
+  // The phone opens gitbot: its page re-sends the subscription it still has, and is told no.
+  const refresh = await request("POST", "/push/subscribe", { subscription: phone, refresh: true });
+  assert.deepEqual(refresh.body, { subscribed: false, deleted: true });
+  assert.equal(listSubscriptions().length, 0);
+
+  // A click on Enable there brings it back, and later refreshes work again.
+  assert.equal((await request("POST", "/push/subscribe", { subscription: phone })).body.subscribed, true);
+  assert.equal((await request("POST", "/push/subscribe", { subscription: phone, refresh: true })).body.subscribed, true);
+  assert.equal(listSubscriptions().length, 1);
 });

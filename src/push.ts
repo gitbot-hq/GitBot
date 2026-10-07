@@ -297,10 +297,34 @@ export function summarizeSubscriptions(currentEndpoint?: string): SubscriptionSu
   }));
 }
 
+// Ids deleted from settings. A browser re-sends its subscription on each
+// visit (in case this gitbot lost it); one deleted from another device must
+// not come back that way, so its refresh is refused and it unsubscribes
+// itself. Turning notifications on again from that browser clears the mark.
+const deletedFile = () => join(dataDir(), "push-deleted.json");
+const MAX_DELETED = 200;
+
+function deletedIds(): string[] {
+  const parsed = readJson(deletedFile());
+  return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+}
+
+export function wasDeleted(endpoint: string): boolean {
+  return deletedIds().includes(subscriptionId(endpoint));
+}
+
+function forgetDeleted(endpoint: string): void {
+  const ids = deletedIds();
+  const id = subscriptionId(endpoint);
+  if (ids.includes(id)) writePrivate(deletedFile(), ids.filter((x) => x !== id));
+}
+
 /** Removes the subscription with this id (see subscriptionId); true if it was there. */
 export function removeSubscriptionById(id: string): boolean {
   const match = listSubscriptions().find((s) => subscriptionId(s.endpoint) === id);
-  return match ? removeSubscriptions([match.endpoint]) : false;
+  if (!match) return false;
+  writePrivate(deletedFile(), [...deletedIds().filter((x) => x !== id), id].slice(-MAX_DELETED));
+  return removeSubscriptions([match.endpoint]);
 }
 
 /** Removes the subscriptions with these endpoints; true if any was there. */
@@ -572,6 +596,12 @@ export async function handlePushRoutes(req: IRequest, res: IResponse): Promise<b
       jsonError(res, 400, "Not a push subscription from a known push service");
       return true;
     }
+    // `refresh`: the page re-sending what the browser already has, not a click on Enable.
+    if (body?.refresh === true && wasDeleted(sub.endpoint)) {
+      jsonOk(res, { subscribed: false, deleted: true });
+      return true;
+    }
+    if (body?.refresh !== true) forgetDeleted(sub.endpoint);
     let count: number;
     try {
       count = addSubscription(sub, header(req, "user-agent"));

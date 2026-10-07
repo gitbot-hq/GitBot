@@ -704,13 +704,78 @@
 
 /* Browser notifications for this device, under the user's profile head. */
 .v2 .profile-notify {
+  margin-top: var(--space-6);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+.v2 .profile-notify-row {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-4);
-  margin-top: var(--space-6);
-  padding-top: var(--space-5);
+}
+
+/* Every subscribed browser, each with Delete. */
+.v2 .push-subs {
+  margin-top: var(--space-5);
+}
+
+.v2 .push-subs h4 {
+  margin: 0 0 var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.v2 .push-subs ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.v2 .push-subs li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+}
+
+.v2 .push-subs li + li {
   border-top: 1px solid var(--border);
+}
+
+.v2 .push-sub-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.v2 .push-sub-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 550;
+}
+
+.v2 .push-sub-this {
+  padding: 1px var(--space-2);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.v2 .push-sub-meta {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .v2 .profile-notify h3 {

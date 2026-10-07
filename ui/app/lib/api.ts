@@ -255,10 +255,43 @@ export function getPushKey() {
   return req<{ enabled: boolean; publicKey: string | null }>("/push/key");
 }
 
-export function pushSubscribe(subscription: PushSubscriptionJSON) {
-  return req<{ subscribed: boolean; count: number }>("/push/subscribe", {
+/**
+ * Tells the server about this browser's subscription. `refresh` when the page
+ * only re-sends what the browser has: then one deleted in settings is refused
+ * (subscribed: false, deleted: true) rather than brought back.
+ */
+export function pushSubscribe(subscription: PushSubscriptionJSON, refresh = false) {
+  return req<{ subscribed: boolean; count?: number; deleted?: boolean }>("/push/subscribe", {
     method: "POST",
-    body: JSON.stringify({ subscription }),
+    body: JSON.stringify(refresh ? { subscription, refresh } : { subscription }),
+  });
+}
+
+/** One subscribed browser as settings shows it: no endpoint, no keys. */
+export interface PushSubscriptionSummary {
+  /** A hash of the endpoint. */
+  id: string;
+  /** Null for an endpoint on no known push service (never sent to). */
+  service: "Google" | "Mozilla" | "Apple" | "Microsoft" | null;
+  /** "Chrome on macOS"; null when it subscribed before this was saved. */
+  device: string | null;
+  addedAt: string | null;
+  /** This browser's own. */
+  current: boolean;
+}
+
+/** Every subscribed browser; `endpoint` (this browser's) marks its own. */
+export function getPushSubscriptions(endpoint?: string) {
+  return req<{ subscriptions: PushSubscriptionSummary[] }>("/push/subscriptions", {
+    method: "POST",
+    body: JSON.stringify(endpoint ? { endpoint } : {}),
+  });
+}
+
+export function deletePushSubscription(id: string) {
+  return req<{ removed: boolean }>("/push/subscriptions/delete", {
+    method: "POST",
+    body: JSON.stringify({ id }),
   });
 }
 
