@@ -1,4 +1,5 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
+import { createHash } from "crypto";
 import { join } from "path";
 import webpush from "web-push";
 import { latestLine, turnOutcome } from "./attention";
@@ -151,7 +152,7 @@ export interface StoredSubscription {
 }
 
 /** Enough for every browser one person uses; a cap so the file cannot grow without bound. */
-const MAX_SUBSCRIPTIONS = 50;
+export const MAX_SUBSCRIPTIONS = 50;
 
 export function listSubscriptions(): StoredSubscription[] {
   const parsed = readJson(subscriptionsFile());
@@ -165,18 +166,47 @@ function saveSubscriptions(subs: StoredSubscription[]): void {
 const decodedLength = (s: string) => Buffer.from(s, "base64url").length;
 
 /**
- * A browser's PushSubscription (its toJSON()), checked, or null. The keys
- * must be what the encryption needs: a P-256 public key and a 16-byte secret.
+ * The push services browsers subscribe through, by host: exact names, and
+ * suffixes (".x") that match true subdomains only. Every notification is sent
+ * to the subscription's endpoint, so an endpoint anywhere else would let
+ * whoever registered it read them (and would make gitbot POST to any host).
+ */
+const PUSH_SERVICES: { name: PushService; hosts: string[]; suffixes: string[] }[] = [
+  { name: "Google", hosts: ["fcm.googleapis.com"], suffixes: [] },
+  { name: "Mozilla", hosts: [], suffixes: [".push.services.mozilla.com"] },
+  { name: "Apple", hosts: ["web.push.apple.com"], suffixes: [".push.apple.com"] },
+  { name: "Microsoft", hosts: [], suffixes: [".notify.windows.com"] },
+];
+
+export type PushService = "Google" | "Mozilla" | "Apple" | "Microsoft";
+
+/** The push service an endpoint belongs to, or null when it is not an https: URL on one. */
+export function pushServiceOf(endpoint: string): PushService | null {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || url.username || url.password) return null;
+  const host = url.hostname.toLowerCase();
+  for (const service of PUSH_SERVICES) {
+    if (service.hosts.includes(host)) return service.name;
+    if (service.suffixes.some((suffix) => host.endsWith(suffix) && host.length > suffix.length)) return service.name;
+  }
+  return null;
+}
+
+/**
+ * A browser's PushSubscription (its toJSON()), checked, or null. The endpoint
+ * must be on a known push service, and the keys what the encryption needs: a
+ * P-256 public key and a 16-byte secret.
  */
 export function parseSubscription(raw: unknown): Pick<StoredSubscription, "endpoint" | "keys"> | null {
   if (!raw || typeof raw !== "object") return null;
   const { endpoint, keys } = raw as { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } };
   if (typeof endpoint !== "string" || endpoint.length > 2048) return null;
-  try {
-    if (new URL(endpoint).protocol !== "https:") return null;
-  } catch {
-    return null;
-  }
+  if (!pushServiceOf(endpoint)) return null;
   const p256dh = keys?.p256dh;
   const auth = keys?.auth;
   if (typeof p256dh !== "string" || typeof auth !== "string") return null;
@@ -185,13 +215,92 @@ export function parseSubscription(raw: unknown): Pick<StoredSubscription, "endpo
   return { endpoint, keys: { p256dh, auth } };
 }
 
-/** Adds a subscription, or refreshes the one with the same endpoint. The newest are kept past the cap. */
+/** Thrown when a new browser subscribes while MAX_SUBSCRIPTIONS are already kept. */
+export class SubscriptionLimitError extends Error {
+  constructor() {
+    super(
+      `This gitbot already has ${MAX_SUBSCRIPTIONS} subscribed browsers. ` +
+        "Delete one under Profile → Notifications, then try again.",
+    );
+  }
+}
+
+/**
+ * Adds a subscription, or refreshes the one with the same endpoint (new keys
+ * and user agent; it keeps its date). A new one past the cap is refused, not
+ * made room for: evicting the oldest would let anyone push the user's out.
+ */
 export function addSubscription(sub: Pick<StoredSubscription, "endpoint" | "keys">, userAgent?: string): number {
-  const others = listSubscriptions().filter((s) => s.endpoint !== sub.endpoint);
-  const entry: StoredSubscription = { ...sub, createdAt: new Date().toISOString(), ...(userAgent ? { userAgent: userAgent.slice(0, 200) } : {}) };
-  const next = [...others, entry].slice(-MAX_SUBSCRIPTIONS);
+  const subs = listSubscriptions();
+  const existing = subs.find((s) => s.endpoint === sub.endpoint);
+  if (!existing && subs.length >= MAX_SUBSCRIPTIONS) throw new SubscriptionLimitError();
+  const ua = userAgent?.slice(0, 200) || existing?.userAgent;
+  const entry: StoredSubscription = {
+    ...sub,
+    createdAt: existing?.createdAt ?? new Date().toISOString(),
+    ...(ua ? { userAgent: ua } : {}),
+  };
+  const next = existing ? subs.map((s) => (s === existing ? entry : s)) : [...subs, entry];
   saveSubscriptions(next);
   return next.length;
+}
+
+/** A subscription's id, safe to show: a hash of the endpoint, which is a secret. */
+export function subscriptionId(endpoint: string): string {
+  return createHash("sha256").update(endpoint).digest("hex").slice(0, 16);
+}
+
+/** What the settings list shows for a subscription: no endpoint, no keys. */
+export interface SubscriptionSummary {
+  id: string;
+  /** The push service, or null for an endpoint that is on none (saved before the check; never sent to). */
+  service: PushService | null;
+  /** "Chrome on macOS", from the user agent it subscribed with; null when none was saved. */
+  device: string | null;
+  /** When it first subscribed; null when not known. */
+  addedAt: string | null;
+  /** True for the browser that asked. */
+  current: boolean;
+}
+
+/** "Chrome on macOS" from a User-Agent string, or null when it says nothing useful. */
+export function describeUserAgent(ua: string | undefined): string | null {
+  if (!ua) return null;
+  const os =
+    /iPhone/.test(ua) ? "iPhone" :
+    /iPad/.test(ua) ? "iPad" :
+    /Android/.test(ua) ? "Android" :
+    /CrOS/.test(ua) ? "ChromeOS" :
+    /Windows/.test(ua) ? "Windows" :
+    /Mac OS X|Macintosh/.test(ua) ? "macOS" :
+    /Linux/.test(ua) ? "Linux" : null;
+  const mobileApple = os === "iPhone" || os === "iPad";
+  const browser =
+    /Edg(e|A|iOS)?\//.test(ua) ? "Edge" :
+    /OPR\/|Opera/.test(ua) ? "Opera" :
+    /Firefox\/|FxiOS\//.test(ua) ? "Firefox" :
+    /SamsungBrowser\//.test(ua) ? "Samsung Internet" :
+    /Chrome\/|CriOS\//.test(ua) ? "Chrome" :
+    // The Home Screen app on iOS leaves "Safari" out of its user agent.
+    /Safari\//.test(ua) || (mobileApple && /AppleWebKit\//.test(ua)) ? "Safari" : null;
+  if (browser && os) return `${browser} on ${os}`;
+  return browser ?? os;
+}
+
+export function summarizeSubscriptions(currentEndpoint?: string): SubscriptionSummary[] {
+  return listSubscriptions().map((s) => ({
+    id: subscriptionId(s.endpoint),
+    service: pushServiceOf(s.endpoint),
+    device: describeUserAgent(s.userAgent),
+    addedAt: typeof s.createdAt === "string" && !Number.isNaN(Date.parse(s.createdAt)) ? s.createdAt : null,
+    current: currentEndpoint !== undefined && s.endpoint === currentEndpoint,
+  }));
+}
+
+/** Removes the subscription with this id (see subscriptionId); true if it was there. */
+export function removeSubscriptionById(id: string): boolean {
+  const match = listSubscriptions().find((s) => subscriptionId(s.endpoint) === id);
+  return match ? removeSubscriptions([match.endpoint]) : false;
 }
 
 /** Removes the subscriptions with these endpoints; true if any was there. */
@@ -242,6 +351,8 @@ export function sendToAll(payload: PushPayload): Promise<SendResult> {
 
 async function sendTo(subs: StoredSubscription[], payload: PushPayload): Promise<SendResult> {
   const result: SendResult = { sent: 0, failed: 0, removed: 0 };
+  // One saved before endpoints were checked may point anywhere: never send there.
+  subs = subs.filter((s) => pushServiceOf(s.endpoint));
   if (!pushEnabled() || subs.length === 0) return result;
   const { publicKey, privateKey } = vapidKeys();
   const options: webpush.RequestOptions = {
@@ -381,7 +492,47 @@ export function watchPush(): () => void {
   };
 }
 
-// --- Routes: /push/key, /push/subscribe, /push/unsubscribe, /push/test ---
+// --- Routes: /push/key, /push/subscribe, /push/unsubscribe, /push/test, /push/subscriptions[/delete] ---
+
+function header(req: IRequest, name: string): string | undefined {
+  const value = req.headers?.[name];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/** host[:port], lowercased, without a default port (proxies differ on writing ":443"). */
+function normalHost(host: string): string {
+  return host.trim().toLowerCase().replace(/:(80|443)$/, "");
+}
+
+/**
+ * False when a browser sent this request from another site: its Origin names
+ * a host other than the one it reached. Behind a reverse proxy, a tunnel, or
+ * the Next dev server, Host may be the upstream's (127.0.0.1:3000) while
+ * X-Forwarded-Host keeps the one the browser used, so either may match. A web
+ * page cannot set X-Forwarded-Host itself: it is no header the CORS preflight
+ * allows. No Origin at all (curl, an old browser's same-origin request) passes.
+ */
+export function sameOriginRequest(req: IRequest): boolean {
+  const origin = header(req, "origin");
+  if (origin === undefined) return true;
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false; // "null": a sandboxed frame, a file: page
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  const want = normalHost(url.host);
+  const hosts = [header(req, "host"), ...(header(req, "x-forwarded-host")?.split(",") ?? [])];
+  return hosts.some((h) => h !== undefined && h.trim() !== "" && normalHost(h) === want);
+}
+
+/** True for a JSON body (application/json, with or without a charset). */
+function jsonContentType(req: IRequest): boolean {
+  return (header(req, "content-type") ?? "").split(";")[0].trim().toLowerCase() === "application/json";
+}
+
+const POST_ROUTES = ["/push/subscribe", "/push/unsubscribe", "/push/test", "/push/subscriptions", "/push/subscriptions/delete"];
 
 export async function handlePushRoutes(req: IRequest, res: IResponse): Promise<boolean> {
   const method = req.method ?? "GET";
@@ -398,8 +549,17 @@ export async function handlePushRoutes(req: IRequest, res: IResponse): Promise<b
     return true;
   }
 
-  const routes = ["/push/subscribe", "/push/unsubscribe", "/push/test"];
-  if (method !== "POST" || !routes.includes(path)) return false;
+  if (method !== "POST" || !POST_ROUTES.includes(path)) return false;
+  // gitbot has no login: these change who gets every notification, so only
+  // its own pages may call them, never another site the user has open.
+  if (!sameOriginRequest(req)) {
+    jsonError(res, 403, "Push settings can only be changed from gitbot's own page");
+    return true;
+  }
+  if (!jsonContentType(req)) {
+    jsonError(res, 415, "Send JSON (Content-Type: application/json)");
+    return true;
+  }
   if (!pushEnabled()) {
     jsonError(res, 404, "Push notifications are off on this gitbot (GITBOT_PUSH=0)");
     return true;
@@ -409,12 +569,35 @@ export async function handlePushRoutes(req: IRequest, res: IResponse): Promise<b
   if (path === "/push/subscribe") {
     const sub = parseSubscription(body?.subscription ?? body);
     if (!sub) {
-      jsonError(res, 400, "Not a push subscription");
+      jsonError(res, 400, "Not a push subscription from a known push service");
       return true;
     }
-    const ua = req.headers?.["user-agent"];
-    const count = addSubscription(sub, typeof ua === "string" ? ua : undefined);
+    let count: number;
+    try {
+      count = addSubscription(sub, header(req, "user-agent"));
+    } catch (err) {
+      if (!(err instanceof SubscriptionLimitError)) throw err;
+      jsonError(res, 409, err.message);
+      return true;
+    }
     jsonOk(res, { subscribed: true, count });
+    return true;
+  }
+
+  // The list for settings. POST, so the asking browser's endpoint (to mark it
+  // "this device") travels in the body rather than in a URL.
+  if (path === "/push/subscriptions") {
+    const current = typeof body?.endpoint === "string" ? body.endpoint : undefined;
+    jsonOk(res, { subscriptions: summarizeSubscriptions(current) });
+    return true;
+  }
+
+  if (path === "/push/subscriptions/delete") {
+    if (typeof body?.id !== "string" || !body.id) {
+      jsonError(res, 400, "id is required");
+      return true;
+    }
+    jsonOk(res, { removed: removeSubscriptionById(body.id) });
     return true;
   }
 

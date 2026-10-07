@@ -2,7 +2,7 @@ import { test, after, afterEach, before, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "events";
 import { createECDH, randomBytes } from "crypto";
-import { mkdtempSync, realpathSync, statSync } from "fs";
+import { mkdtempSync, realpathSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { createBot, createThread, dataDir, JARVIS_BOT_ID, jarvisDir } from "../src/bot-store";
@@ -10,7 +10,11 @@ import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
 import {
   DEFAULT_PUSH_SUBJECT,
+  describeUserAgent,
   listSubscriptions,
+  MAX_SUBSCRIPTIONS,
+  pushServiceOf,
+  subscriptionId,
   parseSubscription,
   pushSender,
   removeSubscriptions,
@@ -82,8 +86,21 @@ const tick = () => new Promise((r) => setImmediate(r));
 /** Lets the turn-end listeners run, then the sends they started. */
 const settle = async () => { await tick(); await tick(); await tick(); };
 
-async function request(method: string, url: string, body?: unknown): Promise<{ status: number; body: any }> {
-  const req = Object.assign(new EventEmitter(), { method, url, headers: { "user-agent": "TestBrowser/1.0" } }) as unknown as IRequest;
+/** A request as gitbot's own page sends it; `headers` adds to or (undefined) removes from that. */
+async function request(
+  method: string,
+  url: string,
+  body?: unknown,
+  headers: Record<string, string | undefined> = {},
+): Promise<{ status: number; body: any }> {
+  const all: Record<string, string | undefined> = {
+    host: "localhost:3000",
+    "user-agent": "TestBrowser/1.0",
+    ...(method === "POST" ? { "content-type": "application/json" } : {}),
+    ...headers,
+  };
+  for (const key of Object.keys(all)) if (all[key] === undefined) delete all[key];
+  const req = Object.assign(new EventEmitter(), { method, url, headers: all }) as unknown as IRequest;
   let status = 0;
   let out = "";
   const res: IResponse = {
@@ -106,7 +123,7 @@ async function request(method: string, url: string, body?: unknown): Promise<{ s
 function browserSubscription(name: string) {
   const ecdh = createECDH("prime256v1");
   return {
-    endpoint: `https://push.example/${name}`,
+    endpoint: `https://fcm.googleapis.com/fcm/send/${name}`,
     expirationTime: null,
     keys: { p256dh: ecdh.generateKeys().toString("base64url"), auth: randomBytes(16).toString("base64url") },
   };
@@ -159,7 +176,7 @@ test("a subscription is checked, stored once per browser, owner-only, and remova
   assert.equal(parseSubscription(null), null);
   const good = browserSubscription("a");
   assert.ok(parseSubscription(good));
-  assert.equal(parseSubscription({ ...good, endpoint: "http://push.example/a" }), null);
+  assert.equal(parseSubscription({ ...good, endpoint: "http://fcm.googleapis.com/fcm/send/a" }), null);
   assert.equal(parseSubscription({ ...good, endpoint: "not a url" }), null);
   assert.equal(parseSubscription({ ...good, keys: { ...good.keys, auth: "short" } }), null);
   assert.equal(parseSubscription({ ...good, keys: { p256dh: good.keys.p256dh } }), null);
@@ -171,14 +188,14 @@ test("a subscription is checked, stored once per browser, owner-only, and remova
   assert.equal(again.body.count, 1);
   await subscribe("b");
   const stored = listSubscriptions();
-  assert.deepEqual(stored.map((s) => s.endpoint), ["https://push.example/a", "https://push.example/b"]);
+  assert.deepEqual(stored.map((s) => s.endpoint), ["https://fcm.googleapis.com/fcm/send/a", "https://fcm.googleapis.com/fcm/send/b"]);
   assert.equal(stored[0].userAgent, "TestBrowser/1.0");
   assert.equal(statSync(join(dataDir(), "push-subscriptions.json")).mode & 0o777, 0o600);
 
   assert.deepEqual((await request("POST", "/push/unsubscribe", { endpoint: good.endpoint })).body, { removed: true });
   assert.deepEqual((await request("POST", "/push/unsubscribe", { endpoint: good.endpoint })).body, { removed: false });
   assert.equal((await request("POST", "/push/unsubscribe", {})).status, 400);
-  assert.deepEqual(listSubscriptions().map((s) => s.endpoint), ["https://push.example/b"]);
+  assert.deepEqual(listSubscriptions().map((s) => s.endpoint), ["https://fcm.googleapis.com/fcm/send/b"]);
 });
 
 test("GITBOT_PUSH=0 turns it all off", async () => {
@@ -232,7 +249,7 @@ test("a turn that finished or failed is a push to every browser; one the user st
   const thread = plainThread("Tester");
   await turn(thread.id, "## Fixed\n\nThe test was racing the clock.");
   assert.equal(sent.length, 2);
-  assert.deepEqual(sent.map((s) => s.endpoint).sort(), ["https://push.example/a", "https://push.example/b"]);
+  assert.deepEqual(sent.map((s) => s.endpoint).sort(), ["https://fcm.googleapis.com/fcm/send/a", "https://fcm.googleapis.com/fcm/send/b"]);
   assert.deepEqual(sent[0].payload, {
     title: "Fix the flaky test",
     body: "Tester finished: Fixed",
@@ -332,11 +349,11 @@ test("a browser the push service says is gone is dropped; one that merely failed
   await subscribe("expired");
   await subscribe("flaky");
   await subscribe("fine");
-  failWith = { "https://push.example/gone": 410, "https://push.example/expired": 404, "https://push.example/flaky": 500 };
+  failWith = { "https://fcm.googleapis.com/fcm/send/gone": 410, "https://fcm.googleapis.com/fcm/send/expired": 404, "https://fcm.googleapis.com/fcm/send/flaky": 500 };
   await turn(plainThread().id, "Done.");
   await settle();
-  assert.deepEqual(sent.map((s) => s.endpoint), ["https://push.example/fine"]);
-  assert.deepEqual(listSubscriptions().map((s: StoredSubscription) => s.endpoint), ["https://push.example/flaky", "https://push.example/fine"]);
+  assert.deepEqual(sent.map((s) => s.endpoint), ["https://fcm.googleapis.com/fcm/send/fine"]);
+  assert.deepEqual(listSubscriptions().map((s: StoredSubscription) => s.endpoint), ["https://fcm.googleapis.com/fcm/send/flaky", "https://fcm.googleapis.com/fcm/send/fine"]);
 });
 
 test("the test route sends to the browser that asked", async () => {
@@ -347,5 +364,195 @@ test("the test route sends to the browser that asked", async () => {
   assert.deepEqual(res.body, { sent: 1, failed: 0, removed: 0 });
   assert.deepEqual(sent.map((s) => s.endpoint), [mine.endpoint]);
   assert.equal(sent[0].payload.kind, "test");
-  assert.equal((await request("POST", "/push/test", { endpoint: "https://push.example/nobody" })).status, 404);
+  assert.equal((await request("POST", "/push/test", { endpoint: "https://fcm.googleapis.com/fcm/send/nobody" })).status, 404);
+});
+
+// --- Who may subscribe, and to what ---
+
+test("only endpoints on the known push services are accepted", async () => {
+  const ok = [
+    "https://fcm.googleapis.com/fcm/send/abc",
+    "https://updates.push.services.mozilla.com/wpush/v2/abc",
+    "https://web.push.apple.com/QGx",
+    "https://api.push.apple.com/3/device/abc",
+    "https://wns2-par02p.notify.windows.com/w/?token=abc",
+    "https://FCM.GoogleAPIs.com/fcm/send/abc",
+  ];
+  for (const endpoint of ok) assert.ok(pushServiceOf(endpoint), endpoint);
+  const bad = [
+    "http://fcm.googleapis.com/fcm/send/abc",
+    "https://fcm.googleapis.com.evil.com/fcm/send/abc",
+    "https://evilfcm.googleapis.com/x",
+    "https://googleapis.com/x",
+    "https://push.services.mozilla.com/x",
+    "https://evilpush.services.mozilla.com/x",
+    "https://push.apple.com/x",
+    "https://web.push.apple.com.attacker.example/x",
+    "https://notify.windows.com.evil.com/x",
+    "https://user:pw@fcm.googleapis.com/fcm/send/abc",
+    "https://evil.example/collect",
+    "https://192.168.1.1:8443/push",
+    "https://[::1]/push",
+    "https://localhost/push",
+    "ftp://fcm.googleapis.com/x",
+    "not a url",
+  ];
+  for (const endpoint of bad) assert.equal(pushServiceOf(endpoint), null, endpoint);
+
+  const keys = browserSubscription("x").keys;
+  for (const endpoint of ["https://evil.example/collect", "https://192.168.1.1:8443/push", "https://fcm.googleapis.com.evil.com/x"]) {
+    const res = await request("POST", "/push/subscribe", { subscription: { endpoint, keys } });
+    assert.equal(res.status, 400, endpoint);
+  }
+  assert.equal(listSubscriptions().length, 0);
+});
+
+test("another site's page can't reach the push routes; gitbot's own can, through a proxy too", async () => {
+  const sub = browserSubscription("a");
+  const evil = { origin: "https://evil.example" };
+  for (const [path, body] of [
+    ["/push/subscribe", { subscription: sub }],
+    ["/push/unsubscribe", { endpoint: sub.endpoint }],
+    ["/push/test", {}],
+    ["/push/subscriptions", {}],
+    ["/push/subscriptions/delete", { id: "x" }],
+  ] as const) {
+    assert.equal((await request("POST", path, body, evil)).status, 403, path);
+    assert.equal((await request("POST", path, body, { origin: "null" })).status, 403, path);
+    // A lookalike port or host is another origin.
+    assert.equal((await request("POST", path, body, { origin: "http://localhost:3001" })).status, 403, path);
+    assert.equal((await request("POST", path, body, { origin: "http://localhost.evil.example:3000" })).status, 403, path);
+  }
+  assert.equal(listSubscriptions().length, 0);
+
+  // A form post, or text/plain to dodge the preflight: refused.
+  for (const type of ["text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x", undefined]) {
+    assert.equal((await request("POST", "/push/subscribe", { subscription: sub }, { "content-type": type })).status, 415, String(type));
+  }
+  assert.equal(listSubscriptions().length, 0);
+  // Nor does the preflight invite one in.
+  const preflight = await rawPreflight("/push/subscribe");
+  assert.equal(preflight["access-control-allow-origin"], undefined);
+
+  // Same origin: on localhost; with a charset; with no Origin (curl).
+  assert.equal((await request("POST", "/push/subscribe", { subscription: sub }, { origin: "http://localhost:3000" })).status, 200);
+  assert.equal((await request("POST", "/push/subscribe", { subscription: sub }, { "content-type": "application/json; charset=utf-8" })).status, 200);
+  // Behind an HTTPS proxy that keeps Host (Tailscale Serve, Caddy), with or without ":443".
+  const ts = "gitbot.tail1234.ts.net";
+  assert.equal((await request("POST", "/push/subscriptions", {}, { origin: `https://${ts}`, host: ts })).status, 200);
+  assert.equal((await request("POST", "/push/subscriptions", {}, { origin: `https://${ts}`, host: `${ts}:443` })).status, 200);
+  // One that rewrites Host to the upstream and says the original in X-Forwarded-Host (nginx, the Next dev server).
+  assert.equal(
+    (await request("POST", "/push/subscriptions", {}, { origin: `https://${ts}`, host: "127.0.0.1:3000", "x-forwarded-host": ts })).status,
+    200,
+  );
+  assert.equal(
+    (await request("POST", "/push/subscriptions", {}, { origin: "http://localhost:3001", host: "127.0.0.1:3100", "x-forwarded-host": "localhost:3001" })).status,
+    200,
+  );
+  assert.equal(
+    (await request("POST", "/push/subscriptions", {}, { origin: "https://evil.example", host: "127.0.0.1:3000", "x-forwarded-host": ts })).status,
+    403,
+  );
+});
+
+/** The preflight's headers, lowercased. */
+async function rawPreflight(url: string): Promise<Record<string, string>> {
+  const req = Object.assign(new EventEmitter(), { method: "OPTIONS", url, headers: { origin: "https://evil.example" } }) as unknown as IRequest;
+  let headers: Record<string, string> = {};
+  const res: IResponse = {
+    headersSent: false,
+    writableEnded: false,
+    writeHead(_code, h) { headers = Object.fromEntries(Object.entries(h ?? {}).map(([k, v]) => [k.toLowerCase(), v])); },
+    write() {},
+    end() {},
+  };
+  await handleRequest(req, res, ALL_AGENTS, tmpdir());
+  return headers;
+}
+
+test("at the cap a new browser is refused, and none is pushed out; a known one still refreshes", async () => {
+  const subs = Array.from({ length: MAX_SUBSCRIPTIONS }, (_, i) => browserSubscription(`s${i}`));
+  writeFileSync(
+    join(dataDir(), "push-subscriptions.json"),
+    JSON.stringify(subs.map((s) => ({ endpoint: s.endpoint, keys: s.keys, createdAt: "2026-01-01T00:00:00.000Z" }))),
+  );
+  const res = await request("POST", "/push/subscribe", { subscription: browserSubscription("new") });
+  assert.equal(res.status, 409);
+  assert.match(res.body.error, /Delete one/);
+  assert.equal(listSubscriptions().length, MAX_SUBSCRIPTIONS);
+  assert.equal(listSubscriptions()[0].endpoint, subs[0].endpoint);
+
+  // The first one again, with new keys: updated in place, date kept, user agent filled in.
+  const fresh = { ...browserSubscription("s0"), endpoint: subs[0].endpoint };
+  assert.equal((await request("POST", "/push/subscribe", { subscription: fresh })).status, 200);
+  const first = listSubscriptions()[0];
+  assert.deepEqual(first.keys, fresh.keys);
+  assert.equal(first.createdAt, "2026-01-01T00:00:00.000Z");
+  assert.equal(first.userAgent, "TestBrowser/1.0");
+  assert.equal(listSubscriptions().length, MAX_SUBSCRIPTIONS);
+});
+
+test("the settings list shows a safe label per subscription, and deletes by id", async () => {
+  const CHROME_MAC =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36";
+  const mine = browserSubscription("mine");
+  assert.equal((await request("POST", "/push/subscribe", { subscription: mine }, { "user-agent": CHROME_MAC })).status, 200);
+  const iphone = {
+    ...browserSubscription("phone"),
+    endpoint: "https://web.push.apple.com/QGxphone",
+  };
+  // Saved before this change: no user agent, no date. And one from before
+  // endpoints were checked, pointing somewhere else.
+  const stored = listSubscriptions();
+  writeFileSync(
+    join(dataDir(), "push-subscriptions.json"),
+    JSON.stringify([...stored, { endpoint: iphone.endpoint, keys: iphone.keys }, { endpoint: "https://evil.example/collect", keys: iphone.keys }]),
+  );
+
+  const res = await request("POST", "/push/subscriptions", { endpoint: mine.endpoint });
+  assert.equal(res.status, 200);
+  const list = res.body.subscriptions;
+  assert.equal(list.length, 3);
+  assert.deepEqual(list[0], {
+    id: subscriptionId(mine.endpoint),
+    service: "Google",
+    device: "Chrome on macOS",
+    addedAt: stored[0].createdAt,
+    current: true,
+  });
+  assert.deepEqual(list[1], { id: subscriptionId(iphone.endpoint), service: "Apple", device: null, addedAt: null, current: false });
+  assert.equal(list[2].service, null);
+  // Nothing secret goes to the page: no endpoint, no keys.
+  const text = JSON.stringify(res.body);
+  for (const secret of [mine.endpoint, iphone.endpoint, "evil.example", mine.keys.auth, mine.keys.p256dh]) {
+    assert.ok(!text.includes(secret), secret);
+  }
+  // Without an endpoint, none is "this device".
+  assert.ok((await request("POST", "/push/subscriptions", {})).body.subscriptions.every((s: any) => !s.current));
+
+  // The off-list one is never sent to.
+  assert.deepEqual((await request("POST", "/push/test", {})).body, { sent: 2, failed: 0, removed: 0 });
+  assert.ok(sent.every((s) => !s.endpoint.includes("evil.example")));
+
+  assert.deepEqual((await request("POST", "/push/subscriptions/delete", { id: list[2].id })).body, { removed: true });
+  assert.deepEqual((await request("POST", "/push/subscriptions/delete", { id: list[1].id })).body, { removed: true });
+  assert.deepEqual((await request("POST", "/push/subscriptions/delete", { id: list[1].id })).body, { removed: false });
+  assert.equal((await request("POST", "/push/subscriptions/delete", {})).status, 400);
+  assert.deepEqual(listSubscriptions().map((s) => s.endpoint), [mine.endpoint]);
+});
+
+test("user agents become a browser and a system", () => {
+  const cases: Array<[string | undefined, string | null]> = [
+    ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36", "Chrome on macOS"],
+    ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0", "Edge on Windows"],
+    ["Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0", "Firefox on Linux"],
+    ["Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.36", "Chrome on Android"],
+    // The installed Home Screen app on iOS: no "Safari/" in it.
+    ["Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148", "Safari on iPhone"],
+    ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15", "Safari on macOS"],
+    ["TestBrowser/1.0", null],
+    [undefined, null],
+  ];
+  for (const [ua, want] of cases) assert.equal(describeUserAgent(ua), want, String(ua));
 });

@@ -61,7 +61,13 @@ export async function handleRequest(
   const path = url.split("?")[0];
   const query = parseQuery(url);
 
-  // CORS preflight
+  // CORS preflight. None for /push/*: only gitbot's own page (same origin, no
+  // preflight) may change who gets notifications; src/push.ts checks Origin too.
+  if (method === "OPTIONS" && path.startsWith("/push/")) {
+    res.writeHead(204, {});
+    res.end();
+    return;
+  }
   if (method === "OPTIONS") {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
