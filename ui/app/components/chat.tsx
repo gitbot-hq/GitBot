@@ -24,7 +24,7 @@ import remarkGfm from "remark-gfm";
 import LoadingState from "./loading-state";
 import BotFace from "./bot-face";
 import BotName from "./bot-name";
-import AskQuestionCard, { AskAnswerNote } from "./ask-question-card";
+import AskQuestionCard from "./ask-question-card";
 import {
   ApiError,
   getClaudeModels,
@@ -55,6 +55,7 @@ import {
   EDIT_TOOLS,
   type AskAnswers,
   type AskQuestion,
+  type AskRecord,
   type HistoryMsg,
   type PermRequest,
   type ThreadFull,
@@ -66,6 +67,7 @@ import { useScrollEdge } from "../lib/use-scroll-edge";
 import { useStickToBottom } from "../lib/use-stick-to-bottom";
 import { useStatusFavicon } from "../lib/status-favicon";
 import { groupTools, type ToolChip } from "../lib/tool-ui";
+import { flattenAnswers } from "../lib/ask-ui";
 import { parseMarketplaceListing, type MarketplaceListing } from "../lib/marketplace-publish";
 import { presentSetupText, readSetupNeedsInput } from "../lib/setup";
 import { parseReport, type Report } from "../lib/report";
@@ -105,7 +107,7 @@ const nid = () => `m${Date.now()}-${seq++}`;
 // it isn't user chat.
 function flatten(
   role: string,
-  content: { type: string; text?: string; tool_name?: string; tool_input?: unknown }[],
+  content: { type: string; text?: string; tool_name?: string; tool_input?: unknown; tool_use_id?: string; ask?: AskRecord }[],
 ): { role: "user" | "assistant"; segs: Seg[] } {
   const segs: Seg[] = [];
   const pushText = (text: string) => {
@@ -113,10 +115,10 @@ function flatten(
     if (last && last.kind === "text") last.text += `\n\n${text}`;
     else segs.push({ kind: "text", text });
   };
-  const pushTool = (name: string, input: unknown) => {
+  const pushTool = (chip: ToolChip) => {
     const last = segs[segs.length - 1];
-    if (last && last.kind === "tools") last.tools.push({ name, input });
-    else segs.push({ kind: "tools", tools: [{ name, input }] });
+    if (last && last.kind === "tools") last.tools.push(chip);
+    else segs.push({ kind: "tools", tools: [chip] });
   };
   for (const b of content ?? []) {
     if (
@@ -127,7 +129,12 @@ function flatten(
       const text = role === "user" ? stripGitbotNotes(b.text) : b.text;
       if (text) pushText(text);
     } else if (b.type === "tool_use" && b.tool_name) {
-      pushTool(String(b.tool_name), b.tool_input);
+      pushTool({
+        name: String(b.tool_name),
+        input: b.tool_input,
+        ...(b.tool_use_id ? { id: b.tool_use_id } : {}),
+        ...(b.ask ? { ask: b.ask } : {}),
+      });
     }
   }
   return { role: role === "user" ? "user" : "assistant", segs };
@@ -227,12 +234,15 @@ function SegmentList({
   openGroups,
   onToggleGroup,
   renderText,
+  waitingAsks,
 }: {
   segs: Seg[];
   keyPrefix: string;
   openGroups: Record<string, boolean>;
   onToggleGroup: (key: string) => void;
   renderText: (text: string) => ReactNode;
+  /** tool_use_ids of questions whose answer card is up now. */
+  waitingAsks: ReadonlySet<string>;
 }) {
   return (
     <>
@@ -249,6 +259,7 @@ function SegmentList({
                   group={g}
                   open={!!openGroups[key]}
                   onToggle={() => onToggleGroup(key)}
+                  waiting={!!g.items[0].id && waitingAsks.has(g.items[0].id)}
                 />
               );
             })}
@@ -656,7 +667,9 @@ export default function Chat({
   const [planOpen, setPlanOpen] = useState(false);
   // `answers` is kept after the fact so an answered question can still say
   // what was chosen: the transcript has the tool call, not the reply.
-  const [perms, setPerms] = useState<(PermRequest & { verdict?: boolean; answers?: AskAnswers; busy?: boolean })[]>([]);
+  const [perms, setPerms] = useState<(PermRequest & { verdict?: boolean; busy?: boolean })[]>([]);
+  /** Answers by tool_use_id this turn, for a question row drawn after its answer arrived. */
+  const askResults = useRef<Record<string, Pick<AskRecord, "answers" | "state">>>({});
   const [turnError, setTurnError] = useState<string | null>(null);
   // Single "up next" slot: the server runs one turn per thread (a second
   // POST /chat mid-turn is a 409), so follow-ups sent while streaming wait
@@ -1083,6 +1096,7 @@ export default function Chat({
     threadRef.current = thread?.id ?? null;
     setMsgs([]);
     setPerms([]);
+    askResults.current = {};
     setLoading(false);
     setTurnError(null);
     setActivity(null);
@@ -1321,7 +1335,42 @@ export default function Chat({
     });
   }
 
+  /**
+   * A question's answer onto its tool row, wherever the row is: the live
+   * reply, or a message already swapped in from history. From this client's
+   * own answer and from the server's `ask_answer` event alike (idempotent).
+   * Kept by id too, for a row whose tool_use arrives after its answer.
+   */
+  function applyAsk(id: string, result: Pick<AskRecord, "answers" | "state">) {
+    askResults.current[id] = result;
+    const patch = (segs: Seg[]): Seg[] => {
+      if (!segs.some((s) => s.kind === "tools" && s.tools.some((t) => t.id === id && t.ask))) return segs;
+      return segs.map((s) =>
+        s.kind === "tools"
+          ? { kind: "tools", tools: s.tools.map((t) => (t.id === id && t.ask ? { ...t, ask: { ...t.ask, ...result } } : t)) }
+          : s,
+      );
+    };
+    setLive((prev) => {
+      if (!prev) return prev;
+      const segs = patch(prev.segs);
+      return segs === prev.segs ? prev : { ...prev, segs };
+    });
+    setMsgs((prev) => {
+      let changed = false;
+      const out = prev.map((m) => {
+        const segs = patch(m.segs);
+        if (segs === m.segs) return m;
+        changed = true;
+        return { ...m, segs };
+      });
+      return changed ? out : prev;
+    });
+  }
+
   function appendLiveTool(chip: ToolChip) {
+    const known = chip.id && chip.ask ? askResults.current[chip.id] : undefined;
+    if (known && chip.ask) chip = { ...chip, ask: { ...chip.ask, ...known } };
     pendingTools.current.push(chip);
     setLive((prev) => {
       if (!prev) return prev;
@@ -1401,6 +1450,10 @@ export default function Chat({
     setActivity(null);
     liveIdRef.current = null;
     sessionRef.current = null;
+    // The turn is over: no card or note stays pinned below the reply. A
+    // question's answer lives on its tool row; an unanswered one reads "no
+    // answer" there.
+    setPerms([]);
     if (turnStart.current) {
       pendingRun.current = {
         secs: Math.max(1, Math.round((Date.now() - turnStart.current) / 1000)),
@@ -1499,7 +1552,12 @@ export default function Chat({
       ensureLive();
       const d = data(ev);
       setActivity(`Running ${d.tool_name || "tool"}…`);
-      appendLiveTool({ name: String(d.tool_name ?? "tool"), input: d.tool_input });
+      appendLiveTool({
+        name: String(d.tool_name ?? "tool"),
+        input: d.tool_input,
+        ...(d.tool_use_id ? { id: String(d.tool_use_id) } : {}),
+        ...(d.ask?.questions ? { ask: d.ask as AskRecord } : {}),
+      });
       // A TodoWrite carries the whole plan alongside its chip summary.
       if (d.todos) setTodos(d.todos);
     });
@@ -1508,6 +1566,15 @@ export default function Chat({
       if (d.status === "thinking") setActivity("Thinking…");
       else if (d.status === "tool") setActivity(`Running ${d.tool_name || "tool"}…`);
       else if (d.status === "tool_summary" && d.summary) setActivity(String(d.summary));
+    });
+    // A question was answered (here, or in another tab): its row shows the
+    // answer and its card goes. Replayed on rejoin, which is the same thing.
+    es.addEventListener("ask_answer", (ev) => {
+      const d = data(ev);
+      if (!d.tool_use_id) return;
+      const id = String(d.tool_use_id);
+      applyAsk(id, d.state === "answered" && d.answers ? { answers: d.answers, state: "answered" } : { state: "none" });
+      setPerms((prev) => prev.filter((p) => !(p.questions && p.toolUseID === id)));
     });
     es.addEventListener("permission_request", (ev) => {
       const d = data(ev);
@@ -1617,6 +1684,7 @@ export default function Chat({
     if (viewRef.current) drafts.current[viewRef.current] = "";
     setTurnError(null);
     setPerms([]);
+    askResults.current = {};
     setOpenGroups({});
     pendingTools.current = [];
     pendingRun.current = null;
@@ -1819,7 +1887,17 @@ export default function Chat({
       setPerms((prev) => prev.map((x) => (x.toolUseID === p.toolUseID ? { ...x, ...patch } : x)));
     mark({ busy: true });
     postPermission(sid, p.toolUseID, approved, answers)
-      .then(() => mark({ verdict: approved, busy: false, answers }))
+      .then(() => {
+        if (!p.questions) {
+          mark({ verdict: approved, busy: false });
+          return;
+        }
+        // A question's card goes once answered: its tool row in the reply now
+        // carries the answer, as the server's `ask_answer` event will confirm.
+        const said = approved && answers ? flattenAnswers(answers) : {};
+        applyAsk(p.toolUseID, Object.keys(said).length ? { answers: said, state: "answered" } : { state: "none" });
+        setPerms((prev) => prev.filter((x) => x.toolUseID !== p.toolUseID));
+      })
       .catch((e) => {
         // The agent is still waiting: leave the card up so it can be answered again.
         mark({ busy: false });
@@ -1967,6 +2045,7 @@ export default function Chat({
     visibleMsgs.map((m) => m.at),
     approvals ?? [],
   );
+  const waitingAsks = new Set(perms.filter((p) => p.questions && p.verdict === undefined).map((p) => p.toolUseID));
   const approvalRowsOf = (list: ApprovalRow[] | undefined) =>
     list?.map((r) => <ApprovalRowView key={`ap-${r.id}`} row={r} onReview={onReviewApproval} />);
   const permissionMode = thread
@@ -2294,6 +2373,7 @@ export default function Chat({
                 keyPrefix={`${m.id}:`}
                 openGroups={openGroups}
                 onToggleGroup={toggleGroup}
+                waitingAsks={waitingAsks}
                 renderText={(text) => (
                   <RichText botColor={botAvatar?.color} text={setup && m.role === "assistant" ? presentSetupText(text) : text} />
                 )}
@@ -2346,6 +2426,7 @@ export default function Chat({
               keyPrefix="l"
               openGroups={openGroups}
               onToggleGroup={toggleGroup}
+              waitingAsks={waitingAsks}
               renderText={(text) => (
                 <RichText botColor={botAvatar?.color} text={setup ? presentSetupText(text) : text} />
               )}
@@ -2377,9 +2458,10 @@ export default function Chat({
         )}
         {perms.map((p) => {
           // A question is not a permission to grant: it gets a card that can
-          // be answered. The server sends `questions` only for an input it
-          // parsed as one; anything else falls back to the plain allow/deny
-          // card below.
+          // be answered, up only while it waits. Once answered the card goes
+          // and the question's tool row in the reply shows the answer. The
+          // server sends `questions` only for an input it parsed as one;
+          // anything else falls back to the plain allow/deny card below.
           const questions = p.questions;
           if (questions) {
             return p.verdict === undefined ? (
@@ -2390,13 +2472,7 @@ export default function Chat({
                 onSubmit={(answers) => answerPerm(p, true, answers)}
                 onDecline={() => answerPerm(p, false)}
               />
-            ) : (
-              <AskAnswerNote
-                key={p.toolUseID}
-                questions={questions}
-                answers={p.verdict ? p.answers ?? {} : {}}
-              />
-            );
+            ) : null;
           }
           return p.verdict === undefined ? (
             <div key={p.toolUseID} className="perm-card">

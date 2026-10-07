@@ -81,6 +81,22 @@ export type HistoryBlock = {
   tool_input?: unknown;
   /** Set on a TodoWrite block only: the whole plan, as a list. */
   todos?: TodoItem[];
+  tool_use_id?: string;
+  /** Set on an AskUserQuestion block only: what was asked and what came back. */
+  ask?: AskRecord;
+};
+
+/**
+ * A question as its tool row carries it (src/ask-user-question.ts, AskRecord).
+ * `state` is absent while no answer has been seen — the chat knows from its
+ * pending questions whether one is still waiting; "none" means declined,
+ * aborted, or answered with nothing.
+ */
+export type AskRecord = {
+  questions: { header: string; question: string }[];
+  /** Question text → the answer (multi-select comma-joined). */
+  answers?: Record<string, string>;
+  state?: "answered" | "none";
 };
 
 export type HistoryMsg = {

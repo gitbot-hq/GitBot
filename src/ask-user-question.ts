@@ -103,3 +103,82 @@ export function askUserQuestionLabel(input: unknown): string {
   if (!questions) return ASK_USER_QUESTION;
   return questions.map((q) => q.question).join(" · ");
 }
+
+/**
+ * A question as its tool row carries it, live and in history: what was asked,
+ * and — once known — what came back. `state` is absent while no result has
+ * been seen (the turn may still be waiting on the user); "none" means the
+ * question was declined, aborted, or answered with nothing.
+ */
+export type AskRecord = {
+  questions: { header: string; question: string }[];
+  /** Question text → the answer, multi-select comma-joined (the tool's own format). */
+  answers?: Record<string, string>;
+  state?: "answered" | "none";
+};
+
+/** The record for a tool input, or null when it is not a question we can read. */
+export function askRecord(input: unknown): AskRecord | null {
+  const questions = parseAskUserQuestion(input);
+  return questions ? { questions: questions.map(({ header, question }) => ({ header, question })) } : null;
+}
+
+/** Answers as the client sends them, flattened to the tool's one-string-per-question form. */
+export function flattenAskAnswers(input: unknown, answers: AskAnswers): Record<string, string> {
+  return withAskAnswers(input, answers).answers as Record<string, string>;
+}
+
+/** `"question"="answer"` pairs out of the text the tool echoes to the model. */
+export function parseAnswerText(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const pair = /"((?:[^"\\]|\\.)*)"="((?:[^"\\]|\\.)*)"/g;
+  for (let m = pair.exec(text); m; m = pair.exec(text)) {
+    const q = m[1].trim();
+    const a = m[2].trim();
+    if (q && a) out[q] = a;
+  }
+  return out;
+}
+
+const resultText = (content: unknown): string =>
+  typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content.map((c: any) => (c?.type === "text" && typeof c.text === "string" ? c.text : "")).join("\n")
+      : "";
+
+/**
+ * What a transcript's tool_result says about a question. The SDK records the
+ * answers it used in `toolUseResult.answers`; older or unusual entries fall
+ * back to the echoed text. An error result (declined, aborted) and an empty
+ * answer map — an allow that carried no answers, so the model was told
+ * `answered: .` — both read as "none": the user said nothing.
+ */
+export function askResult(
+  toolUseResult: unknown,
+  content: unknown,
+  isError: boolean,
+): Pick<AskRecord, "answers" | "state"> {
+  if (isError) return { state: "none" };
+  const stored = (toolUseResult as { answers?: unknown } | null)?.answers;
+  const answers: Record<string, string> = {};
+  if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+    for (const [q, a] of Object.entries(stored as Record<string, unknown>)) {
+      const value = Array.isArray(a) ? a.map(String).join(", ") : typeof a === "string" ? a : "";
+      if (q.trim() && value.trim()) answers[q.trim()] = value.trim();
+    }
+  } else {
+    Object.assign(answers, parseAnswerText(resultText(content)));
+  }
+  return Object.keys(answers).length ? { answers, state: "answered" } : { state: "none" };
+}
+
+/** One compact line for a text transcript (Jarvis's thread reader). */
+export function askLine(record: AskRecord, max = 200): string {
+  const said = record.questions.map((q) => {
+    const a = record.answers?.[q.question];
+    return `${q.question} → ${a ?? (record.state ? "no answer" : "awaiting answer")}`;
+  });
+  const line = `[asked: ${said.join("; ")}]`;
+  return line.length > max ? `${line.slice(0, max - 2)}…]` : line;
+}

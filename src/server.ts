@@ -31,7 +31,7 @@ import { releaseToUser } from "./send-to-thread";
 import { watchChildReports } from "./reports";
 import { noteChildStopped } from "./child-lock";
 import { answerChildApprovals, watchChildApprovals } from "./child-approvals";
-import { isAskUserQuestion, withAskAnswers, type AskAnswers } from "./ask-user-question";
+import { flattenAskAnswers, isAskUserQuestion, type AskAnswers } from "./ask-user-question";
 import { recoverInterruptedChildren, watchRunningMarks } from "./restart-recovery";
 import { watchThreadActivity } from "./attention";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
@@ -280,15 +280,29 @@ export async function handleRequest(
           // user chose out of its own input (see ask-user-question.ts), so the
           // answers ride back as updatedInput rather than as a tool result.
           const question = isAskUserQuestion(pending.toolName, pending.input);
-          const allowInput = question && answers && typeof answers === "object"
-            ? withAskAnswers(pending.input, answers as AskAnswers)
+          const said = question && answers && typeof answers === "object"
+            ? flattenAskAnswers(pending.input, answers as AskAnswers)
+            : {};
+          // A question "allowed" with no answers would tell the model the user
+          // answered with nothing (`answered: .`); it is a decline, so say so.
+          const answered = question ? !!approved && Object.keys(said).length > 0 : !!approved;
+          const allowInput = question
+            ? { ...(pending.input ?? {}), answers: said }
             : updatedInput ?? pending.input;
-          pending.resolve(approved
+          pending.resolve(answered
             ? { behavior: "allow", updatedInput: allowInput }
             : { behavior: "deny", message: question ? "User declined to answer the questions" : "User denied" }
           );
+          // The question's tool row shows the answer: every client watching
+          // this turn, and one that rejoins it, reads it from here.
+          if (question) {
+            emitEvent(store, "ask_answer", {
+              tool_use_id: toolUseID,
+              ...(answered ? { answers: said, state: "answered" } : { state: "none" }),
+            });
+          }
           // A Jarvis-owned child's row says how, before the change is broadcast.
-          answerChildApprovals(store, [toolUseID], !!approved);
+          answerChildApprovals(store, [toolUseID], answered);
           notifyPermissionsChanged();
         }
       } else if (store.agent === "opencode" && store.sdkSessionId) {

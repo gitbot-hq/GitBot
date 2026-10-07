@@ -7,6 +7,7 @@ import { DEFAULT_CLAUDE_MODEL, type ContextUsage } from "./context-window";
 import { isModelValue } from "./claude-models";
 import { loadTranscript as loadCodexTranscript } from "./start-codex";
 import { getSessionHistory as loadOpencodeHistory } from "./start-opencode";
+import { askLine } from "./ask-user-question";
 
 // Jarvis's read-only view of gitbot threads: list them, ask how one stands,
 // read its last few messages. Plain functions, so they can be tested without
@@ -118,6 +119,8 @@ function messageText(message: TranscriptMessage): string {
   const parts: string[] = [];
   for (const block of message.content ?? []) {
     if (block?.type === "text" && block.text) parts.push(String(block.text));
+    // A question reads as what was asked and what the user said.
+    else if (block?.type === "tool_use" && block.ask) parts.push(askLine(block.ask, TOOL_INPUT_CHARS));
     else if (block?.type === "tool_use") parts.push(`[tool ${block.tool_name}: ${cap(String(block.tool_input ?? ""), TOOL_INPUT_CHARS)}]`);
     else if (block?.type === "image_url") parts.push("[image]");
   }

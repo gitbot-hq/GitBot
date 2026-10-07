@@ -299,14 +299,35 @@ test("answers are ignored for an ordinary tool, which still allows as before", a
   assert.deepEqual(denied.resolved, [{ behavior: "deny", message: "User denied" }]);
 });
 
-test("allowing a question with no answers sent still carries an answers map", async () => {
-  // A client that knows nothing of questions can still press Allow; the tool
-  // must find `answers` on its input rather than an undefined.
-  const { store, resolved } = sessionAsking("AskUserQuestion", askInput());
+test("allowing a question with no answers is a decline, not an empty answer", async () => {
+  // A client that knows nothing of questions can still press Allow. Allowed
+  // with an empty map, the tool told the model "User has answered your
+  // questions: ." (seen in a real Jarvis transcript) and it had to ask again.
+  for (const body of [{ answers: {} }, {}, { answers: { "Which library should we use for date formatting?": ["  "] } }]) {
+    const { store, resolved } = sessionAsking("AskUserQuestion", askInput());
+    await request("POST", `/sessions/${store.gitbotId}/permission`, { toolUseID: "tu-ask", approved: true, ...body });
+    assert.deepEqual(resolved, [{ behavior: "deny", message: "User declined to answer the questions" }]);
+    const ev = store.events.filter((e: any) => e.type === "ask_answer");
+    assert.deepEqual(ev.map((e: any) => ({ id: e.tool_use_id, state: e.state })), [{ id: "tu-ask", state: "none" }]);
+  }
+});
+
+test("an answered question tells the chat its answer, keyed by tool_use_id", async () => {
+  const { store } = sessionAsking("AskUserQuestion", askInput());
   await request("POST", `/sessions/${store.gitbotId}/permission`, {
     toolUseID: "tu-ask",
     approved: true,
-    answers: {},
+    answers: { "Which library should we use for date formatting?": ["date-fns"] },
   });
-  assert.deepEqual(resolved[0].updatedInput.answers, {});
+  const ev = store.events.filter((e: any) => e.type === "ask_answer") as any[];
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].tool_use_id, "tu-ask");
+  assert.equal(ev[0].state, "answered");
+  assert.deepEqual(ev[0].answers, { "Which library should we use for date formatting?": "date-fns" });
+});
+
+test("an ordinary tool's answer sends no ask_answer", async () => {
+  const { store } = sessionAsking("Bash", { command: "ls" });
+  await request("POST", `/sessions/${store.gitbotId}/permission`, { toolUseID: "tu-ask", approved: true });
+  assert.equal(store.events.filter((e: any) => e.type === "ask_answer").length, 0);
 });

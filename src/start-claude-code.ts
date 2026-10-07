@@ -18,7 +18,7 @@ import { presetSystemPrompt, recordSetupOutcome } from "./bot-prompt";
 import { isJarvisTool, jarvisQueryOptions, stripJarvisReminder, withJarvisReminder } from "./jarvis";
 import { contextUsage, tokensInContext, DEFAULT_CLAUDE_MODEL, type ContextUsage } from "./context-window";
 import { captureSupportedModels, DEFAULT_CLAUDE_EFFORT } from "./claude-models";
-import { ASK_USER_QUESTION, askUserQuestionLabel, parseAskUserQuestion } from "./ask-user-question";
+import { ASK_USER_QUESTION, askRecord, askResult, askUserQuestionLabel, parseAskUserQuestion, type AskRecord } from "./ask-user-question";
 
 /**
  * How a turn reaches the SDK. A seam, like `agentRunners` in turns.ts: a test
@@ -317,6 +317,12 @@ function namingModel(store: SessionStore, message: string, stderrTail: string[])
   return `${text}\n\nThis turn asked for model "${store.model}" at effort "${store.effort}".`;
 }
 
+/** A question's record for its tool row; nothing for any other tool. */
+function askField(toolName: string, input: unknown): { ask?: AskRecord } {
+  const ask = toolName === ASK_USER_QUESTION ? askRecord(input) : null;
+  return ask ? { ask } : {};
+}
+
 /**
  * The permission_request event's payload, live and replayed alike — it is what
  * goes into store.events, so a client rejoining a turn reads the same thing.
@@ -399,6 +405,10 @@ export function formatMessage(
             type: "tool_use",
             tool_name: block.name,
             tool_input: formatToolInput(block.name, block.input),
+            tool_use_id: block.id,
+            // A question's row shows what was asked; its answer follows as an
+            // `ask_answer` event when the user replies (see server.ts).
+            ...askField(block.name, block.input),
             // The plan panel mirrors the main agent's list only: a Task
             // sub-agent keeps its own todos, and letting those through would
             // swap the plan (and its done/total) mid-turn and then swap back.
@@ -496,6 +506,9 @@ export async function loadTranscript(
   // Each message carries its transcript time (`at`) when the line has one:
   // the UI places gitbot's own rows (a child's approvals) among them by time.
   const messages: { role: string; content: any[]; at?: string }[] = [];
+  // AskUserQuestion rows by tool_use_id, so the answer in a later tool_result
+  // lands on the row that asked.
+  const asks = new Map<string, any>();
 
   try {
     const rl = createInterface({
@@ -513,6 +526,13 @@ export async function loadTranscript(
       }
 
       const at = typeof entry.timestamp === "string" ? { at: entry.timestamp } : {};
+
+      if (entry.type === "user" && Array.isArray(entry.message?.content)) {
+        for (const b of entry.message.content) {
+          const row = b?.type === "tool_result" ? asks.get(b.tool_use_id) : undefined;
+          if (row) Object.assign(row.ask, askResult(entry.toolUseResult, b.content, b.is_error === true));
+        }
+      }
 
       if (entry.type === "user" && entry.userType === "external" && !entry.isMeta) {
         const rawContent = entry.message?.content;
@@ -546,12 +566,16 @@ export async function loadTranscript(
               // Sidechain entries are a sub-agent's: their chips belong in the
               // transcript, but their todos must not seed the plan panel —
               // the same rule the live path applies via `parent_tool_use_id`.
-              blocks.push({
+              const block = {
                 type: "tool_use",
                 tool_name: b.name,
                 tool_input,
+                tool_use_id: b.id,
+                ...askField(b.name, b.input),
                 ...(entry.isSidechain ? {} : todoList(b.name, b.input)),
-              });
+              };
+              if (block.ask && b.id) asks.set(b.id, block);
+              blocks.push(block);
             }
           }
         }

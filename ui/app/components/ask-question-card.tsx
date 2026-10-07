@@ -185,21 +185,3 @@ export default function AskQuestionCard({ questions, busy, onSubmit, onDecline }
     </div>
   );
 }
-
-/** What was answered, once it has been sent: the card's read-only afterlife. */
-export function AskAnswerNote({ questions, answers }: { questions: AskQuestion[]; answers: AskAnswers }) {
-  const said = questions
-    .map((q) => ({ header: q.header, value: (answers[q.question] ?? []).join(", ") }))
-    .filter((a) => a.value);
-  if (!said.length) return <p className="perm-note">Declined to answer</p>;
-  return (
-    <p className="perm-note ask-note">
-      {said.map((a) => (
-        <span key={a.header} className="ask-note-item">
-          <span className="ask-chip">{a.header}</span>
-          {a.value}
-        </span>
-      ))}
-    </p>
-  );
-}

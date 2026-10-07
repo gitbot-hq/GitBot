@@ -1441,19 +1441,6 @@ pre {
   gap: var(--space-2);
 }
 
-.ask-note {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2) var(--space-3);
-  align-items: center;
-}
-
-.ask-note-item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
 .composer {
   display: grid;
   gap: 0;
@@ -3698,6 +3685,44 @@ button.act-head:hover .act-swap,
   border-radius: 6px;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
+}
+
+/* A question the agent asked, as a tool row: "Asked" + question → answer
+   in body text (not the mono chip), the full Q&A expanding below. */
+.act-ask-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.act-ask[data-ask-status="answered"] .act-ask-text {
+  color: var(--text);
+}
+
+.act-ask-detail {
+  display: grid;
+  gap: var(--space-2);
+  margin: 2px 0 var(--space-2) var(--space-2);
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+
+.act-ask-detail dt {
+  color: var(--muted);
+}
+
+.act-ask-detail dd {
+  margin: 0;
+  color: var(--text);
+}
+
+.act-ask-detail dd.act-ask-none {
+  color: var(--faint);
+  font-style: italic;
 }
 
 .act-items {

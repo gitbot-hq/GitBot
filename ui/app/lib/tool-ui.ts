@@ -1,3 +1,4 @@
+import type { AskRecord } from "./gitbot";
 import {
   IconBolt,
   IconFilePlus,
@@ -13,7 +14,14 @@ import {
 // file extraction. Live and history replies draw the same rows, so a turn
 // reads the same alive and archived; the end-of-turn footer adds the files.
 
-export type ToolChip = { name: string; input: unknown };
+export type ToolChip = {
+  name: string;
+  input: unknown;
+  /** The call's tool_use_id, where the agent reports one. */
+  id?: string;
+  /** An AskUserQuestion's questions and answers (ask-ui.ts draws them). */
+  ask?: AskRecord;
+};
 
 // Tool input preview, mirroring the original client: raw string as-is,
 // otherwise JSON, capped at 200 chars (the command, the folder, …).
@@ -51,14 +59,15 @@ export function pluralNoun(name: string, count: number): string {
   return count === 1 ? verb[1] : `${count} ${verb[2]}`;
 }
 
-/** Consecutive same-tool calls collapse into one row, order preserved. */
+/** Consecutive same-tool calls collapse into one row, order preserved.
+ *  A question never folds: each is its own row, with its own answer. */
 export function groupTools(
   tools: ToolChip[],
 ): { name: string; items: ToolChip[] }[] {
   const groups: { name: string; items: ToolChip[] }[] = [];
   for (const t of tools) {
     const last = groups[groups.length - 1];
-    if (last && last.name === t.name) last.items.push(t);
+    if (last && last.name === t.name && !t.ask && !last.items[0].ask) last.items.push(t);
     else groups.push({ name: t.name, items: [t] });
   }
   return groups;

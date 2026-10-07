@@ -5,7 +5,9 @@ import { ChevronDownIcon } from "@animateicons/react/lucide/chevron-down-icon";
 
 import { useState } from "react";
 import { createPortal } from "react-dom";
-import { IconBolt } from "@tabler/icons-react";
+import { IconBolt, IconHelpCircle } from "@tabler/icons-react";
+import { askDetail, askStatus, askSummary } from "../lib/ask-ui";
+import type { AskRecord } from "../lib/gitbot";
 import {
   changedPath,
   extractChangedFiles,
@@ -13,6 +15,51 @@ import {
   toolSummary,
   type ToolChip,
 } from "../lib/tool-ui";
+
+// A question the agent asked, as a tool row: collapsed, the first question
+// and its answer; expanded, every question with its full answer. While the
+// question waits, the answer card below the reply is where it gets answered.
+function AskRow({
+  ask,
+  waiting,
+  open,
+  onToggle,
+}: {
+  ask: AskRecord;
+  waiting: boolean;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const status = askStatus(ask, waiting);
+  return (
+    <div className="act-row act-ask" data-ask-status={status}>
+      <button type="button" className="act-head" onClick={onToggle} aria-expanded={open}>
+        <span className="act-icon" aria-hidden="true">
+          <span className="act-glyph">
+            <IconHelpCircle size={13} stroke={2} aria-hidden="true" />
+          </span>
+          <AnimatedActionIcon icon={ChevronDownIcon}
+            size={12}
+            aria-hidden="true"
+            className={open ? "act-swap open" : "act-swap"}
+          />
+        </span>
+        <span className="act-name">Asked</span>
+        <span className="act-ask-text">{askSummary(ask, waiting)}</span>
+      </button>
+      {open && (
+        <dl className="act-ask-detail">
+          {askDetail(ask, waiting).map((d, i) => (
+            <div key={i}>
+              <dt>{d.question}</dt>
+              <dd className={d.answered ? undefined : "act-ask-none"}>{d.answer}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </div>
+  );
+}
 
 // One activity row: 28px, tool icon that swaps to a chevron on hover
 // (or while open), medium label, and the key detail in an inline mono
@@ -22,13 +69,18 @@ export function ActionRow({
   open,
   onToggle,
   archived,
+  waiting,
 }: {
   group: { name: string; items: ToolChip[] };
   open: boolean;
   onToggle: () => void;
   /** History records: always expanded, no toggle chrome. */
   archived?: boolean;
+  /** A question row whose answer card is up right now. */
+  waiting?: boolean;
 }) {
+  const ask = group.items[0].ask;
+  if (ask) return <AskRow ask={ask} waiting={!!waiting} open={open} onToggle={onToggle} />;
   const Icon = TOOL_ICONS[group.name] ?? IconBolt;
   const multi = group.items.length > 1;
   const chip = toolSummary(group.items[0].input);
