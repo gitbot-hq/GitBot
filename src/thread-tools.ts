@@ -33,7 +33,42 @@ export async function loadThreadMessages(thread: Thread): Promise<TranscriptMess
   if (!thread.sdkSessionId) return [];
   // Older threads, or an agent this build does not know: Claude Code, as ever.
   const load = transcriptLoaders[thread.agent as BotAgent] ?? transcriptLoaders["claude-code"];
-  return load(thread.sdkSessionId, thread.repoPath);
+  return withPendingPrompt(thread, await load(thread.sdkSessionId, thread.repoPath));
+}
+
+/**
+ * The transcript, plus the current turn's prompt when the transcript does not
+ * have it yet.
+ *
+ * A thread is bound to its session the moment the agent reports the session id
+ * (Claude Code's `init`), but the agent writes the prompt to its transcript
+ * later. For a new session the file does not exist yet at `init`, and the
+ * prompt line follows hundreds of milliseconds to seconds after, longer with
+ * MCP servers to start. A read in that window used to return a history
+ * without the prompt. The chat trusts history for a bound session and skips
+ * the replayed prompt (chat.tsx, `historyCovers`), so the first message went
+ * missing while the turn ran. Jarvis's read tools missed it too.
+ *
+ * gitbot keeps the turn's prompt itself (the `user_prompt` event, with the time
+ * it was sent), so it fills the gap until the transcript has a user message
+ * from that time on. Agents whose transcripts carry no times (codex, opencode)
+ * only get the prompt while no user message is there at all, so it is never
+ * shown twice.
+ */
+function withPendingPrompt(thread: Thread, messages: TranscriptMessage[]): TranscriptMessage[] {
+  const store = [...sessions.values()].reverse()
+    .find((s) => s.threadId === thread.id && s.sdkSessionId === thread.sdkSessionId);
+  const turn = store?.events.find((e) => e.type === "user_prompt");
+  if (!turn || typeof turn.at !== "string") return messages;
+  const sentAt = turn.at;
+  const covered = messages.some((m) => m.role === "user" && (m.at === undefined || m.at >= sentAt));
+  if (covered) return messages;
+  const content: any[] = [];
+  if (typeof turn.prompt === "string" && turn.prompt) content.push({ type: "text", text: turn.prompt });
+  for (const a of (turn.attachments as Array<{ url: string }> | undefined) ?? []) {
+    content.push({ type: "image_url", url: a.url });
+  }
+  return content.length ? [...messages, { role: "user", content, at: sentAt }] : messages;
 }
 
 /**

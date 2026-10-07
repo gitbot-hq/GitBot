@@ -119,6 +119,14 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
   }
   const note = pendingNoteFor(threadId, request.report);
   const sent = withNote(note, prompt);
+  // The turn's prompt, as gitbot records it. `at` is when it was sent: until
+  // the agent's transcript has a user message from then on, the thread's
+  // history serves this in its place (thread-tools.ts, withPendingPrompt).
+  const userPrompt = () => ({
+    prompt: sent ?? '',
+    at: new Date().toISOString(),
+    ...(attachments?.length ? { attachments } : {}),
+  });
 
   let store = existingId ? sessions.get(existingId) : undefined;
 
@@ -170,7 +178,7 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
     // request said. (Its model and effort are no longer fixed — they come from
     // the thread's pick, like any Claude Code thread's.)
     if (botPreset?.jarvis) store.mode = undefined;
-    emitEvent(store, 'user_prompt', { prompt: sent ?? '', ...(attachments?.length ? { attachments } : {}) });
+    emitEvent(store, 'user_prompt', userPrompt());
   } else {
     // A thread's first turn has no SDK session id yet, so its store is keyed
     // by a random id. Known: later turns look it up by the SDK id and miss
@@ -182,7 +190,7 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
       store.sdkSessionId = existingId;
     }
     startTurnFlags(store, request);
-    emitEvent(store, 'user_prompt', { prompt: sent ?? '', ...(attachments?.length ? { attachments } : {}) });
+    emitEvent(store, 'user_prompt', userPrompt());
     notifyPermissionsChanged();
   }
 
