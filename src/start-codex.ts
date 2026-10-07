@@ -889,6 +889,91 @@ function stripEnvelopes(text: string): string {
   return trimmed;
 }
 
+type HistoryToolBlock = { type: "tool_use"; tool_name: string; tool_input: string };
+
+function parseArgs(raw: unknown): Record<string, any> {
+  if (raw && typeof raw === "object") return raw as Record<string, any>;
+  if (typeof raw !== "string") return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+const commandText = (cmd: unknown): string =>
+  Array.isArray(cmd) ? cmd.map(String).join(" ") : typeof cmd === "string" ? cmd : "";
+
+/** An apply_patch body → one Write (added file) or Edit (anything else) per
+ *  file, as the live `file_change` item reports it. */
+function patchBlocks(patch: unknown): HistoryToolBlock[] {
+  if (typeof patch !== "string") return [];
+  const out: HistoryToolBlock[] = [];
+  for (const line of patch.split("\n")) {
+    const m = /^\*\*\* (Add|Update|Delete) File: (.+)$/.exec(line.trim());
+    if (m) out.push({ type: "tool_use", tool_name: m[1] === "Add" ? "Write" : "Edit", tool_input: m[2].trim() });
+  }
+  return out;
+}
+
+/**
+ * The tool calls one rollout `response_item` records, named the way the live
+ * stream names them (see `handleItem`): shell commands → Bash, apply_patch →
+ * Write/Edit per file, web search → WebSearch, update_plan → TodoWrite, MCP →
+ * `mcp__<server>__<tool>`. Outputs, reasoning and plumbing calls (write_stdin
+ * polling a running command, tool_search) are not tool calls a reader needs.
+ * Any other call keeps its own name.
+ */
+export function historyToolBlocks(payload: any): HistoryToolBlock[] {
+  const tool = (tool_name: string, tool_input: string): HistoryToolBlock[] => [
+    { type: "tool_use", tool_name, tool_input },
+  ];
+  switch (payload?.type) {
+    case "function_call": {
+      const name = String(payload.name ?? "");
+      const args = parseArgs(payload.arguments);
+      switch (name) {
+        case "exec_command":
+        case "shell_command":
+        case "shell":
+        case "container.exec":
+          return tool("Bash", commandText(args.cmd ?? args.command));
+        case "apply_patch":
+          return patchBlocks(args.input ?? payload.arguments);
+        case "update_plan": {
+          const plan = Array.isArray(args.plan) ? args.plan : [];
+          const summary = plan
+            .map((p: any) => `[${p?.status === "completed" ? "done" : "open"}] ${p?.step ?? ""}`)
+            .join(", ");
+          return tool("TodoWrite", summary);
+        }
+        case "write_stdin":
+        case "":
+          return [];
+      }
+      const ns = typeof payload.namespace === "string" ? payload.namespace : "";
+      const toolName = ns.startsWith("mcp__") ? `${ns}__${name}` : name;
+      return tool(toolName, typeof payload.arguments === "string" ? payload.arguments : JSON.stringify(args));
+    }
+    case "custom_tool_call": {
+      const name = String(payload.name ?? "");
+      if (name === "apply_patch") return patchBlocks(payload.input);
+      if (!name) return [];
+      return tool(name, typeof payload.input === "string" ? payload.input : JSON.stringify(payload.input ?? ""));
+    }
+    case "local_shell_call":
+      return tool("Bash", commandText(payload.action?.command));
+    case "web_search_call": {
+      const action = payload.action ?? {};
+      const query = action.query ?? (Array.isArray(action.queries) ? action.queries[0] : undefined) ?? action.url;
+      return typeof query === "string" && query ? tool("WebSearch", query) : [];
+    }
+    default:
+      return [];
+  }
+}
+
 export async function loadTranscript(
   threadId: string,
   _repoPath: string,
@@ -926,7 +1011,16 @@ export async function loadTranscript(
       }
       if (entry?.type !== "response_item") continue;
       const payload = entry.payload;
-      if (!payload || payload.type !== "message") continue;
+      if (!payload) continue;
+      // Tool calls sit between messages in the rollout, in the order they ran.
+      // Each becomes an assistant tool_use block, so history interleaves text
+      // and tools the way the live stream did.
+      const tools = historyToolBlocks(payload);
+      if (tools.length > 0) {
+        messages.push({ role: "assistant", content: tools });
+        continue;
+      }
+      if (payload.type !== "message") continue;
       const role = payload.role;
       if (role !== "user" && role !== "assistant") continue;
       const blocks: any[] = [];

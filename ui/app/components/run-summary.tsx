@@ -7,8 +7,8 @@ import { useState } from "react";
 import { createPortal } from "react-dom";
 import { IconBolt } from "@tabler/icons-react";
 import {
+  changedPath,
   extractChangedFiles,
-  groupAllTools,
   TOOL_ICONS,
   toolSummary,
   type ToolChip,
@@ -77,10 +77,11 @@ export function ActionRow({
   );
 }
 
-// End-of-turn consolidation: every tool call of a finished turn in one
-// collapsed card — grouped rows plus the files it changed. Durations come
-// from the turn; diff counts/lines need the backend and render when
-// present. Collapsed by default; the live timeline stays expanded.
+// End-of-turn footer: how many calls, how long, which files changed. The
+// calls themselves sit inline in the reply, where they happened (see
+// SegmentList in chat.tsx), so this does not list them again. Hovering a
+// file chip previews the calls behind it. Diff counts/lines need the
+// backend and slot into that preview when it provides them.
 export default function RunSummary({
   tools,
   secs,
@@ -90,28 +91,21 @@ export default function RunSummary({
   secs?: number;
   stopped?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  const [openRows, setOpenRows] = useState<Record<string, boolean>>({});
-  // Hover preview: the tool calls behind a file, flipped above/below to
-  // fit. Rendered in a body portal so reply transforms can't trap it.
-  // (Diff lines slot into this same preview when the backend provides
-  // them; until then it shows what each call actually did.)
+  // Hover preview, flipped above/below to fit. Rendered in a body portal
+  // so reply transforms can't trap it.
   const [preview, setPreview] = useState<{
     file: string;
     x: number;
     top?: number;
     bottom?: number;
   } | null>(null);
-  const groups = groupAllTools(tools);
   const files = extractChangedFiles(tools);
   const bits = [`${tools.length} tool call${tools.length === 1 ? "" : "s"}`];
   if (secs != null) bits.push(`${secs}s`);
-  const header = (stopped ? "Stopped · " : "") + bits.join(" · ");
+  if (files.length > 0) bits.push(`${files.length} file${files.length === 1 ? "" : "s"} changed`);
+  const line = (stopped ? "Stopped · " : "") + bits.join(" · ");
 
-  const related = (file: string) =>
-    tools.filter(
-      (t) => (t.input as { path?: unknown } | null)?.path === file,
-    );
+  const related = (file: string) => tools.filter((t) => changedPath(t) === file);
 
   const openPreview =
     (file: string) => (event: React.SyntheticEvent) => {
@@ -134,58 +128,31 @@ export default function RunSummary({
 
   return (
     <div className="run-card">
-      <button
-        type="button"
-        className="run-head"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-      >
-        <AnimatedActionIcon icon={ChevronDownIcon}
-          size={13}
-          aria-hidden="true"
-          className={open ? "act-chev open" : "act-chev"}
-        />
-        <span className="tabular-nums">{header}</span>
-      </button>
-      <div className={open ? "run-body open" : "run-body"}>
-        <div className="run-clip">
-          {groups.map((g) => (
-            <ActionRow
-              key={g.name}
-              group={g}
-              open={!!openRows[g.name]}
-              onToggle={() =>
-                setOpenRows((prev) => ({ ...prev, [g.name]: !prev[g.name] }))
-              }
-            />
+      <p className="run-foot tabular-nums">{line}</p>
+      {files.length > 0 && (
+        <div className="file-chips">
+          {files.map((f, i) => (
+            <span
+              key={f}
+              data-diffchip
+              onMouseEnter={openPreview(f)}
+              onMouseLeave={closePreview(f)}
+            >
+              <button
+                type="button"
+                className="file-chip"
+                style={{ animationDelay: `${i * 80}ms` }}
+                aria-expanded={preview?.file === f}
+                aria-label={`Calls behind ${f}`}
+                onFocus={openPreview(f)}
+                onBlur={closePreview(f)}
+              >
+                <span>{f}</span>
+              </button>
+            </span>
           ))}
-          {files.length > 0 && (
-            <div className="file-chips">
-              <span className="file-label">Changed files</span>
-              {files.map((f, i) => (
-                <span
-                  key={f}
-                  data-diffchip
-                  onMouseEnter={openPreview(f)}
-                  onMouseLeave={closePreview(f)}
-                >
-                  <button
-                    type="button"
-                    className="file-chip"
-                    style={{ animationDelay: `${i * 80}ms` }}
-                    aria-expanded={preview?.file === f}
-                    aria-label={`Calls behind ${f}`}
-                    onFocus={openPreview(f)}
-                    onBlur={closePreview(f)}
-                  >
-                    <span>{f}</span>
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
         </div>
-      </div>
+      )}
       {preview && typeof document !== "undefined" &&
         createPortal(
           <div

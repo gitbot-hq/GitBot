@@ -3602,6 +3602,12 @@ pre {
   animation: msg-in 220ms var(--ease-out);
 }
 
+/* Rows animate in only as a live turn adds them. History (no .msg-in)
+   draws them still, so swapping the finished turn in does not flash. */
+.bubble:not(.msg-in) > .act-row {
+  animation: none;
+}
+
 .bubble.assistant > .md + .act-row,
 .bubble.assistant > .run-card {
   margin-top: 18px;
@@ -3674,14 +3680,6 @@ button.act-head:hover .act-swap,
   transform: none;
 }
 
-.act-chev {
-  transition: transform var(--duration-fast) var(--ease-out);
-}
-
-.act-chev.open {
-  transform: rotate(180deg);
-}
-
 .act-name {
   flex: none;
   color: var(--text);
@@ -3720,55 +3718,23 @@ button.act-head:hover .act-swap,
   line-height: 1.6;
 }
 
-/* Turn summary line removed — receipts live in the run card now. */
-
-/* Run card: end-of-turn consolidation. Collapsed header, rows + file
-   chips behind a grid-rows disclosure. */
+/* Run footer: end of a finished turn — call count, time, changed files.
+   The calls themselves are inline rows above, where they happened. */
 .run-card {
   margin-top: 16px;
 }
 
-.run-head {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 0;
-  background: none;
-  border: 0;
+.run-foot {
+  margin: 0;
   color: var(--muted);
   font-size: var(--text-sm);
   font-weight: 550;
-  cursor: pointer;
 }
 
-.run-head:hover {
-  color: var(--text);
-}
-
-.run-body {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transition:
-    grid-template-rows 280ms var(--ease-out),
-    opacity 200ms var(--ease-out),
-    visibility 0s linear 280ms;
-  visibility: hidden;
-}
-
-.run-body.open {
-  grid-template-rows: 1fr;
-  opacity: 1;
-  visibility: visible;
-  transition:
-    grid-template-rows 280ms var(--ease-out),
-    opacity 200ms var(--ease-out),
-    visibility 0s;
-}
-
-.run-clip {
-  overflow: hidden;
-  min-height: 0;
+.run-card .file-chips {
+  margin-top: var(--space-2);
+  padding-top: 0;
+  border-top: 0;
 }
 
 .file-chips {
@@ -3779,12 +3745,6 @@ button.act-head:hover .act-swap,
   margin-top: var(--space-3);
   padding-top: var(--space-3);
   border-top: 1px solid var(--border);
-}
-
-.file-label {
-  color: var(--muted);
-  font-size: var(--text-xs);
-  font-weight: 550;
 }
 
 .file-chip {

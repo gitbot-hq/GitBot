@@ -214,6 +214,51 @@ function RichText({ text, botColor }: { text: string; botColor?: string }) {
 // One grouped activity row lives in run-summary.tsx (shared with the
 // end-of-turn card).
 
+/**
+ * A message's parts in the order they happened: prose, the tool calls that
+ * followed it, more prose. History and the live bubble both draw through
+ * this, so a turn reads the same while it runs and after it lands.
+ * Consecutive same-tool calls fold into one expandable row; `keyPrefix`
+ * keeps each bubble's open/closed rows apart in `openGroups`.
+ */
+function SegmentList({
+  segs,
+  keyPrefix,
+  openGroups,
+  onToggleGroup,
+  renderText,
+}: {
+  segs: Seg[];
+  keyPrefix: string;
+  openGroups: Record<string, boolean>;
+  onToggleGroup: (key: string) => void;
+  renderText: (text: string) => ReactNode;
+}) {
+  return (
+    <>
+      {segs.map((s, si) =>
+        s.kind === "text" ? (
+          <Fragment key={`t${si}`}>{renderText(s.text)}</Fragment>
+        ) : (
+          <Fragment key={`g${si}`}>
+            {groupTools(s.tools).map((g, gi) => {
+              const key = `${keyPrefix}${si}-${gi}`;
+              return (
+                <ActionRow
+                  key={key}
+                  group={g}
+                  open={!!openGroups[key]}
+                  onToggle={() => onToggleGroup(key)}
+                />
+              );
+            })}
+          </Fragment>
+        ),
+      )}
+    </>
+  );
+}
+
 /** Revealed + total chars across a segment list (tools don't count). */
 function liveTextLen(segs: Seg[]): number {
   return segs.reduce((n, s) => (s.kind === "text" ? n + s.text.length : n), 0);
@@ -768,6 +813,8 @@ export default function Chat({
   >({});
   // Expanded activity groups (live turn), keyed by segment + group.
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const toggleGroup = (key: string) =>
+    setOpenGroups((prev) => ({ ...prev, [key]: !prev[key] }));
   // Keyed on the view for the same reason as the stick-to-bottom hook above:
   // `thread?.id ?? "no-thread"` is "no-thread" in both the thread-less and the
   // new-thread state, so it did not change on the one swap that first creates
@@ -1291,7 +1338,10 @@ export default function Chat({
 
   // Reapply this thread's client-side overlays (tool records + receipts
   // for turns whose history carries none). Idempotent: skips messages
-  // the server already covers.
+  // the server already covers. Every agent's history now carries its tool
+  // calls in place (Codex's since its rollout loader reads them), so the
+  // tool half only fills in for a transcript that somehow has none; the
+  // receipt (time taken) is the part history never has.
   function applyOverlays(tid: string, flat: Msg[]) {
     for (const entry of overlays.current[tid] ?? []) {
       const m = flat[entry.index];
@@ -2239,11 +2289,15 @@ export default function Chat({
               key={m.id}
               className={`${m.role === "user" ? "bubble user" : "bubble assistant"}${m.id.startsWith("m") ? " msg-in" : ""}`}
             >
-              {m.segs.map((s, si) =>
-                s.kind === "text" ? (
-                  <RichText key={si} botColor={botAvatar?.color} text={setup && m.role === "assistant" ? presentSetupText(s.text) : s.text} />
-                ) : null,
-              )}
+              <SegmentList
+                segs={m.segs}
+                keyPrefix={`${m.id}:`}
+                openGroups={openGroups}
+                onToggleGroup={toggleGroup}
+                renderText={(text) => (
+                  <RichText botColor={botAvatar?.color} text={setup && m.role === "assistant" ? presentSetupText(text) : text} />
+                )}
+              />
               {m.role === "assistant" &&
                 m.segs.some((s) => s.kind === "tools" && s.tools.length > 0) && (
                   <RunSummary
@@ -2287,27 +2341,15 @@ export default function Chat({
           })}
         {live && (liveTextLen(live.segs) > 0 || streaming) && (
           <article key={live.key} className="bubble assistant msg-in">
-            {revealSegs(live.segs, live.shown).map((s, si) =>
-              s.kind === "text" ? (
-                <RichText key={`t${si}`} botColor={botAvatar?.color} text={setup ? presentSetupText(s.text) : s.text} />
-              ) : (
-                <Fragment key={`g${si}`}>
-                  {groupTools(s.tools).map((g, gi) => {
-                    const key = `l${si}-${gi}`;
-                    return (
-                      <ActionRow
-                        key={key}
-                        group={g}
-                        open={!!openGroups[key]}
-                        onToggle={() =>
-                          setOpenGroups((prev) => ({ ...prev, [key]: !prev[key] }))
-                        }
-                      />
-                    );
-                  })}
-                </Fragment>
-              ),
-            )}
+            <SegmentList
+              segs={revealSegs(live.segs, live.shown)}
+              keyPrefix="l"
+              openGroups={openGroups}
+              onToggleGroup={toggleGroup}
+              renderText={(text) => (
+                <RichText botColor={botAvatar?.color} text={setup ? presentSetupText(text) : text} />
+              )}
+            />
           </article>
         )}
         {!loading && approvalRowsOf(trailingRows)}

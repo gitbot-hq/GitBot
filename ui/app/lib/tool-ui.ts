@@ -10,8 +10,8 @@ import {
 } from "@tabler/icons-react";
 
 // Shared vocabulary for rendering tool calls: icons, verbs, grouping,
-// file extraction. Both the live timeline and the end-of-turn run card
-// speak this language, so a turn reads the same alive and archived.
+// file extraction. Live and history replies draw the same rows, so a turn
+// reads the same alive and archived; the end-of-turn footer adds the files.
 
 export type ToolChip = { name: string; input: unknown };
 
@@ -64,32 +64,29 @@ export function groupTools(
   return groups;
 }
 
-/** All calls grouped by tool, first-seen order (end-of-turn card). */
-export function groupAllTools(
-  tools: ToolChip[],
-): { name: string; items: ToolChip[] }[] {
-  const groups: { name: string; items: ToolChip[] }[] = [];
-  const at = new Map<string, number>();
-  for (const t of tools) {
-    const i = at.get(t.name);
-    if (i === undefined) {
-      at.set(t.name, groups.length);
-      groups.push({ name: t.name, items: [t] });
-    } else {
-      groups[i].items.push(t);
-    }
+/** The file an edit or write touched, or null for any other call.
+ *  Inputs arrive as the server's one-line labels — the path, or for Claude's
+ *  Write "path (N chars)" — or, from older records, as `{ path }`. */
+export function changedPath(t: ToolChip): string | null {
+  if (!/^(edit|write|multiedit)$/i.test(t.name)) return null;
+  const input = t.input;
+  let p: unknown = null;
+  if (typeof input === "string") p = input.replace(/ \([^()]* chars\)$/, "").trim();
+  else if (input && typeof input === "object") {
+    const o = input as { path?: unknown; file_path?: unknown };
+    p = o.path ?? o.file_path;
   }
-  return groups;
+  // A labeler with nothing to say falls back to the tool's own name.
+  return typeof p === "string" && p && p.toLowerCase() !== t.name.toLowerCase() ? p : null;
 }
 
-/** Files a turn changed (edits + writes with a path input), unique, in
- *  order. Reads stay rows, not chips. Diffs/counts need the backend. */
+/** Files a turn changed (edits + writes), unique, in order. Reads stay
+ *  rows, not chips. Diffs/counts need the backend. */
 export function extractChangedFiles(tools: ToolChip[]): string[] {
   const out: string[] = [];
   for (const t of tools) {
-    if (t.name !== "Edit" && t.name !== "Write") continue;
-    const p = (t.input as { path?: unknown } | null)?.path;
-    if (typeof p === "string" && p && !out.includes(p)) out.push(p);
+    const p = changedPath(t);
+    if (p && !out.includes(p)) out.push(p);
   }
   return out;
 }
