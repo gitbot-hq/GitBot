@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { sessionsStreamUrl } from "./api";
 import { pendingByJarvis } from "./approvals";
+import { JARVIS_BOT_ID } from "./gitbot";
 
 export type ThreadSessionStatus = "running" | "awaiting_permissions" | "done" | "error";
 
@@ -97,12 +98,19 @@ export function threadIndicator(
 }
 
 /** Each bot's live status across its threads' sessions: waiting beats
- *  running. A Jarvis child's session belongs to the child's bot. */
+ *  running. A Jarvis child's session belongs to the child's bot, and counts
+ *  for Jarvis too (reportTo names a Jarvis thread, and only Jarvis starts
+ *  children): Jarvis is engaged while a thread it started is. */
 export function liveByBot(sessions: SessionSummary[]): Record<string, BotLiveStatus> {
   const bots: Record<string, BotLiveStatus> = {};
+  const mark = (botId: string, status: BotLiveStatus) => {
+    if (bots[botId] !== "awaiting_permissions") bots[botId] = status;
+  };
   for (const s of sessions) {
-    if (!s.botId || !s.threadId || !live(s.status)) continue;
-    if (bots[s.botId] !== "awaiting_permissions") bots[s.botId] = s.status as BotLiveStatus;
+    if (!s.threadId || !live(s.status)) continue;
+    const status = s.status as BotLiveStatus;
+    if (s.botId) mark(s.botId, status);
+    if (s.reportTo) mark(JARVIS_BOT_ID, status);
   }
   return bots;
 }

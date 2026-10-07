@@ -145,6 +145,36 @@ test("a bot's live status: waiting beats running, idle bots and threadless sessi
   );
 });
 
+test("Jarvis is live while a thread it started is, and the child's own bot is too", () => {
+  const s = (
+    gitbotId: string,
+    botId: string | null,
+    status: SessionSummaryItem["status"],
+    reportTo: string | null = null,
+    threadId: string | null = gitbotId,
+  ) => ({ gitbotId, botId, status, threadId, reportTo });
+  // A running child lights Jarvis and its own bot.
+  assert.deepEqual(liveByBot([s("c1", "builtin-claude-code", "running", "j1")]), {
+    "builtin-claude-code": "running",
+    [JARVIS_BOT_ID]: "running",
+  });
+  // A child waiting on approval: Jarvis waits too, and waiting beats Jarvis's own running turn.
+  assert.deepEqual(
+    liveByBot([
+      s("j2", JARVIS_BOT_ID, "running"),
+      s("c2", "custom", "awaiting_permissions", "j1"),
+      s("c3", "builtin-codex", "running", "j1"),
+    ]),
+    { [JARVIS_BOT_ID]: "awaiting_permissions", custom: "awaiting_permissions", "builtin-codex": "running" },
+  );
+  // Jarvis's own turn alone; a finished child (reportTo kept from its last turn) counts for no one.
+  assert.deepEqual(liveByBot([s("j1", JARVIS_BOT_ID, "running"), s("c4", "custom", "done", "j1")]), {
+    [JARVIS_BOT_ID]: "running",
+  });
+  // Nothing live: Jarvis is absent (idle).
+  assert.deepEqual(liveByBot([s("c5", "custom", "error", "j1"), s("c6", "custom", "running", "j1", null)]), {});
+});
+
 test("a bot row's label: waiting wins, then the open chat, then another running thread", () => {
   const live = { a: "running", w: "awaiting_permissions" } as const;
   // Selected, open chat idle: another thread's status.
