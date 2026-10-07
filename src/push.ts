@@ -156,25 +156,45 @@ export interface StoredSubscription {
 /** Enough for every browser one person uses; a cap so the file cannot grow without bound. */
 export const MAX_SUBSCRIPTIONS = 50;
 
+/** Every entry in the subscriptions file as written, valid or not. Never throws. */
+function storedEntries(): unknown[] {
+  try {
+    const parsed = readJson(subscriptionsFile());
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err: any) {
+    console.error(`[push] could not read ${subscriptionsFile()}: ${err?.message ?? err}`);
+    return [];
+  }
+}
+
+const isValidEntry = (s: unknown): s is StoredSubscription => parseSubscription(s) !== null;
+
+let warnedInvalid = false;
+
 /**
- * The stored subscriptions. Any that fail today's checks (parseSubscription),
- * such as ones saved by an older gitbot that accepted any endpoint, are
- * dropped and the file saved without them: they would never be sent to, and
- * would only take up room under the cap.
+ * The stored subscriptions this gitbot accepts (parseSubscription). Read
+ * only, and never throws: it runs inside event listeners. Entries that fail
+ * the checks (saved by an older build that took any endpoint, or by a newer
+ * one that knows a push service this one doesn't) are skipped, not deleted:
+ * never sent to, not listed, not counted toward the cap, but left in the
+ * file for whichever build can use them.
  */
 export function listSubscriptions(): StoredSubscription[] {
-  const parsed = readJson(subscriptionsFile());
-  if (!Array.isArray(parsed)) return [];
-  const valid = parsed.filter((s): s is StoredSubscription => parseSubscription(s) !== null);
-  if (valid.length !== parsed.length) {
-    saveSubscriptions(valid);
-    console.warn(`[push] dropped ${parsed.length - valid.length} invalid subscription(s) from ${subscriptionsFile()}`);
+  const entries = storedEntries();
+  const valid = entries.filter(isValidEntry);
+  if (valid.length !== entries.length && !warnedInvalid) {
+    warnedInvalid = true;
+    console.warn(
+      `[push] skipping ${entries.length - valid.length} subscription(s) in ${subscriptionsFile()} that this gitbot does not accept`,
+    );
   }
   return valid;
 }
 
-function saveSubscriptions(subs: StoredSubscription[]): void {
-  writePrivate(subscriptionsFile(), subs);
+/** Saves the valid subscriptions given, keeping the file's invalid entries as they were. */
+function saveSubscriptions(valid: StoredSubscription[]): void {
+  const kept = storedEntries().filter((s) => !isValidEntry(s));
+  writePrivate(subscriptionsFile(), [...kept, ...valid]);
 }
 
 const decodedLength = (s: string) => Buffer.from(s, "base64url").length;
@@ -504,8 +524,9 @@ export function watchPush(): () => void {
   }
   vapidKeys();
   const offTurnEnd = onTurnEnd((_store, turn) => {
-    if (listSubscriptions().length === 0) return;
+    // Nothing here may throw into the emitter: the other listeners would miss the turn end.
     try {
+      if (listSubscriptions().length === 0) return;
       send(turnEndNotification(turn));
     } catch (err: any) {
       console.error(`[push] thread ${turn.threadId}: ${err?.message ?? err}`);
@@ -516,7 +537,7 @@ export function watchPush(): () => void {
   // not seen before are news. Kept up to date even with no one subscribed,
   // so a browser that subscribes later is not told about old ones.
   let pending = new Set<string>();
-  const onUpdate = (permissions: PermissionDumpItem[]) => {
+  const notifyApprovals = (permissions: PermissionDumpItem[]) => {
     const now = new Set<string>();
     const fresh: PermissionDumpItem[] = [];
     for (const item of permissions) {
@@ -532,6 +553,15 @@ export function watchPush(): () => void {
       } catch (err: any) {
         console.error(`[push] approval ${item.toolUseID}: ${err?.message ?? err}`);
       }
+    }
+  };
+  // Wrapped whole: a throw here would stop the emit before the UI's live
+  // update listener runs, and land in whichever notifyPermissionsChanged() caller fired it.
+  const onUpdate = (permissions: PermissionDumpItem[]) => {
+    try {
+      notifyApprovals(permissions);
+    } catch (err: any) {
+      console.error(`[push] approvals: ${err?.message ?? err}`);
     }
   };
   permissionsEmitter.on("update", onUpdate);

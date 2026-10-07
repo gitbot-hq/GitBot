@@ -1,8 +1,12 @@
+// First: points the data directory at a throwaway one before bot-store loads,
+// so running this file on its own (without npm test's --import) never reads
+// or writes the real ~/.gitbot or ~/.grass.
+import "./temp-data-dir";
 import { test, after, afterEach, before, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "events";
 import { createECDH, randomBytes } from "crypto";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "fs";
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { createBot, createThread, dataDir, JARVIS_BOT_ID, jarvisDir } from "../src/bot-store";
@@ -28,6 +32,7 @@ import {
 import {
   emitEvent,
   notifyPermissionsChanged,
+  permissionsEmitter,
   sessions,
   setShuttingDown,
   type IRequest,
@@ -585,27 +590,83 @@ test("a browser deleted from settings stays deleted until it turns notifications
   assert.equal(listSubscriptions().length, 1);
 });
 
-test("invalid subscriptions saved by an older gitbot are dropped on load, freeing the cap", async () => {
-  const good = Array.from({ length: MAX_SUBSCRIPTIONS - 3 }, (_, i) => browserSubscription(`ok${i}`));
+/** Entries this build does not accept: from an older build, a newer one, or a hand edit. */
+function invalidEntries() {
   const keys = browserSubscription("x").keys;
-  const bad = [
+  return [
     { endpoint: "https://evil.example/collect", keys },
     { endpoint: "https:fcm.googleapis.com/x", keys },
     { endpoint: "https:/web.push.apple.com/x", keys },
     { endpoint: "https://fcm.googleapis.com:8443/x", keys },
+    // A push service a newer gitbot might know.
+    { endpoint: "https://push.example-newer-service.com/abc", keys, createdAt: "2026-01-01T00:00:00.000Z" },
     { endpoint: "https://fcm.googleapis.com/fcm/send/badkeys", keys: { p256dh: "short", auth: keys.auth } },
     { nonsense: true },
   ];
-  const file = join(dataDir(), "push-subscriptions.json");
-  writeFileSync(file, JSON.stringify([...bad.slice(0, 3), ...good, ...bad.slice(3)]));
+}
 
+test("invalid saved subscriptions are skipped and kept: not sent to, not listed, not counted, not deleted", async () => {
+  const bad = invalidEntries();
+  const good = Array.from({ length: MAX_SUBSCRIPTIONS - 1 }, (_, i) => browserSubscription(`ok${i}`))
+    .map((s) => ({ endpoint: s.endpoint, keys: s.keys, createdAt: "2026-01-01T00:00:00.000Z" }));
+  const file = join(dataDir(), "push-subscriptions.json");
+  const written = JSON.stringify([...bad.slice(0, 3), ...good, ...bad.slice(3)]);
+  writeFileSync(file, written);
+
+  // Reading leaves the file exactly as it was.
   assert.deepEqual(listSubscriptions().map((s) => s.endpoint), good.map((s) => s.endpoint));
-  // Saved without them.
-  assert.equal(JSON.parse(readFileSync(file, "utf-8")).length, good.length);
-  // 53 were in the file, 47 valid: a new browser fits.
-  assert.equal((await request("POST", "/push/subscribe", { subscription: browserSubscription("new") })).status, 200);
-  // And nothing is sent to the bad ones.
+  assert.equal((await request("POST", "/push/subscriptions", {})).body.subscriptions.length, good.length);
+  assert.equal(readFileSync(file, "utf-8"), written);
+
+  // And nothing is sent to them.
   await request("POST", "/push/test", {});
-  assert.equal(sent.length, good.length + 1);
-  assert.ok(sent.every((s) => s.endpoint.startsWith("https://fcm.googleapis.com/fcm/send/")));
+  assert.deepEqual(sent.map((s) => s.endpoint).sort(), good.map((s) => s.endpoint).sort());
+
+  // The cap counts valid ones only: 49 + 7 invalid in the file, and one more fits...
+  const last = browserSubscription("last");
+  assert.equal((await request("POST", "/push/subscribe", { subscription: last })).status, 200);
+  // ...then it is full.
+  assert.equal((await request("POST", "/push/subscribe", { subscription: browserSubscription("over") })).status, 409);
+
+  // Writing for another reason keeps the invalid entries as they were.
+  const onDisk = () => JSON.parse(readFileSync(file, "utf-8")) as unknown[];
+  const invalidOnDisk = () => onDisk().filter((e) => !parseSubscription(e));
+  assert.deepEqual(invalidOnDisk(), bad);
+  assert.equal((await request("POST", "/push/subscriptions/delete", { id: subscriptionId(last.endpoint) })).body.removed, true);
+  assert.deepEqual(invalidOnDisk(), bad);
+  assert.equal(onDisk().length, bad.length + good.length);
+});
+
+test("an unwritable data directory doesn't make the approvals listener throw", async (t) => {
+  await subscribe("a");
+  const file = join(dataDir(), "push-subscriptions.json");
+  writeFileSync(file, JSON.stringify([...JSON.parse(readFileSync(file, "utf-8")), ...invalidEntries()]));
+  const before = readFileSync(file, "utf-8");
+
+  // A listener registered after push's, like the UI's live updates.
+  const seen: number[] = [];
+  const later = (permissions: unknown[]) => { seen.push(permissions.length); };
+  permissionsEmitter.on("update", later);
+  const thread = plainThread("Builder");
+  const started = startTurn({ threadId: thread.id, prompt: "build it" }, ALL_AGENTS);
+  assert.ok(started.ok);
+  const store = runs[runs.length - 1];
+  await tick();
+
+  const mode = statSync(dataDir()).mode & 0o777;
+  chmodSync(dataDir(), 0o555);
+  t.after(() => {
+    chmodSync(dataDir(), mode);
+    permissionsEmitter.off("update", later);
+  });
+  store.pendingPermissions.set("tu-ro", { resolve: () => {}, input: { command: "ls" }, toolName: "Bash", toolUseID: "tu-ro" });
+  assert.doesNotThrow(() => notifyPermissionsChanged());
+  await settle();
+  // The later listener got the broadcast with the approval in it.
+  assert.equal(seen.at(-1), 1);
+  assert.deepEqual(sent.map((s) => s.payload.kind), ["approval"]);
+  assert.equal(readFileSync(file, "utf-8"), before);
+
+  store.pendingPermissions.clear();
+  assert.doesNotThrow(() => notifyPermissionsChanged());
 });
