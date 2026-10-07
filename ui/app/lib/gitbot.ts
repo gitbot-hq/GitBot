@@ -87,6 +87,9 @@ export type HistoryBlock = {
   /** Set on a main-agent Agent block only (Claude Code): the sub-agent it ran.
    *  `taskId` is the live task id; `status` is absent when no end was seen. */
   subagent?: { description: string; type?: string; taskId?: string; status?: "completed" | "failed" | "stopped" };
+  /** Set on a main-agent TaskCreate/TaskGet/TaskUpdate/TaskList block whose
+   *  call succeeded (Claude Code): the call paired with its result. */
+  task?: { tool: string; input: Record<string, any>; result: Record<string, any> };
 };
 
 /**

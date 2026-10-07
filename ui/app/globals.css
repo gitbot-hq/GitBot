@@ -842,6 +842,9 @@ pre {
 .plan-item.in_progress { font-weight: 500; }
 .plan-item.completed { color: var(--faint); text-decoration: line-through; }
 .plan-item.completed .plan-mark { color: var(--ok); text-decoration: none; }
+/* Task panel rows are plan rows; the subject truncates, the note stays. */
+.task-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-note { flex: none; font-size: 11.5px; color: var(--faint); font-weight: 400; }
 
 /* --- Subagent panel --- */
 /* Same card as the plan panel (it reuses the .plan classes); only the rows
@@ -856,7 +859,7 @@ pre {
 .subagent-desc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .subagent-type, .subagent-state { flex: none; font-size: 11.5px; color: var(--faint); font-weight: 400; }
 /* A row's status for screen readers only (the mark is aria-hidden). */
-.subagent-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.subagent-sr, .task-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
 /* Queued-message tray: compact cap docked above the composer pill.
    Narrower than the pill (24px inset each side), top corners rounded.

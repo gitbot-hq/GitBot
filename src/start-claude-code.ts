@@ -170,6 +170,8 @@ export async function runAgent(store: SessionStore): Promise<void> {
     let ranAs: string | undefined;
     // A setup run says how it went in words; the marker is what the hub reads.
     let assistantText = "";
+    // Task list calls awaiting their result (see taskEvents).
+    const taskCalls = new Map<string, { tool: string; input: unknown }>();
     try {
       for await (const msg of q) {
         if (msg.type === "system" && msg.subtype === "init") {
@@ -217,6 +219,7 @@ export async function runAgent(store: SessionStore): Promise<void> {
             emitEvent(store, item.type as string, item);
           }
         }
+        for (const op of taskEvents(taskCalls, msg)) emitEvent(store, "task_op", op);
       }
     } catch (err: any) {
       if (err?.name === "AbortError" || abortController.signal.aborted) {
@@ -515,6 +518,8 @@ export async function loadTranscript(
   // resumed sub-agent notifies again.
   const agents = new Map<string, any>();
   const notices: TaskNotification[] = [];
+  // Main-agent task list calls by tool_use_id, until their result is read.
+  const taskCalls = new Map<string, { block: any; tool_name: string; input: unknown }>();
   const notified = (text: unknown) => {
     const n = parseTaskNotification(text);
     if (n) notices.push(n);
@@ -545,6 +550,13 @@ export async function loadTranscript(
           if (agent && settleSubagent(agent.subagent, entry, b) === "drop") {
             delete agent.subagent;
             agents.delete(b.tool_use_id);
+          }
+          const call = b?.type === "tool_result" ? taskCalls.get(b.tool_use_id) : undefined;
+          if (call) {
+            taskCalls.delete(b.tool_use_id);
+            const one = entry.message.content.filter((x: any) => x?.type === "tool_result").length === 1;
+            const op = taskOp(call.tool_name, call.input, one ? entry.toolUseResult : undefined, b.is_error === true);
+            if (op) call.block.task = op;
           }
         }
       }
@@ -605,6 +617,10 @@ export async function loadTranscript(
               };
               if (block.ask && b.id) asks.set(b.id, block);
               if (block.subagent && b.id) agents.set(b.id, block);
+              // A main-agent Task call gets its op (`task`) once its result is read.
+              if (TASK_TOOLS.has(b.name) && b.id && !entry.isSidechain && !entry.parent_tool_use_id) {
+                taskCalls.set(b.id, { block, tool_name: b.name, input: b.input });
+              }
               blocks.push(block);
             }
           }
@@ -794,6 +810,54 @@ function todoList(toolName: string, input: Record<string, unknown>): { todos?: T
 }
 
 type TodoItem = { content: string; status: string; activeForm: string };
+
+// --- Task list tools ---
+// TaskCreate / TaskGet / TaskUpdate / TaskList keep a list the CLI stores by
+// itself; no system event reports it. A call alone says too little (a new
+// task's id is only in the result), so each call is paired with its result —
+// the structured `tool_use_result` live, `toolUseResult` in the transcript,
+// the same object — and handed on as one op for the task panel to fold.
+// gitbot never turns these tools on; ops simply appear when an agent uses them.
+
+const TASK_TOOLS = new Set(["TaskCreate", "TaskGet", "TaskUpdate", "TaskList"]);
+
+/** A Task tool call with its result, as the task panel folds it. */
+export type TaskOp = { tool: string; input: Record<string, unknown>; result: Record<string, unknown> };
+
+/** The op, or undefined for another tool, a failed call, or no result object. */
+export function taskOp(toolName: string, input: unknown, result: unknown, isError: boolean): TaskOp | undefined {
+  if (!TASK_TOOLS.has(toolName) || isError || !result || typeof result !== "object" || Array.isArray(result)) return undefined;
+  // A description can run long and the panel never shows one.
+  const { description: _d, metadata: _m, ...kept } = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  return { tool: toolName, input: kept, result: result as Record<string, unknown> };
+}
+
+/**
+ * The live `task_op` events one SDK message makes. A main-agent Task call is
+ * remembered in `calls` until its result comes back. A sub-agent's are left
+ * out, as for the plan: its list may not be the main agent's, and the main
+ * agent's next TaskList shows the shared list either way.
+ */
+export function taskEvents(calls: Map<string, { tool: string; input: unknown }>, msg: any): Record<string, unknown>[] {
+  const content = msg?.message?.content;
+  if (msg?.parent_tool_use_id || !Array.isArray(content)) return [];
+  if (msg.type === "assistant") {
+    for (const b of content) if (b?.type === "tool_use" && b.id && TASK_TOOLS.has(b.name)) calls.set(b.id, { tool: b.name, input: b.input });
+    return [];
+  }
+  if (msg.type !== "user") return [];
+  const results = content.filter((b: any) => b?.type === "tool_result");
+  const out: Record<string, unknown>[] = [];
+  for (const b of results) {
+    const call = calls.get(b.tool_use_id);
+    if (!call) continue;
+    calls.delete(b.tool_use_id);
+    // The message's structured result belongs to its one tool_result.
+    const op = taskOp(call.tool, call.input, results.length === 1 ? msg.tool_use_result : undefined, b.is_error === true);
+    if (op) out.push({ type: "task_op", tool_use_id: b.tool_use_id, ...op });
+  }
+  return out;
+}
 
 // --- Sub-agents in the transcript ---
 // The live panel runs on task events, which the transcript never records, so

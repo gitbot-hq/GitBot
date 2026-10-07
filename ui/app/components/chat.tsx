@@ -80,6 +80,8 @@ import PlanPanel from "./plan-panel";
 import { nextPlan } from "../lib/plan";
 import SubagentPanel from "./subagent-panel";
 import { nextSubagents, seedSubagents, stopRunning, type Subagent } from "../lib/subagents";
+import TaskPanel from "./task-panel";
+import { NO_TASKS, nextTasks, seedTasks, type TaskOp } from "../lib/tasks";
 import { useDictation } from "../lib/use-dictation";
 
 // Ordered segments: text and tool calls interleave exactly as they
@@ -671,6 +673,9 @@ export default function Chat({
   // the whole thread while the page is open; cleared when a thread opens.
   const [subagents, setSubagents] = useState<Subagent[]>([]);
   const [subagentsOpen, setSubagentsOpen] = useState(false);
+  // Claude Code's Task tool list (TaskCreate and friends), when the agent uses them.
+  const [tasks, setTasks] = useState(NO_TASKS);
+  const [tasksOpen, setTasksOpen] = useState(false);
   // `answers` is kept after the fact so an answered question can still say
   // what was chosen: the transcript has the tool call, not the reply.
   const [perms, setPerms] = useState<(PermRequest & { verdict?: boolean; busy?: boolean })[]>([]);
@@ -1024,6 +1029,8 @@ export default function Chat({
     setTodos((prev) => nextPlan(prev, messages));
     // The sub-agents too, merged with any the live stream already shows.
     setSubagents((prev) => seedSubagents(prev, messages));
+    // And the task list, refolded with any live ops the transcript lacks.
+    setTasks((prev) => seedTasks(prev, messages));
   }
 
   function flattenMsgs(messages: HistoryMsg[]): Msg[] {
@@ -1112,6 +1119,8 @@ export default function Chat({
     setPlanOpen(false);
     setSubagents([]);
     setSubagentsOpen(false);
+    setTasks(NO_TASKS);
+    setTasksOpen(false);
     setContextInfo({ model: null, context: null });
     setStreaming(false);
     setOpenGroups({});
@@ -1590,6 +1599,12 @@ export default function Chat({
       if (typeof d.subtype === "string" && d.subtype.startsWith("task_")) {
         setSubagents((prev) => nextSubagents(prev, d));
       }
+    });
+    // A Task tool call with its result (Claude Code). Applied even when
+    // replayed: an op already folded is skipped by its tool_use_id.
+    es.addEventListener("task_op", (ev) => {
+      const d = data(ev);
+      if (d.tool_use_id && d.result) setTasks((prev) => nextTasks(prev, d as TaskOp));
     });
     // A question was answered (here, or in another tab): its row shows the
     // answer and its card goes. Replayed on rejoin, which is the same thing.
@@ -2354,6 +2369,7 @@ export default function Chat({
   const composerPanels = (
     <>
       <SubagentPanel subagents={subagents} open={subagentsOpen} onToggle={() => setSubagentsOpen((o) => !o)} />
+      <TaskPanel tasks={tasks.tasks} open={tasksOpen} onToggle={() => setTasksOpen((o) => !o)} />
       <PlanPanel todos={todos} open={planOpen} onToggle={() => setPlanOpen((o) => !o)} />
     </>
   );
