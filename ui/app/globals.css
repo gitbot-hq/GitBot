@@ -843,6 +843,21 @@ pre {
 .plan-item.completed { color: var(--faint); text-decoration: line-through; }
 .plan-item.completed .plan-mark { color: var(--ok); text-decoration: none; }
 
+/* --- Subagent panel --- */
+/* Same card as the plan panel (it reuses the .plan classes); only the rows
+   differ. Every ended row is struck through, and failed/stopped keep a mark
+   and a word of their own so they never read as done. */
+.subagent-running, .subagent-running .plan-mark { color: var(--accent); }
+.subagent-running { font-weight: 500; }
+.subagent-completed, .subagent-failed, .subagent-stopped { color: var(--faint); }
+.subagent-completed .subagent-desc, .subagent-failed .subagent-desc, .subagent-stopped .subagent-desc { text-decoration: line-through; }
+.subagent-completed .plan-mark { color: var(--ok); }
+.subagent-failed .plan-mark, .subagent-failed .subagent-state { color: var(--danger); }
+.subagent-desc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-type, .subagent-state { flex: none; font-size: 11.5px; color: var(--faint); font-weight: 400; }
+/* A row's status for screen readers only (the mark is aria-hidden). */
+.subagent-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
 /* Queued-message tray: compact cap docked above the composer pill.
    Narrower than the pill (24px inset each side), top corners rounded.
    A 1px gap below lets the pill's own border remain visible, creating

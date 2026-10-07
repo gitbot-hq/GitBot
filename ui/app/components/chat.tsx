@@ -78,6 +78,8 @@ import RunSummary, { ActionRow } from "./run-summary";
 import QueueTray from "./queue-tray";
 import PlanPanel from "./plan-panel";
 import { nextPlan } from "../lib/plan";
+import SubagentPanel from "./subagent-panel";
+import { nextSubagents, stopRunning, type Subagent } from "../lib/subagents";
 import { useDictation } from "../lib/use-dictation";
 
 // Ordered segments: text and tool calls interleave exactly as they
@@ -665,6 +667,10 @@ export default function Chat({
   // `planOpen` is sticky across updates and reset when a thread opens.
   const [todos, setTodos] = useState<TodoItem[] | null>(null);
   const [planOpen, setPlanOpen] = useState(false);
+  // The sub-agents this thread has run, from the live task events. Kept for
+  // the whole thread while the page is open; cleared when a thread opens.
+  const [subagents, setSubagents] = useState<Subagent[]>([]);
+  const [subagentsOpen, setSubagentsOpen] = useState(false);
   // `answers` is kept after the fact so an answered question can still say
   // what was chosen: the transcript has the tool call, not the reply.
   const [perms, setPerms] = useState<(PermRequest & { verdict?: boolean; busy?: boolean })[]>([]);
@@ -1102,6 +1108,8 @@ export default function Chat({
     setActivity(null);
     setTodos(null);
     setPlanOpen(false);
+    setSubagents([]);
+    setSubagentsOpen(false);
     setContextInfo({ model: null, context: null });
     setStreaming(false);
     setOpenGroups({});
@@ -1454,6 +1462,12 @@ export default function Chat({
     // question's answer lives on its tool row; an unanswered one reads "no
     // answer" there.
     setPerms([]);
+    // Every turn end comes through here — done, Stop, an error, a lost
+    // connection, the Stop safety net — and none of them sends a finish for a
+    // sub-agent still running. The SDK holds a turn open until its background
+    // sub-agents end, so one still running here will never hear back on this
+    // stream; a rejoin's replay still restores the real outcome.
+    setSubagents(stopRunning);
     if (turnStart.current) {
       pendingRun.current = {
         secs: Math.max(1, Math.round((Date.now() - turnStart.current) / 1000)),
@@ -1566,6 +1580,14 @@ export default function Chat({
       if (d.status === "thinking") setActivity("Thinking…");
       else if (d.status === "tool") setActivity(`Running ${d.tool_name || "tool"}…`);
       else if (d.status === "tool_summary" && d.summary) setActivity(String(d.summary));
+    });
+    // Claude Code's task events: a sub-agent starting and ending. Applied even
+    // when replayed — history does not carry them — and safe to re-apply.
+    es.addEventListener("system", (ev) => {
+      const d = data(ev);
+      if (typeof d.subtype === "string" && d.subtype.startsWith("task_")) {
+        setSubagents((prev) => nextSubagents(prev, d));
+      }
     });
     // A question was answered (here, or in another tab): its row shows the
     // answer and its card goes. Replayed on rejoin, which is the same thing.
@@ -2325,8 +2347,13 @@ export default function Chat({
 
   // Docked above the composer in every one of its states — setup, locked and
   // normal — so the current step stays in view whatever the composer is doing.
-  const planPanel = (
-    <PlanPanel todos={todos} open={planOpen} onToggle={() => setPlanOpen((o) => !o)} />
+  // Independent cards stacked above the composer; each hides until it has
+  // something to show.
+  const composerPanels = (
+    <>
+      <SubagentPanel subagents={subagents} open={subagentsOpen} onToggle={() => setSubagentsOpen((o) => !o)} />
+      <PlanPanel todos={todos} open={planOpen} onToggle={() => setPlanOpen((o) => !o)} />
+    </>
   );
 
   return (
@@ -2528,7 +2555,7 @@ export default function Chat({
       {setup && streaming ? (
         <div className="composer setup-resume-composer">
           {jumpLatest}
-          {planPanel}
+          {composerPanels}
           <div className="setup-resume-card" role="status">
             <span>
               <b>Setup in progress</b>
@@ -2548,7 +2575,7 @@ export default function Chat({
       ) : setup && !setupAwaitingInput ? (
         <div className="composer setup-resume-composer">
           {jumpLatest}
-          {planPanel}
+          {composerPanels}
           <div className="setup-resume-card" role="status">
             <span>
               <b>{setup.paused ? "Setup pending" : autoSend ? "Starting setup" : "Setup incomplete"}</b>
@@ -2575,7 +2602,7 @@ export default function Chat({
       ) : lock && !streaming ? (
         <div className="composer">
           {jumpLatest}
-          {planPanel}
+          {composerPanels}
           <div className="composer-pill composer-locked" role="status">
             <span className="composer-locked-status">
               <LoadingState label={lock.status} variant="Drive" />
@@ -2618,7 +2645,7 @@ export default function Chat({
           }}
         >
           {jumpLatest}
-          {planPanel}
+          {composerPanels}
           <QueueTray
             text={queue}
             /* Steering disabled — kept for reference. */
