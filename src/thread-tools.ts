@@ -47,16 +47,16 @@ export async function threadContext(thread: Thread): Promise<ContextUsage | null
   if (!thread.sdkSessionId) return null;
   // The meter has to size itself the way the next turn will run, which means
   // resolving the model exactly as resolveThreadTurn does: the thread's own
-  // pick, else the bot's, else the default — and Jarvis gets the default
-  // whatever is stored, because its turns clear both. The transcript names the
-  // model the last turn used, but that is the previous pick, not this one.
+  // pick, else the bot's, else the default. That holds for Jarvis too now its
+  // model is the thread's to choose; its built-in bot never pins one, so the
+  // bot layer is simply empty for it. The transcript names the model the last
+  // turn used, but that is the previous pick, not this one.
   //
   // Stored values are re-checked here as well as on the turn path: threads.json
   // is a plain file, and an unusable `model` reaching contextWindowFor used to
   // throw out of this read and make the whole thread unopenable (500).
   const bot = getBot(thread.botId);
-  const pinned = isJarvisBot(bot) ? undefined : usable(thread.model) ?? usable(bot?.model);
-  const model = pinned ?? DEFAULT_CLAUDE_MODEL;
+  const model = usable(thread.model) ?? usable(bot?.model) ?? DEFAULT_CLAUDE_MODEL;
   return loadTranscriptContext(thread.sdkSessionId, thread.repoPath, model);
 }
 

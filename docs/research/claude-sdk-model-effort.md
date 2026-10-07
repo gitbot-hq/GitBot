@@ -4,7 +4,8 @@
 again after building the picker**, which measured several things the earlier revisions guessed at)
 **Goal:** Determine exactly how model selection, context window selection (200k vs 1M), and
 reasoning/thinking effort are configured in the Claude Code Agent SDK, for the model + effort picker
-in the GitBot UI for Claude Code threads.
+in the GitBot UI for Claude Code threads — Jarvis's included (Known gaps, item 19); not Codex or
+OpenCode.
 
 **Installed:** `@anthropic-ai/claude-agent-sdk@0.3.291` at `node_modules/@anthropic-ai/claude-agent-sdk/`
 (upgraded from `0.2.42`; `package.json:52`).
@@ -613,9 +614,9 @@ source — GitBot does not call it, so its meter is only as right as that table.
 `src/turns.ts:49-53` dispatches to `runClaudeCode` / `runCodex` / `runOpencode`. Codex parses
 `store.model` as `providerID/modelID` (`src/start-codex.ts:175-180`), so a shared picker needs
 per-agent option lists. `src/server.ts:363` separately hardcodes `model: "claude-haiku-4-5"` for an
-internal utility call. **Jarvis override:** `src/turns.ts` clears `store.model` and `store.mode` for
-a Jarvis preset — Jarvis is pinned to the default model. *(It now clears `store.effort` too, and the
-UI hides the picker on Jarvis threads.)*
+internal utility call. **Jarvis override:** `src/turns.ts` cleared `store.model` and `store.mode` for
+a Jarvis preset — Jarvis was pinned to the default model. *(Superseded: Jarvis is now in the picker's
+scope and only its mode is cleared. See "Jarvis is in scope" below.)*
 
 ### Where the setting lives
 
@@ -660,7 +661,7 @@ source of truth. An org `maxEffortLevel` can still clamp the result with no erro
 Carried over from the picker build (uncommitted on `jarvis`). Struck-through items are fixed; the
 rest stand. Items 1, 2 and 4 were fixed on 2026-10-07; items 8–13 came out of a second review the
 same day (8–12 fixed, 13 deferred); items 14–18 from a third (all fixed, with one accepted
-limitation recorded under 14).
+limitation recorded under 14). Item 19 records Jarvis being brought into scope.
 
 1. ~~**The five-entry list in (c) is stale.**~~ **Fixed,** in both places. The fallback in
    `ui/app/lib/claude-models.ts` is now a transcription of the live 12-row answer (Fable is plain
@@ -819,7 +820,38 @@ Not defects — consequences of settled decisions that the decisions may not hav
     the target model's window with a 0.9 margin. `modelRow` resolved `claude-opus-5-5` to the
     `default` row (two rows share that resolution) and is now deterministic, preferring a real model
     row over the recommendation pointer. `threadContext` now applies the Jarvis exception the other
-    paths have. `MODEL_MAX_LENGTH`'s comment said 30 characters where it is 29.
+    paths have *(superseded by item 19: Jarvis has no model exception any more, so neither does the
+    meter)*. `MODEL_MAX_LENGTH`'s comment said 30 characters where it is 29.
+19. **Jarvis is in scope** (reverses the original "Claude Code threads only, not Jarvis" decision at
+    the user's request; Codex and OpenCode stay out). Jarvis gets the same two dropdowns with the same
+    semantics: per thread, persisted to `threads.json`, applied on the next turn, sent explicitly on
+    every turn including resume, no `fallbackModel`, defaults `default` / `medium`.
+    **Why it had been excluded:** a v1 scoping deferral, not a technical one. `docs/JARVIS.md` listed
+    "model switching" as later work; the code pin arrived in commit 17a2065 as one clause of a fix
+    whose subject was *permissions* — bundled onto the same line as the `mode` clear. Nothing in the
+    code depends on Jarvis's model: there is a single `query()` call for every Claude Code thread,
+    Jarvis included (`runAgent`, `start-claude-code.ts`), and Jarvis's only addition to it is
+    `jarvisQueryOptions`, typed `Pick<Options, "mcpServers">` so it cannot override `model` or
+    `effort`. Its tool server is built fresh per turn and is model-independent; resume works as for
+    any thread.
+    **What the exclusion *was* protecting, and still is:** Jarvis's folder, auto-approve and `mode`.
+    Its tools run unprompted and its prompt assumes auto-approve, so those stay fixed — the change
+    split the old clear rather than removing it. `turns.ts:139`'s refusal of a threadless `/chat`
+    against a Jarvis session also stays: Jarvis's model now comes from its thread, so that guard
+    matters more, not less.
+    **One real defect the old clear had been masking, fixed:** on a reused session, model and effort
+    were assigned only when present, so an *absent* resolution kept the previous turn's value —
+    clearing a bot's pinned model left its threads running the old one while the composer and meter
+    said "default". Jarvis was immune only because its clear was unconditional. Hub turns now assign
+    the resolved values unconditionally; threadless turns keep assign-when-present, where absent
+    genuinely means "keep". This changes behaviour for every Claude Code thread, not just Jarvis.
+    **New, and Jarvis-only:** the landing view is an unsaved Jarvis conversation with no thread to
+    save a pick to. A pick made there is held under a sentinel key, sent with the first message, and
+    saved to the thread that message creates — before the "user navigated away" check, so it is
+    never lost. It is sticky: a pick made on a new conversation that is never sent carries over to
+    the next new Jarvis conversation.
+    **Accepted cost:** Jarvis is a tool-heavy orchestrator, and a smaller model will delegate less
+    well. That is now the user's choice to make; nothing gates it.
 
 ### Known costs of the fixes above — recorded, not bugs
 

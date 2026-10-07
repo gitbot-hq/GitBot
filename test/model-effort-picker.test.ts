@@ -4,7 +4,7 @@ import { EventEmitter } from "events";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { createBot, createThread, dataDir, getThread, JARVIS_BOT_ID, jarvisDir } from "../src/bot-store";
+import { createBot, createThread, dataDir, getThread, JARVIS_BOT_ID, jarvisDir, updateBot } from "../src/bot-store";
 import {
   contextUsage,
   contextWindowFor,
@@ -385,12 +385,41 @@ test("effort and model are Claude Code's: a codex thread is left alone", async (
   assert.equal(runs[0].effort, undefined);
 });
 
-test("a Jarvis thread runs the default model at no chosen effort, whatever is stored", async () => {
+test("a Jarvis thread runs its stored pick, and keeps its fixed permissions and mode", async () => {
   const thread = createThread(JARVIS_BOT_ID, jarvisDir(), undefined, "chat", "claude-code");
   await serve("PATCH", `/threads/${thread.id}`, { model: "haiku", effort: "low" });
-  await serve("POST", "/chat", { threadId: thread.id, prompt: "jarvis, plan something" });
-  assert.equal(runs[0].model, undefined);
-  assert.equal(runs[0].effort, undefined);
+  // The request asks for plan mode and an approval step; neither may reach Jarvis.
+  await serve("POST", "/chat", { threadId: thread.id, prompt: "jarvis, plan something", permissionMode: "ask-permissions", mode: "plan" });
+  assert.equal(runs[0].model, "haiku");
+  assert.equal(runs[0].effort, "low");
+  assert.equal(runs[0].permissionMode, "yolo");
+  assert.equal(runs[0].mode, undefined);
+});
+
+test("clearing a bot's pinned model takes effect on its reused session, not just on a fresh one", async () => {
+  // The reuse branch used to assign model/effort only when present, so an
+  // absent resolution left the previous turn's value on the store: clear the
+  // bot's model and the next turn kept running the old one, while the composer
+  // and the meter both said "default". Jarvis was immune only because its
+  // turns cleared both unconditionally — which this change removed.
+  const bot = createBot({ name: "Unpinned", instructions: "work", agent: "claude-code", model: "claude-opus-4-6", permissionMode: "auto-approve" });
+  const thread = createThread(bot.id, tmpdir(), undefined, "chat", "claude-code");
+  await serve("PATCH", `/threads/${thread.id}`, { sdkSessionId: "sdk-unpin" });
+  const existing = createSession("sdk-unpin", "claude-code", tmpdir());
+  existing.sdkSessionId = "sdk-unpin";
+  existing.status = "done";
+
+  await serve("POST", "/chat", { threadId: thread.id, prompt: "on the pinned model" });
+  assert.equal(runs[0], existing);
+  assert.equal(runs[0].model, "claude-opus-4-6");
+
+  runs = [];
+  existing.status = "done";
+  updateBot(bot.id, { model: undefined });
+  await serve("POST", "/chat", { threadId: thread.id, prompt: "after the pin was cleared" });
+  assert.equal(runs[0], existing, "same reused session");
+  assert.equal(runs[0].model, undefined, "settles to the default, not the stale pin");
+  sessions.delete("sdk-unpin");
 });
 
 // --- First paint ---

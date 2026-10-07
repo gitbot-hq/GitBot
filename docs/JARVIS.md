@@ -17,7 +17,7 @@ Jarvis's job is delegation. It handles cheap things itself — git, `gh`, read-o
 
 ## Jarvis itself
 
-- Runs on **Claude Code** in v1, on gitbot's default model. Choosing its agent at onboarding, and model switching, come later.
+- Runs on **Claude Code** in v1. Its model and reasoning effort are chosen per thread from the composer, like any Claude Code thread's (default `default` / `medium`); its folder, auto-approve and mode stay fixed. Choosing its agent at onboarding comes later.
 - Always works in `~/.gitbot/jarvis/` (under `GITBOT_DATA_DIR`), never in a project folder. This is enforced: the folder is not a choice the thread offers.
 - Runs in **auto-approve**.
 - **Not editable.** Its prompt and tools are fixed. It does not appear in the bot editor and cannot be shared or published.
@@ -181,7 +181,7 @@ gitbot has no authentication and can be reached from the network. With Jarvis ho
 ## Later
 
 - Approving a child's tool calls by talking to Jarvis.
-- Choosing Jarvis's agent at onboarding (Codex needs a real MCP server; OpenCode its plugin or tool files) and its model.
+- Choosing Jarvis's agent at onboarding (Codex needs a real MCP server; OpenCode its plugin or tool files). (Its model is now chosen per thread — see above.)
 - Children reading project memory directly.
 - Handling two Jarvis threads running children in the same folder — for now allowed, and the user's to avoid.
 - Stopping or redirecting a child by message instead of the button.

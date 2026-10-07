@@ -148,11 +148,28 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
     // a client that read seq N, or reconnects with Last-Event-ID N, must
     // never mistake the next turn's events for ones it has already seen.
     store.events = [];
-    if (model) store.model = model;
-    if (effort) store.effort = effort;
+    if (threadId) {
+      // A hub thread's turn is fully resolved by resolveThreadTurn, so an
+      // absent model or effort means "the default" — not "whatever the last
+      // turn on this reused session ran". Assigning only when present (as the
+      // threadless branch below must) left a stale value in place: clear a
+      // bot's pinned model and its threads kept running the old one, while the
+      // composer and the meter both said "default". The Jarvis-only clear this
+      // replaces had been masking that for Jarvis alone.
+      store.model = model;
+      store.effort = effort;
+    } else {
+      // No thread to resolve from: an absent value here genuinely means "keep
+      // what this session already had".
+      if (model) store.model = model;
+      if (effort) store.effort = effort;
+    }
     if (mode) store.mode = mode;
     if (permissionMode) store.permissionMode = permissionMode as PermissionMode;
-    if (botPreset?.jarvis) { store.model = undefined; store.effort = undefined; store.mode = undefined; }
+    // Jarvis never plans: its mode is fixed by its thread, whatever the
+    // request said. (Its model and effort are no longer fixed — they come from
+    // the thread's pick, like any Claude Code thread's.)
+    if (botPreset?.jarvis) store.mode = undefined;
     emitEvent(store, 'user_prompt', { prompt: sent ?? '', ...(attachments?.length ? { attachments } : {}) });
   } else {
     // A thread's first turn has no SDK session id yet, so its store is keyed

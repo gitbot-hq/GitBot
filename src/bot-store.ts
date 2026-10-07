@@ -231,8 +231,9 @@ export const JARVIS_BOT_ID = "builtin-jarvis";
 
 /**
  * Jarvis, the manager bot. Its prompt and tools live in code (see jarvis.ts),
- * not in instructions; it always runs Claude Code on the default model, in
- * auto-approve, in its own folder under the data dir.
+ * not in instructions; it always runs Claude Code, in auto-approve, in its own
+ * folder under the data dir. Its model and effort are per thread, like any
+ * Claude Code thread's — this bot pins no model of its own.
  */
 function jarvisBot(): Bot {
   return {

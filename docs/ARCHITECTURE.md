@@ -74,7 +74,7 @@ All three agents get the same bot framing — the job prompt, the setup prompt a
 
 `allowedTools` is a restriction, not an auto-approve list: whether a tool needs approval is decided by the permission mode alone. It is not applied to a bot's setup run, which may need tools the job itself never uses.
 
-**Claude Code** (`claude-code`) uses `@anthropic-ai/claude-agent-sdk`'s `query()`. The default model is `claude-opus-5[1m]`; the `[1m]` suffix is what selects the 1M context window, as a bare `claude-opus-5` still gets 200k. Approvals come through the SDK's `canUseTool` callback. It loads your Claude settings, so bots can use the MCP servers you have configured; a bot's allow-list is enforced with the SDK's `tools` option plus a pre-tool hook, which is what covers MCP tools.
+**Claude Code** (`claude-code`) uses `@anthropic-ai/claude-agent-sdk`'s `query()`, called in one place (`runAgent` in `start-claude-code.ts`) for plain, bot and Jarvis threads alike — Jarvis adds only its tool server. Each thread's model and reasoning effort come from the composer's picker and are sent on every turn, resume included; the defaults are the SDK's `default` alias and `medium`. Most current models are natively 1M without a `[1m]` suffix; context windows are sized from a static table in `context-window.ts` (see `docs/research/claude-sdk-model-effort.md`). Approvals come through the SDK's `canUseTool` callback. It loads your Claude settings, so bots can use the MCP servers you have configured; a bot's allow-list is enforced with the SDK's `tools` option plus a pre-tool hook, which is what covers MCP tools.
 
 ### Questions, not approvals
 

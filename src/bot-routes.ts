@@ -275,8 +275,9 @@ export type ThreadTurn =
 /**
  * How /chat runs a turn on a hub thread: the thread supplies the folder, agent,
  * model and effort, the bot its preset, and the request may override model,
- * effort and permissions. Jarvis is fixed — its folder, the default model and
- * auto-approve, whatever the thread record or the request says.
+ * effort and permissions. Jarvis's folder, auto-approve and mode are fixed,
+ * whatever the thread record or the request says; its model and effort resolve
+ * like any Claude Code thread's.
  */
 export function resolveThreadTurn(
   thread: Thread,
@@ -314,18 +315,6 @@ export function resolveThreadTurn(
     disallowedTools: bot.disallowedTools,
     ...(isSetup ? { setup: true, setupInstructions: bot.setupInstructions } : {}),
   };
-  if (isJarvisBot(bot) && !isSetup) {
-    return {
-      ok: true,
-      repoPath: jarvisDir(),
-      agent,
-      permissionMode: "yolo",
-      preset: { ...preset, jarvis: { availableAgents, threadId: thread.id } },
-    };
-  }
-  // Bot presets speak their own vocabulary ("auto-approve", "plan"); the
-  // session speaks PermissionMode. Translate, or nothing auto-approves.
-  const botPermission = botPermissionToSession(bot.permissionMode, agent);
   // The thread's own pick comes from the composer and beats the bot's default.
   // Both are Claude Code's: Codex reads `model` as providerID/modelID and
   // OpenCode has its own names, so a Claude model string would break them.
@@ -335,7 +324,8 @@ export function resolveThreadTurn(
   // different enum) can write, and an effort outside the enum is accepted by
   // the CLI and silently ignored — so it would run at a level nothing in the
   // UI or the file agrees with. Dropping it degrades to the default instead,
-  // which is exactly what an absent value already does.
+  // which is exactly what an absent value already does. Computed before the
+  // Jarvis branch, which needs the same validated pair.
   const storedModel = isModelValue(thread.model) ? thread.model : undefined;
   const storedEffort = isEffortLevel(thread.effort) ? thread.effort : undefined;
   if (claude && thread.effort !== undefined && storedEffort === undefined) {
@@ -344,6 +334,27 @@ export function resolveThreadTurn(
   if (claude && thread.model !== undefined && storedModel === undefined) {
     console.warn(`  thread ${thread.id}: ignoring unusable stored model ${JSON.stringify(thread.model)}`);
   }
+  if (isJarvisBot(bot) && !isSetup) {
+    // Jarvis's folder, permissions and mode are fixed: its tools are built to
+    // run unprompted and its prompt assumes auto-approve, so neither the thread
+    // record nor the request may move them. Its model and effort are not part
+    // of that — they were held at the default only because v1 deferred model
+    // choice for Jarvis (docs/JARVIS.md), not because anything depends on it.
+    // They now resolve like any Claude Code thread's, minus the bot layer:
+    // Jarvis's bot is built in and never pins a model.
+    return {
+      ok: true,
+      repoPath: jarvisDir(),
+      agent,
+      model: body.model ?? storedModel,
+      effort: body.effort ?? storedEffort,
+      permissionMode: "yolo",
+      preset: { ...preset, jarvis: { availableAgents, threadId: thread.id } },
+    };
+  }
+  // Bot presets speak their own vocabulary ("auto-approve", "plan"); the
+  // session speaks PermissionMode. Translate, or nothing auto-approves.
+  const botPermission = botPermissionToSession(bot.permissionMode, agent);
   return {
     ok: true,
     repoPath: thread.repoPath,

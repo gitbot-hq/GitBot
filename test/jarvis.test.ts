@@ -187,20 +187,44 @@ function jarvisThread(): Thread {
   return createThread(JARVIS_BOT_ID, jarvisDir(), undefined, "chat", "claude-code");
 }
 
-test("resolveThreadTurn: a Jarvis thread is forced to its folder, default model and auto-approve", () => {
+test("resolveThreadTurn: a Jarvis thread is forced to its folder and auto-approve, but its model is its own", () => {
   const own = jarvisThread();
   const stale = { ...own, repoPath: tmpdir(), agent: "codex" as const };
   const turn = resolveThreadTurn(stale, getBot(JARVIS_BOT_ID)!, {
-    model: "claude-haiku-4-5", permissionMode: "ask-permissions", mode: "plan",
+    model: "claude-haiku-4-5", effort: "low", permissionMode: "ask-permissions", mode: "plan",
   }, ALL_AGENTS);
   assert.ok(turn.ok);
+  // Still fixed, whatever the thread record or the request says: Jarvis's
+  // tools run unprompted and its prompt assumes auto-approve.
   assert.equal(turn.repoPath, jarvisDir());
   assert.equal(turn.agent, "claude-code");
-  assert.equal(turn.model, undefined);
   assert.equal(turn.permissionMode, "yolo");
   assert.equal(turn.mode, undefined);
+  // No longer fixed: the request's model and effort reach Jarvis like any
+  // Claude Code thread's. Held at the default only while v1 deferred model
+  // choice for Jarvis (docs/JARVIS.md).
+  assert.equal(turn.model, "claude-haiku-4-5");
+  assert.equal(turn.effort, "low");
   // The tool server learns its caller from the preset, not from Jarvis.
   assert.deepEqual(turn.preset.jarvis, { availableAgents: ALL_AGENTS, threadId: own.id });
+});
+
+test("resolveThreadTurn: a Jarvis thread's stored pick applies, and no pick means the default", () => {
+  const own = jarvisThread();
+  const picked = resolveThreadTurn({ ...own, model: "sonnet", effort: "xhigh" }, getBot(JARVIS_BOT_ID)!, {}, ALL_AGENTS);
+  assert.ok(picked.ok);
+  assert.equal(picked.model, "sonnet");
+  assert.equal(picked.effort, "xhigh");
+  // Nothing picked: undefined here, settled to `default` / `medium` by runAgent.
+  const plain = resolveThreadTurn(own, getBot(JARVIS_BOT_ID)!, {}, ALL_AGENTS);
+  assert.ok(plain.ok);
+  assert.equal(plain.model, undefined);
+  assert.equal(plain.effort, undefined);
+  // A malformed stored value is dropped on the Jarvis branch too, not forwarded.
+  const junk = resolveThreadTurn({ ...own, model: { a: 1 } as unknown as string, effort: "turbo" as never }, getBot(JARVIS_BOT_ID)!, {}, ALL_AGENTS);
+  assert.ok(junk.ok);
+  assert.equal(junk.model, undefined);
+  assert.equal(junk.effort, undefined);
 });
 
 test("resolveThreadTurn: a plain bot thread gets no jarvis key", () => {

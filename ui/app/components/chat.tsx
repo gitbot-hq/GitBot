@@ -317,6 +317,17 @@ const threadPermissionKey = "gitbot-thread-permissions";
  */
 let liveClaudeModels: ClaudeModelInfo[] | null = null;
 
+/**
+ * Where a pick made before its thread exists is held. A new Jarvis conversation
+ * — the view the app opens on — has no thread record until its first send, so
+ * there is no id to key the pick on and nothing to save it to. It waits here,
+ * rides along on that first send, and is saved to the thread the send creates.
+ *
+ * Only Jarvis has an unsaved composer (`newThread` is passed for Jarvis alone),
+ * so this was dead code while Jarvis hid the picker; it is live now it doesn't.
+ */
+const NEW_THREAD_PICK = "\0new";
+
 /** The bot's own vocabulary ("auto-approve") → the chat's. Mirrors the server's
  *  botPermissionToSession, including its codex case: "ask" is not a thing codex
  *  can do, so those bots run in the workspace-write sandbox. */
@@ -1582,6 +1593,10 @@ export default function Chat({
           return;
         }
         tid = created.id;
+        // Before the `opened` check, not after: if the user has already moved
+        // on, the message waits in a draft, and the pick has to be waiting on
+        // the thread with it.
+        if (agent === "claude-code") adoptNewThreadPicks(tid);
         const opened = viewEpoch.current === epoch;
         newThread!.onCreated(created, opened);
         if (!opened) {
@@ -1603,9 +1618,9 @@ export default function Chat({
         tid,
         prompt,
         permissionModesRef.current[tid] ?? safePermissionMode(botPermissionMode, agent),
-        // Claude Code only: the other agents read `model` in their own
-        // vocabulary, and Jarvis is pinned to the default.
-        agent === "claude-code" && !fixedPermissions
+        // Claude Code only — Jarvis included, since it runs Claude Code. Codex
+        // reads `model` as providerID/modelID and OpenCode has its own names.
+        agent === "claude-code"
           ? { model: modelPicksRef.current[tid], effort: effortPicksRef.current[tid] }
           : undefined,
       );
@@ -1801,10 +1816,21 @@ export default function Chat({
    * into it. That is why the control stays usable mid-turn.
    */
   function pickClaude(patch: { model?: string; effort?: EffortLevel }) {
-    if (!thread) return;
-    const tid = thread.id;
+    const tid = thread?.id ?? NEW_THREAD_PICK;
     const beforeModel = modelPicksRef.current[tid];
     const beforeEffort = effortPicksRef.current[tid];
+    if (patch.model !== undefined) {
+      modelPicksRef.current = { ...modelPicksRef.current, [tid]: patch.model };
+      setModelPicks(modelPicksRef.current);
+    }
+    if (patch.effort !== undefined) {
+      effortPicksRef.current = { ...effortPicksRef.current, [tid]: patch.effort };
+      setEffortPicks(effortPicksRef.current);
+    }
+    // No thread yet: nothing to save to. The first send carries the pick and
+    // stores it on the thread it creates (adoptNewThreadPicks).
+    if (!thread) return;
+
     // Which save this is, per field. A later pick supersedes an earlier one, so
     // only the newest save for a field may roll that field back: without this,
     // an earlier PATCH failing after a later one succeeded would wipe the newer
@@ -1816,14 +1842,6 @@ export default function Chat({
     pickSeqRef.current = seq;
     const mine = { model: seq.model, effort: seq.effort };
 
-    if (patch.model !== undefined) {
-      modelPicksRef.current = { ...modelPicksRef.current, [tid]: patch.model };
-      setModelPicks(modelPicksRef.current);
-    }
-    if (patch.effort !== undefined) {
-      effortPicksRef.current = { ...effortPicksRef.current, [tid]: patch.effort };
-      setEffortPicks(effortPicksRef.current);
-    }
     patchThread(tid, patch).catch((e) => {
       // Not saved: put the control back where it was rather than show a pick
       // the next turn will not honour — but only the fields this call is still
@@ -1845,6 +1863,33 @@ export default function Chat({
       }
       setTurnError(errText(e));
     });
+  }
+
+  /**
+   * Hands a pick made before the thread existed to the thread now created, and
+   * saves it there. Called the moment the thread exists — before the send, and
+   * whether or not the user is still looking at it, so a pick is never lost to
+   * a navigation that lands mid-creation.
+   */
+  function adoptNewThreadPicks(tid: string): void {
+    const model = modelPicksRef.current[NEW_THREAD_PICK];
+    const effort = effortPicksRef.current[NEW_THREAD_PICK];
+    if (model === undefined && effort === undefined) return;
+    const models = { ...modelPicksRef.current };
+    const efforts = { ...effortPicksRef.current };
+    delete models[NEW_THREAD_PICK];
+    delete efforts[NEW_THREAD_PICK];
+    if (model !== undefined) models[tid] = model;
+    if (effort !== undefined) efforts[tid] = effort;
+    modelPicksRef.current = models;
+    effortPicksRef.current = efforts;
+    setModelPicks(models);
+    setEffortPicks(efforts);
+    // Saved as well as sent: the first send carries this turn, the save
+    // carries every one after it. A failed save does not stop the send, which
+    // still runs on the pick; it does leave later turns on the default, so say so.
+    patchThread(tid, { ...(model ? { model } : {}), ...(effort ? { effort } : {}) })
+      .catch((e) => { if (threadRef.current === tid) setTurnError(errText(e)); });
   }
 
   const visibleMsgs = setup
@@ -1894,17 +1939,21 @@ export default function Chat({
   })();
 
   // The model and effort picker is Claude Code's alone: Codex reads `model` as
-  // providerID/modelID, OpenCode has its own names, and a Jarvis thread's
-  // settings are fixed by gitbot (the same thing `fixedPermissions` says).
-  // The picker needs a stored thread to save to. The only composer that runs
-  // without one belongs to Jarvis, which hides the picker anyway.
-  const claudeControls = !!thread && agent === "claude-code" && !fixedPermissions;
+  // providerID/modelID and OpenCode has its own names.
+  //
+  // Jarvis is included: it runs Claude Code, and its model and effort are the
+  // thread's to choose. Only its permissions and mode are fixed, which is what
+  // `fixedPermissions` still governs (the permission menu, below). A new Jarvis
+  // conversation has no thread record yet, so `newThread` counts too — its pick
+  // waits under NEW_THREAD_PICK until the first send creates the thread.
+  const claudeControls = (!!thread || !!newThread) && agent === "claude-code";
+  const pickKey = thread?.id ?? NEW_THREAD_PICK;
   // The same chain the server resolves a turn with (`resolveThreadTurn`):
   // request ?? thread ?? bot ?? default. Without the bot layer the trigger
   // names "Default (recommended)" on a bot-pinned thread while the turn runs
   // the bot's model and the meter sizes from it.
-  const pickedModel = (thread && modelPicks[thread.id]) ?? thread?.model ?? botModel ?? DEFAULT_CLAUDE_MODEL;
-  const pickedEffort: EffortLevel = (thread && effortPicks[thread.id]) ?? (thread?.effort as EffortLevel | undefined) ?? DEFAULT_CLAUDE_EFFORT;
+  const pickedModel = modelPicks[pickKey] ?? thread?.model ?? botModel ?? DEFAULT_CLAUDE_MODEL;
+  const pickedEffort: EffortLevel = effortPicks[pickKey] ?? (thread?.effort as EffortLevel | undefined) ?? DEFAULT_CLAUDE_EFFORT;
   // How full the conversation is, as the context meter reads it — the meter
   // lives in the toolbar, but the state behind it (`contextInfo`) is this
   // component's and the picker needs the same number to decide what still fits.
