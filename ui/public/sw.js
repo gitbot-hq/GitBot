@@ -23,12 +23,19 @@ self.addEventListener("push", (event) => {
     data = { body: event.data ? event.data.text() : "" };
   }
   // Every push must show a notification: browsers penalise (Chrome) or
-  // cancel (Safari) subscriptions that receive pushes silently.
+  // cancel (Safari, after a few) subscriptions that receive pushes silently.
+  //
+  // Only options every browser takes, or safely ignores: Safari on iOS has
+  // no `renotify`, `requireInteraction` or `icon` (it shows the Home Screen
+  // icon), and unknown options are dropped, not errors. No `actions`: iOS
+  // shows no buttons, so a click on the notification itself does everything.
   event.waitUntil(
     self.registration.showNotification(data.title || "gitbot", {
       body: data.body || "",
+      icon: "/icons/icon-192.png",
       // One notification per thread: a newer one replaces the older.
       tag: data.tag || undefined,
+      // Chrome throws on renotify without a tag, hence the guard.
       renotify: Boolean(data.tag),
       requireInteraction: data.kind === "approval" || data.kind === "question",
       data: { url: data.url || "/", threadId: data.threadId, botId: data.botId },
@@ -45,6 +52,7 @@ function isAppPage(client) {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const data = event.notification.data || {};
+  // Relative to wherever gitbot is served (localhost, or an HTTPS proxy).
   const url = new URL(data.url || "/", self.location.origin).href;
   event.waitUntil(
     (async () => {

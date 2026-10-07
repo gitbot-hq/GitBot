@@ -25,7 +25,23 @@ export const metadata: Metadata = {
         media: "(prefers-color-scheme: dark)",
       },
     ],
+    // iOS's home-screen icon (PNG, opaque; scripts/make-icons.mjs).
+    apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
   },
+  // Lets iOS (16.4+) add GitBot to the Home Screen as an app of its own, the
+  // only place iOS allows web push. Every URL in it is relative to the
+  // origin, so it works on localhost and behind an HTTPS proxy alike.
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "GitBot",
+    // "default" lets the theme-color below tint the status bar; the app
+    // doesn't pad for the notch, which "black-translucent" would need.
+    statusBarStyle: "default",
+  },
+  // Next emits only the standard `mobile-web-app-capable`; iOS before 16.4
+  // reads the Apple name.
+  other: { "apple-mobile-web-app-capable": "yes" },
 };
 
 // Locks the page at 1x on Android, where the reported accidental pinching
@@ -41,6 +57,12 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
+  // The status bar of the installed iOS app (and an installed Chrome window)
+  // follows the OS theme; the surfaces' --bg in BRANDING.md.
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f7f7f7" },
+    { media: "(prefers-color-scheme: dark)", color: "#121211" },
+  ],
 };
 
 // Runs before paint: restores saved theme, else follows the OS.

@@ -17,6 +17,8 @@ const CONTENT_TYPES: Record<string, string> = {
   // Next's client-navigation payloads; the router accepts text/plain for exports.
   ".txt": "text/plain; charset=utf-8",
   ".map": "application/json; charset=utf-8",
+  // The web app manifest (ui/public/manifest.webmanifest), for installing on iOS.
+  ".webmanifest": "application/manifest+json; charset=utf-8",
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -26,6 +28,11 @@ const CONTENT_TYPES: Record<string, string> = {
   ".woff": "font/woff",
   ".woff2": "font/woff2",
 };
+
+/** The Content-Type a UI file is served with. */
+export function contentTypeFor(file: string): string {
+  return CONTENT_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream";
+}
 
 export function uiAvailable(): boolean {
   return UI_DIR !== undefined;
@@ -78,7 +85,7 @@ export function serveUiFile(req: http.IncomingMessage, res: http.ServerResponse,
   // cached forever; pages must revalidate or an upgrade would keep the old UI.
   const immutable = file.includes(`${sep}_next${sep}static${sep}`);
   res.writeHead(200, {
-    "Content-Type": CONTENT_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream",
+    "Content-Type": contentTypeFor(file),
     "Content-Length": statSync(file).size,
     "Cache-Control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
   });

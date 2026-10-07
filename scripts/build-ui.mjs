@@ -11,7 +11,7 @@ const outDir = join(uiDir, "out");
 const destDir = join(root, "dist", "ui");
 
 // The pages users actually reach in the exported app.
-const REQUIRED = ["index.html", "onboarding.html", "marketplace.html", "v2.html", "404.html", "sw.js", "_next"];
+const REQUIRED = ["index.html", "onboarding.html", "marketplace.html", "v2.html", "404.html", "sw.js", "manifest.webmanifest", "icons/apple-touch-icon.png", "_next"];
 // Design tools that live in ui/app for `next dev` only (mascot lab, CTA
 // states, bot maker). They are dropped from the export so the package
 // never serves them.
