@@ -702,6 +702,40 @@
   font-weight: 550;
 }
 
+/* Browser notifications for this device, under the user's profile head. */
+.v2 .profile-notify {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-top: var(--space-6);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+.v2 .profile-notify h3 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.v2 .profile-notify p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  max-width: 560px;
+}
+
+.v2 .profile-notify p + p {
+  margin-top: var(--space-2);
+}
+
+.v2 .profile-notify .profile-acts {
+  flex: none;
+  margin-top: 0;
+  justify-content: flex-end;
+}
+
 .v2 .profile-acts {
   display: flex;
   flex-wrap: wrap;

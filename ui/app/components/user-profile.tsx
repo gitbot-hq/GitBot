@@ -8,6 +8,7 @@ import { TrashIcon } from "@animateicons/react/lucide/trash-icon";
 import { useEffect, useRef, useState } from "react";
 import { IconMapPin } from "@tabler/icons-react";
 import { PanelBack } from "./panel-controls";
+import NotificationsSetting from "./notifications-setting";
 import type { UserPref } from "../lib/user-prefs";
 import { userInitials } from "../lib/user-prefs";
 
@@ -397,6 +398,7 @@ export default function UserProfile({
                 </button>
               </div>
             </div>
+            <NotificationsSetting />
           </div>
         )}
       </div>

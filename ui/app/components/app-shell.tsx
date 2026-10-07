@@ -52,6 +52,7 @@ import {
   markThreadSeen,
   postAbort,
 } from "../lib/api";
+import { onOpenThreadMessage, takeThreadFromUrl, type OpenThreadRequest } from "../lib/push";
 import { getAvatarPref, setAvatarPref, resolveAvatar, defaultMascotFor, type AvatarPref } from "../lib/avatar-prefs";
 import { JARVIS_BOT_ID, type Bot, type ThreadFull } from "../lib/gitbot";
 import { setupPrompt, type SetupRunKind } from "../lib/setup";
@@ -302,6 +303,20 @@ export default function V2() {
   }, []);
 
   useEffect(loadBots, [loadBots]);
+
+  // A notification click opens the thread it is about: in this tab when it
+  // is already open (a message from public/sw.js), else as /?thread=…&bot=….
+  const openThreadRef = useRef(openThread);
+  openThreadRef.current = openThread;
+  useEffect(() => {
+    const open = ({ threadId, botId }: OpenThreadRequest) => {
+      if (botId) openThreadRef.current(botId, threadId);
+      else getThread(threadId).then(({ thread }) => openThreadRef.current(thread.botId, threadId), () => {});
+    };
+    const fromUrl = takeThreadFromUrl();
+    if (fromUrl) open(fromUrl);
+    return onOpenThreadMessage(open);
+  }, []);
 
   /** Re-reads the installed agents. A failed read keeps what was known. */
   const refreshAgents = useCallback(() => {

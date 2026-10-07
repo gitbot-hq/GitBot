@@ -247,3 +247,32 @@ export function sessionsStreamUrl() {
 export function streamUrl(sessionId: string) {
   return `${BASE}/events?sessionId=${encodeURIComponent(sessionId)}`;
 }
+
+// --- Browser push notifications (src/push.ts) ---
+
+/** The server's VAPID public key, or enabled: false when GITBOT_PUSH=0. */
+export function getPushKey() {
+  return req<{ enabled: boolean; publicKey: string | null }>("/push/key");
+}
+
+export function pushSubscribe(subscription: PushSubscriptionJSON) {
+  return req<{ subscribed: boolean; count: number }>("/push/subscribe", {
+    method: "POST",
+    body: JSON.stringify({ subscription }),
+  });
+}
+
+export function pushUnsubscribe(endpoint: string) {
+  return req<{ removed: boolean }>("/push/unsubscribe", {
+    method: "POST",
+    body: JSON.stringify({ endpoint }),
+  });
+}
+
+/** Sends a test notification to this browser only. */
+export function pushTest(endpoint: string) {
+  return req<{ sent: number; failed: number; removed: number }>("/push/test", {
+    method: "POST",
+    body: JSON.stringify({ endpoint }),
+  });
+}
