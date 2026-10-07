@@ -34,6 +34,7 @@ import { answerChildApprovals, watchChildApprovals } from "./child-approvals";
 import { flattenAskAnswers, isAskUserQuestion, type AskAnswers } from "./ask-user-question";
 import { recoverInterruptedChildren, watchRunningMarks } from "./restart-recovery";
 import { watchThreadActivity } from "./attention";
+import { handlePushRoutes, watchPush } from "./push";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
 import { uiFileFor } from "./static-ui";
 import { EFFORT_LEVELS, isEffortLevel, isModelValue, MODEL_MAX_LENGTH } from "./claude-models";
@@ -83,6 +84,9 @@ export async function handleRequest(
 
     // Bot hub: /bots and /threads
     if (await handleBotRoutes(req, res, workspaceCwd, availableAgents)) return;
+
+    // Browser push notifications: /push/*
+    if (await handlePushRoutes(req, res)) return;
 
     // GET /sessions
     if (method === "GET" && path === "/sessions") {
@@ -623,6 +627,8 @@ export async function start(network: string = "local", portOverride?: number, ca
   watchChildApprovals();
   // A Jarvis turn ending is news on its thread until someone views it.
   watchThreadActivity();
+  // A turn ending, or an agent waiting on you, is a push to subscribed browsers (GITBOT_PUSH=0: off).
+  watchPush();
 
   const { server, caffeinatePid } = await createHttpServer({
     portOverride,

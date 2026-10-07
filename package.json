@@ -56,11 +56,13 @@
     "@opencode-ai/sdk": "^1.2.15",
     "commander": "^14.0.3",
     "qrcode-terminal": "^0.12.0",
+    "web-push": "^3.6.7",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^25.2.3",
     "@types/qrcode-terminal": "^0.12.2",
+    "@types/web-push": "^3.6.4",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
