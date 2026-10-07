@@ -5,7 +5,17 @@ import { LaptopIcon, type LaptopIconHandle } from "@animateicons/react/lucide/la
 
 const DISMISS_KEY = "gitbot-desktop-notice-dismissed";
 
-/** Below 1100px the hub is cramped, so a notice says so — once per tab.
+/** Where the dismissal is kept. A browser tab forgets it with the tab, so the
+ *  notice comes back in the next one. An installed Home Screen app has no
+ *  tabs, and iOS ends its session at every cold launch, so it remembers for good. */
+function dismissStore(): Storage {
+  const nav = navigator as Navigator & { standalone?: boolean };
+  const installed = nav.standalone === true || window.matchMedia?.("(display-mode: standalone)").matches === true;
+  return installed ? localStorage : sessionStorage;
+}
+
+/** Below 1100px the hub is cramped, so a notice says so — once per tab
+ *  (once, for the installed app).
  *  It never locks the app: a tablet or phone on the same network is a
  *  supported way in (the README's "any device"), just not a polished one. */
 export default function DesktopNotice({ children }: { children: ReactNode }) {
@@ -14,13 +24,13 @@ export default function DesktopNotice({ children }: { children: ReactNode }) {
   const iconRef = useRef<LaptopIconHandle>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
   // null until mounted: the notice must not flash for viewers who already
-  // dismissed it (sessionStorage is only readable on the client).
+  // dismissed it (web storage is only readable on the client).
   const [dismissed, setDismissed] = useState<boolean | null>(null);
 
   useEffect(() => {
     let saved = false;
     try {
-      saved = sessionStorage.getItem(DISMISS_KEY) === "1";
+      saved = dismissStore().getItem(DISMISS_KEY) === "1";
     } catch {}
     setDismissed(saved);
   }, []);
@@ -74,7 +84,7 @@ export default function DesktopNotice({ children }: { children: ReactNode }) {
 
   function dismiss() {
     try {
-      sessionStorage.setItem(DISMISS_KEY, "1");
+      dismissStore().setItem(DISMISS_KEY, "1");
     } catch {}
     setDismissed(true);
     const back = previousFocus.current;

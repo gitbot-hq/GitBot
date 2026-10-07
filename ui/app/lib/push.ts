@@ -4,10 +4,11 @@
 // (src/push.ts); this only turns them on and off for this browser.
 
 import { getPushKey, pushSubscribe, pushTest, pushUnsubscribe } from "./api";
+import { currentPushEnvironment, pushBlocker, type PushBlocker } from "./push-support";
 
 export type PushState =
-  /** This browser, or this origin, cannot do Web Push (it needs HTTPS or localhost). */
-  | "unsupported"
+  /** This browser can't subscribe here; see PushBlocker for why. */
+  | PushBlocker
   /** The gitbot server has push turned off (GITBOT_PUSH=0). */
   | "server-off"
   /** The user blocked notifications for this site in the browser. */
@@ -17,14 +18,10 @@ export type PushState =
 
 const SW_URL = "/sw.js";
 
-export function pushSupported(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    window.isSecureContext &&
-    "serviceWorker" in navigator &&
-    "PushManager" in window &&
-    "Notification" in window
-  );
+/** What stops this browser from subscribing, or null when nothing does. */
+function blocker(): PushBlocker | null {
+  if (typeof window === "undefined") return "unsupported";
+  return pushBlocker(currentPushEnvironment());
 }
 
 /** The VAPID public key as the bytes PushManager wants. */
@@ -54,7 +51,8 @@ async function currentSubscription(): Promise<PushSubscription | null> {
  * (idempotent), so a server that dropped it, or lost its file, hears of it.
  */
 export async function pushState(): Promise<PushState> {
-  if (!pushSupported()) return "unsupported";
+  const blocked = blocker();
+  if (blocked) return blocked;
   const { enabled, publicKey } = await getPushKey();
   if (!enabled || !publicKey) return "server-off";
   if (Notification.permission === "denied") return "denied";
@@ -68,10 +66,12 @@ export async function pushState(): Promise<PushState> {
 
 /**
  * Turns notifications on for this browser. Call it from a click: browsers
- * only show the permission prompt in answer to one.
+ * only show the permission prompt in answer to one, and iOS only from a tap
+ * in the installed app, with nothing awaited before the request.
  */
 export async function enablePush(): Promise<PushState> {
-  if (!pushSupported()) return "unsupported";
+  const blocked = blocker();
+  if (blocked) return blocked;
   const permission = await Notification.requestPermission();
   if (permission === "denied") return "denied";
   if (permission !== "granted") return "off";
@@ -92,7 +92,8 @@ export async function enablePush(): Promise<PushState> {
 
 /** Turns notifications off for this browser, on both ends. */
 export async function disablePush(): Promise<PushState> {
-  if (!pushSupported()) return "unsupported";
+  const blocked = blocker();
+  if (blocked) return blocked;
   const sub = await currentSubscription();
   if (sub) {
     // The server first: should the browser end fail, nothing more is sent anyway.

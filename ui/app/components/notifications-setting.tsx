@@ -4,9 +4,14 @@ import { useEffect, useState } from "react";
 import { disablePush, enablePush, pushState, testPush, type PushState } from "../lib/push";
 
 const HINTS: Record<PushState, string> = {
-  unsupported: "This browser can't get notifications from gitbot at this address. Open gitbot on http://localhost in Chrome.",
+  insecure: "Notifications need a secure address. Open gitbot over HTTPS, or on http://localhost on this computer.",
+  "needs-install":
+    "On iPhone and iPad, notifications only work from the Home Screen app. Tap Share, then Add to Home Screen, open GitBot from there, and enable them here.",
+  "ios-too-old": "Notifications need iOS 16.4 or later. Update iOS, then open GitBot from the Home Screen again.",
+  unsupported: "This browser can't get notifications from gitbot. Try Chrome, Edge, Firefox or Safari.",
   "server-off": "Turned off on this gitbot (GITBOT_PUSH=0).",
-  denied: "Blocked in your browser. Allow notifications for this site in its settings, then reload.",
+  denied:
+    "Blocked for this site. Allow notifications in the browser's site settings (on iPhone: Settings → Notifications → GitBot), then reload.",
   off: "Get a notification when a thread finishes, fails, or waits on your approval or a question.",
   on: "On for this browser: you'll hear when a thread finishes, fails, or needs you.",
 };
