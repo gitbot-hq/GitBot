@@ -63,6 +63,7 @@ import { approvalRows, type ChildApproval } from "../lib/approvals";
 import { attentionRows, hasNews, keepLaterSeen, needsYouCount, needsYouLabel } from "../lib/attention";
 import { useAttentionTitle } from "../lib/tab-title";
 import { useTabVisible } from "../lib/use-tab-visible";
+import { closeThreadNotifications, usePresence } from "../lib/presence";
 import { coalesce } from "../lib/coalesce";
 import "../v2-theme.css";
 import "../onboarding/onboarding.css";
@@ -638,6 +639,14 @@ export default function V2() {
   const [chatAtLatest, setChatAtLatest] = useState(true);
   const chatCovered = !!(mobilePanel || threadPanel || editing || showProfile || userOpen || modal || learnMore);
   const chatOnScreen = tabVisible && !chatCovered;
+  // Where the user is, for the server's push decisions: the open thread,
+  // unless something covers it (src/presence.ts; focus and idle are the hook's).
+  usePresence(chatCovered ? null : activeThread?.id ?? null);
+  // A thread on screen here: its notifications on this device are old news.
+  const onScreenThread = chatOnScreen ? activeThread?.id ?? null : null;
+  useEffect(() => {
+    if (onScreenThread) void closeThreadNotifications(onScreenThread);
+  }, [onScreenThread]);
   const viewing = chatOnScreen && chatAtLatest ? activeThread?.id ?? null : null;
   const viewingNews = viewing && activeThread && hasNews(activeThread) ? `${viewing}@${activeThread.lastActivityAt}` : null;
   // The news last marked seen, so it is sent once; cleared on failure, so

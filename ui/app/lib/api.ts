@@ -309,3 +309,19 @@ export function pushTest(endpoint: string) {
     body: JSON.stringify({ endpoint }),
   });
 }
+
+/**
+ * Where the user is, from this tab (presence.ts), so the server pushes only
+ * what they can't already see. `keepalive` for a report sent as the page is
+ * hidden or closed: it still goes out once the page is gone.
+ */
+export function postPresence(
+  report: { tab: string; thread: string | null; state: "watching" | "glancing" | "present" | "away" },
+  keepalive = false,
+) {
+  return req<{ ok: boolean }>("/push/presence", {
+    method: "POST",
+    body: JSON.stringify(report),
+    keepalive,
+  });
+}

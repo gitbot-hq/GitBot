@@ -64,6 +64,7 @@ import {
 import type { AvatarPref } from "../lib/avatar-prefs";
 import { useMascotPointerFollow } from "../lib/use-mascot-pointer-follow";
 import { useScrollEdge } from "../lib/use-scroll-edge";
+import { closeThreadNotifications } from "../lib/presence";
 import { useStickToBottom } from "../lib/use-stick-to-bottom";
 import { useStatusFavicon } from "../lib/status-favicon";
 import { groupTools, type ToolChip } from "../lib/tool-ui";
@@ -1927,6 +1928,8 @@ export default function Chat({
     mark({ busy: true });
     postPermission(sid, p.toolUseID, approved, answers)
       .then(() => {
+        // Answered here: this device's notification about it is done with.
+        if (thread?.id) void closeThreadNotifications(thread.id);
         if (!p.questions) {
           mark({ verdict: approved, busy: false });
           return;
