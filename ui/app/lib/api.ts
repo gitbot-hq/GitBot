@@ -271,8 +271,8 @@ export function pushSubscribe(subscription: PushSubscriptionJSON, refresh = fals
 export interface PushSubscriptionSummary {
   /** A hash of the endpoint. */
   id: string;
-  /** Null for an endpoint on no known push service (never sent to). */
-  service: "Google" | "Mozilla" | "Apple" | "Microsoft" | null;
+  /** The push service it subscribed through. */
+  service: "Google" | "Mozilla" | "Apple" | "Microsoft";
   /** "Chrome on macOS"; null when it subscribed before this was saved. */
   device: string | null;
   addedAt: string | null;

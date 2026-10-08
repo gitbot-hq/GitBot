@@ -191,9 +191,16 @@ export function listSubscriptions(): StoredSubscription[] {
   return valid;
 }
 
-/** Saves the valid subscriptions given, keeping the file's invalid entries as they were. */
+const endpointOf = (s: unknown): unknown => (s && typeof s === "object" ? (s as { endpoint?: unknown }).endpoint : undefined);
+
+/**
+ * Saves the valid subscriptions given, keeping the file's invalid entries as
+ * they were, except one with the same endpoint as a valid one: that browser
+ * has subscribed again, and two entries would mean two of every push.
+ */
 function saveSubscriptions(valid: StoredSubscription[]): void {
-  const kept = storedEntries().filter((s) => !isValidEntry(s));
+  const endpoints = new Set(valid.map((s) => s.endpoint));
+  const kept = storedEntries().filter((s) => !isValidEntry(s) && !endpoints.has(endpointOf(s) as string));
   writePrivate(subscriptionsFile(), [...kept, ...valid]);
 }
 
@@ -296,8 +303,8 @@ export function subscriptionId(endpoint: string): string {
 /** What the settings list shows for a subscription: no endpoint, no keys. */
 export interface SubscriptionSummary {
   id: string;
-  /** The push service, or null for an endpoint that is on none (saved before the check; never sent to). */
-  service: PushService | null;
+  /** The push service. Always set: entries on no known service are never listed. */
+  service: PushService;
   /** "Chrome on macOS", from the user agent it subscribed with; null when none was saved. */
   device: string | null;
   /** When it first subscribed; null when not known. */
@@ -333,7 +340,7 @@ export function describeUserAgent(ua: string | undefined): string | null {
 export function summarizeSubscriptions(currentEndpoint?: string): SubscriptionSummary[] {
   return listSubscriptions().map((s) => ({
     id: subscriptionId(s.endpoint),
-    service: pushServiceOf(s.endpoint),
+    service: pushServiceOf(s.endpoint)!, // listSubscriptions() returns only entries on a known service
     device: describeUserAgent(s.userAgent),
     addedAt: typeof s.createdAt === "string" && !Number.isNaN(Date.parse(s.createdAt)) ? s.createdAt : null,
     current: currentEndpoint !== undefined && s.endpoint === currentEndpoint,
@@ -372,11 +379,13 @@ export function removeSubscriptionById(id: string): boolean {
 
 /** Removes the subscriptions with these endpoints; true if any was there. */
 export function removeSubscriptions(endpoints: readonly string[]): boolean {
-  const gone = new Set(endpoints);
-  const subs = listSubscriptions();
-  const kept = subs.filter((s) => !gone.has(s.endpoint));
-  if (kept.length === subs.length) return false;
-  saveSubscriptions(kept);
+  // Invalid entries too, by exact endpoint: /push/unsubscribe is the only way
+  // to clear one from the app, since they are never listed.
+  const gone = new Set<unknown>(endpoints);
+  const entries = storedEntries();
+  const kept = entries.filter((s) => !gone.has(endpointOf(s)));
+  if (kept.length === entries.length) return false;
+  writePrivate(subscriptionsFile(), kept);
   return true;
 }
 

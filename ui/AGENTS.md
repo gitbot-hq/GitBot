@@ -24,7 +24,8 @@ and stores machine-local state in `~/.gitbot` (`bots.json`, `threads.json`).
 - `npm run lint` is broken repo-wide (no `eslint.config.*` — fails whether or not
   your change is involved). Trust `npx tsc --noEmit` instead.
 - No test runner. Small checks live in `scripts/*.test.mjs`; the ones that import
-  `.ts` need Node's type stripping: `node --experimental-strip-types --test scripts/*.test.mjs`.
+  `.ts` need Node's type stripping: `node --experimental-strip-types --test scripts/*.test.mjs`,
+  or `npm run test:ui-scripts` from the repository root (Node 22.6+; not part of `npm test`).
 - Regenerate mascot art after `Design/Mascots2/` changes:
   `node scripts/import-mascots.mjs` (writes `app/components/bot-maker/artwork.json` + `morphs.json`).
 

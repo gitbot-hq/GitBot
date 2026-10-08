@@ -71,7 +71,8 @@ before(() => {
   unwatch = watchPush();
 });
 beforeEach(() => {
-  removeSubscriptions(listSubscriptions().map((s) => s.endpoint));
+  // The whole file: invalid entries a test wrote would outlive removeSubscriptions(listSubscriptions()).
+  rmSync(join(dataDir(), "push-subscriptions.json"), { force: true });
   rmSync(join(dataDir(), "push-deleted.json"), { force: true });
   sent = [];
   failWith = {};
@@ -669,4 +670,52 @@ test("an unwritable data directory doesn't make the approvals listener throw", a
 
   store.pendingPermissions.clear();
   assert.doesNotThrow(() => notifyPermissionsChanged());
+});
+
+test("a browser subscribing again over an invalid entry for its endpoint is stored once", async () => {
+  const sub = browserSubscription("again");
+  const file = join(dataDir(), "push-subscriptions.json");
+  const other = invalidEntries()[0];
+  writeFileSync(file, JSON.stringify([{ endpoint: sub.endpoint, keys: { p256dh: "short", auth: "x" } }, other]));
+  assert.equal(listSubscriptions().length, 0);
+
+  assert.equal((await request("POST", "/push/subscribe", { subscription: sub })).status, 200);
+  const onDisk = JSON.parse(readFileSync(file, "utf-8"));
+  assert.deepEqual(onDisk.filter((e: any) => e.endpoint === sub.endpoint).map((e: any) => e.keys), [sub.keys]);
+  // Other invalid entries are kept.
+  assert.deepEqual(onDisk.filter((e: any) => e.endpoint !== sub.endpoint), [other]);
+});
+
+test("unsubscribe also clears an invalid entry by its exact endpoint, without sending to it", async () => {
+  const mine = await subscribe("mine");
+  const file = join(dataDir(), "push-subscriptions.json");
+  const bad = invalidEntries();
+  writeFileSync(file, JSON.stringify([...JSON.parse(readFileSync(file, "utf-8")), ...bad]));
+
+  const res = await request("POST", "/push/unsubscribe", { endpoint: "https:fcm.googleapis.com/x" });
+  assert.deepEqual(res.body, { removed: true });
+  const left = JSON.parse(readFileSync(file, "utf-8")).map((e: any) => e.endpoint);
+  assert.ok(!left.includes("https:fcm.googleapis.com/x"));
+  assert.equal(left.length, 1 + bad.length - 1);
+  assert.ok(left.includes(mine.endpoint));
+  // Only an exact match: a near one removes nothing.
+  assert.deepEqual((await request("POST", "/push/unsubscribe", { endpoint: "https://fcm.googleapis.com/x" })).body, { removed: false });
+  assert.equal(sent.length, 0);
+});
+
+test("a throw inside push's approvals listener reaches neither the emitter nor its caller", async (t) => {
+  await subscribe("a");
+  const seen: unknown[][] = [];
+  const later = (permissions: unknown[]) => { seen.push(permissions); };
+  permissionsEmitter.on("update", later);
+  t.after(() => { permissionsEmitter.off("update", later); });
+
+  // An item that throws the moment push reads it, before any per-item guard.
+  const poison = { get sessionId(): string { throw new Error("boom"); } };
+  const errors = t.mock.method(console, "error", () => {});
+  assert.doesNotThrow(() => permissionsEmitter.emit("update", [poison]));
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0][0], poison);
+  assert.ok(errors.mock.calls.some((c) => String(c.arguments[0]).includes("boom")));
+  assert.equal(sent.length, 0);
 });

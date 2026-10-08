@@ -24,6 +24,7 @@
     "build:ui": "node scripts/build-ui.mjs",
     "dev": "tsx src/index.ts",
     "test": "tsx --test --import ./test/temp-data-dir.ts \"test/*.test.ts\"",
+    "test:ui-scripts": "cd ui && node --experimental-strip-types --test \"scripts/*.test.mjs\"",
     "postinstall": "node scripts/postinstall.mjs || exit 0",
     "prepublishOnly": "npm run build"
   },

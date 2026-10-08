@@ -25,7 +25,7 @@ const HINTS: Record<PushState, string> = {
   on: "On for this browser: you'll hear when a thread finishes, fails, or needs you.",
 };
 
-const SERVICES: Record<NonNullable<PushSubscriptionSummary["service"]>, string> = {
+const SERVICES: Record<PushSubscriptionSummary["service"], string> = {
   Google: "Google push",
   Mozilla: "Mozilla push",
   Apple: "Apple push",
@@ -34,7 +34,7 @@ const SERVICES: Record<NonNullable<PushSubscriptionSummary["service"]>, string> 
 
 /** "Google push · Added 7 Oct 2026 · #3f9a1c2b": nothing in it is secret. */
 function details(sub: PushSubscriptionSummary): string {
-  const service = sub.service ? SERVICES[sub.service] : "Not a known push service, never sent to";
+  const service = SERVICES[sub.service] ?? "Push";
   const added = sub.addedAt
     ? `Added ${new Date(sub.addedAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`
     : "Date not recorded";
