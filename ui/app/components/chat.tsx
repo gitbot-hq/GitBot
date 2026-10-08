@@ -2450,6 +2450,7 @@ export default function Chat({
                     )}
                   </button>
                   {copyErrorId === m.id && <span className="copy-reply-error" role="status">Copy failed. Select the reply to copy it.</span>}
+                  {/* TODO: try again disabled pending strategy rethink
                   {m.retryPrompt && (
                     <button
                       type="button"
@@ -2461,6 +2462,7 @@ export default function Chat({
                       <AnimatedActionIcon icon={RefreshCwIcon} size={15} aria-hidden="true" />
                     </button>
                   )}
+                  */}
                 </span>
               )}
             </article>
