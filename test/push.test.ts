@@ -12,12 +12,16 @@ import { join } from "path";
 import { createBot, createThread, dataDir, JARVIS_BOT_ID, jarvisDir } from "../src/bot-store";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
+import { clearPresence, MAX_PRESENCE_TABS, PRESENCE_LEASE_MS, presenceClock, recordPresence, type PresenceUpdate } from "../src/presence";
+import { watchChildReports } from "../src/reports";
 import {
   DEFAULT_PUSH_SUBJECT,
   describeUserAgent,
   listSubscriptions,
   MAX_SUBSCRIPTIONS,
   pushServiceOf,
+  pushTiming,
+  shortApprovalLabel,
   subscriptionId,
   parseSubscription,
   pushSender,
@@ -49,10 +53,15 @@ const ALL_AGENTS = ["claude-code", "opencode", "codex"];
 const realRunners = { ...agentRunners };
 const realSend = pushSender.send;
 let runs: SessionStore[] = [];
-let sent: Array<{ endpoint: string; payload: PushPayload; urgency?: string; subject?: string }> = [];
+let sent: Array<{ endpoint: string; payload: PushPayload; urgency?: string; subject?: string; ttl?: number }> = [];
 /** Status codes the fake push service answers with, by endpoint. */
 let failWith: Record<string, number> = {};
 let unwatch: () => void = () => {};
+let unwatchReports: () => void = () => {};
+const realSchedule = pushTiming.schedule;
+const realNow = presenceClock.now;
+/** Held finished/failed pushes, when a test holds them instead of sending at once. */
+let heldRuns: Array<() => void> | null = null;
 
 before(() => {
   for (const agent of Object.keys(agentRunners) as SessionStore["agent"][]) {
@@ -66,8 +75,17 @@ before(() => {
       payload: JSON.parse(payload),
       urgency: options.urgency,
       subject: options.vapidDetails?.subject,
+      ttl: options.TTL,
     });
   };
+  // Held pushes go out at once unless a test collects them (heldRuns).
+  pushTiming.schedule = (fn) => {
+    if (heldRuns) heldRuns.push(fn);
+    else fn();
+    return () => {};
+  };
+  // In server.ts's order: the report watcher first, so push sees reportDelivered.
+  unwatchReports = watchChildReports(ALL_AGENTS);
   unwatch = watchPush();
 });
 beforeEach(() => {
@@ -76,6 +94,9 @@ beforeEach(() => {
   rmSync(join(dataDir(), "push-deleted.json"), { force: true });
   sent = [];
   failWith = {};
+  heldRuns = null;
+  clearPresence();
+  presenceClock.now = realNow;
 });
 afterEach(() => {
   for (const s of runs) sessions.delete(s.gitbotId);
@@ -85,7 +106,9 @@ afterEach(() => {
 });
 after(() => {
   unwatch();
+  unwatchReports();
   pushSender.send = realSend;
+  pushTiming.schedule = realSchedule;
   Object.assign(agentRunners, realRunners);
 });
 
@@ -267,12 +290,13 @@ test("a turn that finished or failed is a push to every browser; one the user st
     botId: thread.botId,
   });
   assert.equal(sent[0].urgency, "normal");
+  assert.equal(sent[0].ttl, 60 * 60);
 
   sent = [];
   await turn(thread.id, "", "error");
   assert.equal(sent.length, 2);
   assert.equal(sent[0].payload.kind, "failed");
-  assert.equal(sent[0].payload.body, "Tester hit an error");
+  assert.equal(sent[0].payload.body, "Tester failed");
 
   sent = [];
   await turn(thread.id, "half", "error", { abort: true });
@@ -291,7 +315,7 @@ test("a turn our shutdown killed is not a push", async () => {
   assert.equal(sent.length, 0);
 });
 
-test("a child's turn that reports to Jarvis is not a push of its own", async () => {
+test("a child's turn whose report reached Jarvis is not a push of its own", async () => {
   await subscribe("a");
   const folder = realpathSync(mkdtempSync(join(tmpdir(), "gitbot-push-proj-")));
   const added = addProject(folder);
@@ -324,16 +348,17 @@ test("an approval or a question is a push once, when it appears", async () => {
   assert.equal(sent.length, 1);
   assert.equal(sent[0].payload.kind, "approval");
   assert.equal(sent[0].payload.title, "Fix the flaky test");
-  assert.equal(sent[0].payload.body, "Builder needs your approval: npm ci");
+  assert.equal(sent[0].payload.body, "Builder needs approval: Bash: npm ci…");
   assert.equal(sent[0].payload.url, `/?thread=${thread.id}&bot=${thread.botId}`);
   assert.equal(sent[0].urgency, "high");
+  assert.equal(sent[0].ttl, 24 * 60 * 60);
 
   // Still waiting: the next broadcast is not news.
   notifyPermissionsChanged();
   await settle();
   assert.equal(sent.length, 1);
 
-  // A question, alongside it.
+  // A question, alongside it: one push for the thread, counting both.
   store.pendingPermissions.set("tu-2", {
     resolve: () => {},
     toolName: "AskUserQuestion",
@@ -343,8 +368,9 @@ test("an approval or a question is a push once, when it appears", async () => {
   notifyPermissionsChanged();
   await settle();
   assert.equal(sent.length, 2);
-  assert.equal(sent[1].payload.kind, "question");
-  assert.equal(sent[1].payload.body, "Builder has a question: Which branch?");
+  assert.equal(sent[1].payload.kind, "approval");
+  assert.equal(sent[1].payload.body, "Builder needs you: 2 waiting");
+  assert.equal(sent[1].payload.tag, sent[0].payload.tag);
   store.pendingPermissions.clear();
   notifyPermissionsChanged();
   await settle();
@@ -718,4 +744,302 @@ test("a throw inside push's approvals listener reaches neither the emitter nor i
   assert.equal(seen[0][0], poison);
   assert.ok(errors.mock.calls.some((c) => String(c.arguments[0]).includes("boom")));
   assert.equal(sent.length, 0);
+});
+
+// --- The listener order push relies on ---
+
+test("server.ts registers the report watcher before push, so push sees reportDelivered", () => {
+  const source = readFileSync(join(__dirname, "../src/server.ts"), "utf-8");
+  const reports = source.indexOf("watchChildReports(availableAgents)");
+  const push = source.indexOf("watchPush()");
+  assert.ok(reports > 0 && push > 0, "both are called");
+  assert.ok(reports < push, "watchChildReports is registered first");
+});
+
+/** A Jarvis thread with a child just started on it; the child's store is returned. */
+function jarvisWithChild() {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "gitbot-push-proj-")));
+  const added = addProject(folder);
+  assert.ok(added.ok);
+  const jarvis = createThread(JARVIS_BOT_ID, jarvisDir(), undefined, "chat", "claude-code");
+  const started = startChildThread(jarvis.id, { agent: "claude-code", project: added.project.id, message: "run the tests" }, ALL_AGENTS);
+  assert.ok(started.ok, JSON.stringify(started));
+  return { jarvis, child: runs[runs.length - 1] };
+}
+
+test("a child whose report never reached Jarvis is a push of its own", async (t) => {
+  t.mock.method(console, "warn", () => {});
+  await subscribe("a");
+  const { child } = jarvisWithChild();
+  await tick();
+  // Its Jarvis thread can't take the report (here: it is gone; in life, mid-turn).
+  child.reportOwner = "00000000-0000-4000-8000-000000000000";
+  emitEvent(child, "assistant", { content: "Tests pass." });
+  child.status = "done";
+  notifyPermissionsChanged();
+  await settle();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.threadId, child.threadId);
+  assert.equal(sent[0].payload.kind, "done");
+});
+
+// --- Presence: nothing about what the user can already see ---
+
+let tabCounter = 0;
+function tab(state: PresenceUpdate["state"], threadId: string | null = null, name = `tab-${++tabCounter}-xxxx`) {
+  recordPresence({ tab: name, threadId, state });
+  return name;
+}
+
+test("finished goes out only when the user is away", async () => {
+  await subscribe("a");
+  const thread = plainThread("Tester");
+  const other = plainThread("Other");
+
+  tab("watching", thread.id);
+  await turn(thread.id, "Done.");
+  assert.equal(sent.length, 0, "watching it");
+
+  clearPresence();
+  tab("glancing", thread.id);
+  await turn(thread.id, "Done.");
+  assert.equal(sent.length, 0, "glancing at it");
+
+  clearPresence();
+  tab("watching", other.id);
+  await turn(thread.id, "Done.");
+  assert.equal(sent.length, 0, "in gitbot, on another thread");
+
+  clearPresence();
+  tab("present");
+  await turn(thread.id, "Done.");
+  assert.equal(sent.length, 0, "in gitbot, on no thread");
+
+  // Glancing at another thread is not being in gitbot: away for this one.
+  clearPresence();
+  tab("glancing", other.id);
+  await turn(thread.id, "Done.");
+  assert.equal(sent.length, 1);
+
+  // A report that has lapsed is away too.
+  sent = [];
+  clearPresence();
+  const start = Date.now();
+  presenceClock.now = () => start;
+  tab("watching", thread.id);
+  presenceClock.now = () => start + PRESENCE_LEASE_MS + 1;
+  await turn(thread.id, "Done.");
+  assert.equal(sent.length, 1);
+});
+
+test("failed goes out unless the thread is watched or glanced at", async () => {
+  await subscribe("a");
+  const thread = plainThread("Tester");
+  const other = plainThread("Other");
+  tab("watching", thread.id);
+  await turn(thread.id, "", "error");
+  tab("glancing", thread.id);
+  await turn(thread.id, "", "error");
+  assert.equal(sent.length, 0);
+
+  clearPresence();
+  tab("watching", other.id);
+  await turn(thread.id, "", "error");
+  assert.equal(sent.length, 1, "in gitbot, on another thread");
+});
+
+test("finished and failed are held, and dropped if the thread is watched at the re-check", async () => {
+  await subscribe("a");
+  const thread = plainThread("Tester");
+  heldRuns = [];
+  await turn(thread.id, "Done.");
+  assert.equal(sent.length, 0, "held, not sent yet");
+  assert.equal(heldRuns.length, 1);
+  // Back on the thread before the hold ends.
+  const t = tab("watching", thread.id);
+  heldRuns.shift()!();
+  await settle();
+  assert.equal(sent.length, 0);
+
+  // Watching at the end: not even held.
+  await turn(thread.id, "", "error");
+  assert.equal(heldRuns.length, 0);
+
+  // Away at both: sent after the hold.
+  recordPresence({ tab: t, threadId: null, state: "away" });
+  await turn(thread.id, "", "error");
+  assert.equal(heldRuns.length, 1);
+  heldRuns.shift()!();
+  await settle();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.kind, "failed");
+});
+
+test("a newer push for the thread replaces a held one", async () => {
+  await subscribe("a");
+  const thread = plainThread("Builder");
+  heldRuns = [];
+  await turn(thread.id, "Done.");
+  assert.equal(heldRuns.length, 1);
+  // A next turn stops for an approval before the hold ends: that goes out now,
+  // and the held "finished" must not replace it later.
+  const next = startTurn({ threadId: thread.id, prompt: "go on" }, ALL_AGENTS);
+  assert.ok(next.ok);
+  const live = runs[runs.length - 1];
+  await tick();
+  live.pendingPermissions.set("tu-n", { resolve: () => {}, input: { command: "ls" }, toolName: "Bash", toolUseID: "tu-n" });
+  notifyPermissionsChanged();
+  await settle();
+  assert.equal(sent.length, 1);
+  heldRuns.shift()!();
+  await settle();
+  assert.deepEqual(sent.map((s) => s.payload.kind), ["approval"]);
+  live.pendingPermissions.clear();
+});
+
+test("needs-you is muted only by watching its thread, or the Jarvis thread it reports to", async () => {
+  await subscribe("a");
+  const thread = plainThread("Builder");
+  const started = startTurn({ threadId: thread.id, prompt: "build it" }, ALL_AGENTS);
+  assert.ok(started.ok);
+  const store = runs[runs.length - 1];
+  await tick();
+  const ask = (id: string) => {
+    store.pendingPermissions.set(id, { resolve: () => {}, input: { command: "ls" }, toolName: "Bash", toolUseID: id });
+    notifyPermissionsChanged();
+  };
+  const t = tab("watching", thread.id);
+  ask("tu-a");
+  await settle();
+  assert.equal(sent.length, 0, "watching");
+  recordPresence({ tab: t, threadId: thread.id, state: "glancing" });
+  ask("tu-b");
+  await settle();
+  assert.equal(sent.length, 1, "glancing still gets it");
+  store.pendingPermissions.clear();
+  notifyPermissionsChanged();
+
+  // A child's approval shows as a row in its Jarvis thread: watching that is enough.
+  clearPresence();
+  sent = [];
+  const { jarvis, child } = jarvisWithChild();
+  await tick();
+  tab("watching", jarvis.id);
+  child.pendingPermissions.set("tu-c", { resolve: () => {}, input: { command: "ls" }, toolName: "Bash", toolUseID: "tu-c" });
+  notifyPermissionsChanged();
+  await settle();
+  assert.equal(sent.length, 0);
+  clearPresence();
+  child.pendingPermissions.set("tu-d", { resolve: () => {}, input: { command: "ls" }, toolName: "Bash", toolUseID: "tu-d" });
+  notifyPermissionsChanged();
+  await settle();
+  assert.equal(sent.length, 1);
+  // Both waiting in the child are counted, the muted one included.
+  assert.match(sent[0].payload.body, / needs 2 approvals$/);
+  assert.equal(sent[0].payload.tag, `thread-${child.threadId}`);
+  child.pendingPermissions.clear();
+  notifyPermissionsChanged();
+});
+
+test("several approvals appearing at once in one thread are one push", async () => {
+  await subscribe("a");
+  const thread = plainThread("Builder");
+  const started = startTurn({ threadId: thread.id, prompt: "build it" }, ALL_AGENTS);
+  assert.ok(started.ok);
+  const store = runs[runs.length - 1];
+  await tick();
+  for (const id of ["p1", "p2", "p3"]) {
+    store.pendingPermissions.set(id, { resolve: () => {}, input: { file_path: `/x/${id}.ts` }, toolName: "Edit", toolUseID: id });
+  }
+  notifyPermissionsChanged();
+  await settle();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.body, "Builder needs 3 approvals");
+  store.pendingPermissions.clear();
+  notifyPermissionsChanged();
+});
+
+test("a failed turn's push says what went wrong, and an error result counts as failed", async () => {
+  await subscribe("a");
+  const thread = plainThread("Tester");
+  const started = startTurn({ threadId: thread.id, prompt: "go" }, ALL_AGENTS);
+  assert.ok(started.ok);
+  const store = runs[runs.length - 1];
+  await tick();
+  emitEvent(store, "assistant", { content: "Let me look." });
+  emitEvent(store, "error", { message: "Claude process exited unexpectedly\nstack…" });
+  store.status = "error";
+  notifyPermissionsChanged();
+  await settle();
+  assert.equal(sent[0].payload.body, "Tester failed: Claude process exited unexpectedly");
+
+  // Out of turns: the harness says "done", the result says otherwise.
+  sent = [];
+  const again = startTurn({ threadId: thread.id, prompt: "go on" }, ALL_AGENTS);
+  assert.ok(again.ok);
+  await tick();
+  const s2 = runs[runs.length - 1];
+  emitEvent(s2, "assistant", { content: "Still working on it" });
+  emitEvent(s2, "result", { subtype: "error_max_turns" });
+  s2.status = "done";
+  notifyPermissionsChanged();
+  await settle();
+  assert.equal(sent[0].payload.kind, "failed");
+  assert.equal(sent[0].payload.body, "Tester failed: it reached its turn limit");
+});
+
+test("approval labels name the tool and program, never a whole command", () => {
+  assert.equal(shortApprovalLabel("Bash", { command: "npm test" }), "Bash: npm test");
+  assert.equal(shortApprovalLabel("Bash", { command: "npm ci\nnpm test" }), "Bash: npm ci…");
+  assert.equal(shortApprovalLabel("Bash", { command: "GH_TOKEN=ghp_secret gh pr create --title x" }), "Bash: gh pr…");
+  assert.equal(shortApprovalLabel("Bash", { command: "curl -H 'Authorization: Bearer abc' https://x" }), "Bash: curl…");
+  assert.equal(shortApprovalLabel("Edit", { file_path: "/Users/me/secret/project/src/app.ts" }), "Edit app.ts");
+  assert.equal(shortApprovalLabel("WebFetch", { url: "https://x" }), "WebFetch");
+  const long = shortApprovalLabel("Bash", { command: `${"x".repeat(100)} y` });
+  assert.ok(long.length <= 60, long);
+  const asked = shortApprovalLabel("AskUserQuestion", { questions: [{ question: "Which branch should I use for the release that ships next week?", header: "B", options: [{ label: "a" }, { label: "b" }] }] });
+  assert.ok(asked.length <= 60 && asked.startsWith("Which branch"), asked);
+});
+
+// --- The presence route ---
+
+test("the presence route takes a tab's report, checked", async () => {
+  const ok = { tab: "abcdef0123456789", thread: "3f1c8d2e-0000-4000-8000-000000000000", state: "watching" };
+  assert.deepEqual((await request("POST", "/push/presence", ok)).body, { ok: true });
+  assert.equal((await request("POST", "/push/presence", { ...ok, state: "away" })).status, 200);
+  for (const bad of [
+    {},
+    { ...ok, tab: "short" },
+    { ...ok, tab: "x".repeat(65) },
+    { ...ok, tab: "has spaces in it" },
+    { ...ok, state: "asleep" },
+    { ...ok, thread: "../etc" },
+    { ...ok, thread: "a".repeat(129) },
+    { ...ok, thread: 42 },
+  ]) {
+    assert.equal((await request("POST", "/push/presence", bad)).status, 400, JSON.stringify(bad));
+  }
+  // Too big to be one.
+  assert.equal((await request("POST", "/push/presence", ok, { "content-length": "5000" })).status, 413);
+});
+
+test("another site can't report presence, nor dodge the preflight", async () => {
+  const ok = { tab: "abcdef0123456789", thread: null, state: "present" };
+  assert.equal((await request("POST", "/push/presence", ok, { origin: "https://evil.example" })).status, 403);
+  assert.equal((await request("POST", "/push/presence", ok, { "content-type": "text/plain" })).status, 415);
+  assert.equal((await rawPreflight("/push/presence"))["access-control-allow-origin"], undefined);
+  process.env.GITBOT_PUSH = "0";
+  assert.equal((await request("POST", "/push/presence", ok)).status, 404);
+});
+
+test("at the cap a new tab is refused, and none is pushed out; lapsed ones make room", async () => {
+  const start = Date.now();
+  presenceClock.now = () => start;
+  for (let i = 0; i < MAX_PRESENCE_TABS; i++) recordPresence({ tab: `cap-tab-${i}`, threadId: null, state: "present" });
+  const fresh = { tab: "newcomer-tab-0001", thread: null, state: "present" };
+  assert.equal((await request("POST", "/push/presence", fresh)).status, 429);
+  // A known one still renews.
+  assert.equal((await request("POST", "/push/presence", { tab: "cap-tab-0", thread: null, state: "present" })).status, 200);
+  presenceClock.now = () => start + PRESENCE_LEASE_MS + 1;
+  assert.equal((await request("POST", "/push/presence", fresh)).status, 200);
 });

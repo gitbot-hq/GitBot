@@ -1,13 +1,13 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
 import { createHash } from "crypto";
-import { join } from "path";
+import { basename, join } from "path";
 // What web-push resolves the endpoint's host with when it sends.
 import { parse as legacyParse } from "url";
 import webpush from "web-push";
-import { latestLine, turnOutcome } from "./attention";
+import { errorLine, latestLine, turnOutcome } from "./attention";
 import { dataDir, getBot, getThread } from "./bot-store";
-import { approvalLabel } from "./child-approvals";
-import { isAskUserQuestion } from "./ask-user-question";
+import { askUserQuestionLabel, isAskUserQuestion } from "./ask-user-question";
+import { decide, liveTabs, parsePresence, PresenceLimitError, presenceClock, recordPresence } from "./presence";
 import { lastAssistantMessage } from "./reports";
 import {
   isShuttingDown,
@@ -17,6 +17,7 @@ import {
   permissionsEmitter,
   readBody,
   sessions,
+  turnReportsTo,
   type EndedTurn,
   type IRequest,
   type IResponse,
@@ -24,8 +25,9 @@ import {
 } from "./server-common";
 
 // Browser push notifications (Web Push). A browser that opted in from the UI
-// gets a notification when a turn ends (done or failed) and when an agent
-// stops to wait on an approval or a question. Push services (FCM, Mozilla,
+// gets a notification when an agent stops to wait on an approval or a
+// question, and when a turn ends (done or failed), unless gitbot's open tabs
+// say the user can already see it (src/presence.ts). Push services (FCM, Mozilla,
 // Apple) only relay: the payload is encrypted to the browser's keys, and the
 // VAPID key pair below signs each request as coming from this gitbot.
 //
@@ -417,8 +419,15 @@ export interface SendResult {
   removed: number;
 }
 
-/** How long a push service holds a notification for a browser that is offline. */
-const TTL_SECONDS = 60 * 60;
+/**
+ * How long a push service holds a notification for a browser that is
+ * offline. Needs-you a day, so a phone off overnight still hears that an
+ * agent is blocked (a stale one opens a thread that shows it answered); news
+ * of a turn's end an hour.
+ */
+export function ttlSeconds(kind: PushPayload["kind"]): number {
+  return kind === "approval" || kind === "question" ? 24 * 60 * 60 : 60 * 60;
+}
 
 /** Sends one notification to every subscribed browser, dropping the ones that are gone. */
 export function sendToAll(payload: PushPayload): Promise<SendResult> {
@@ -434,7 +443,7 @@ async function sendTo(subs: StoredSubscription[], payload: PushPayload): Promise
   if (!pushEnabled() || subs.length === 0) return result;
   const { publicKey, privateKey } = vapidKeys();
   const options: webpush.RequestOptions = {
-    TTL: TTL_SECONDS,
+    TTL: ttlSeconds(payload.kind),
     urgency: payload.kind === "approval" || payload.kind === "question" ? "high" : "normal",
     vapidDetails: { subject: vapidSubject(), publicKey, privateKey },
   };
@@ -468,49 +477,140 @@ function threadUrl(threadId?: string, botId?: string): string {
 }
 
 // --- What is worth a notification ---
+//
+// Presence (src/presence.ts) decides: nothing is pushed about what the user
+// can already see. Needs-you goes out at once; finished and failed wait
+// pushTiming.holdMs and are checked again, so a quick alt-tab, or a tab whose
+// report arrives a moment late, doesn't buzz the phone. A held push lost to a
+// restart is lost: acceptable for news that is only "it's done".
+
+/** How long finished and failed are held before the second check, and how. A seam: tests run it by hand. */
+export const pushTiming = {
+  holdMs: 10_000,
+  schedule(fn: () => void, ms: number): () => void {
+    const timer = setTimeout(fn, ms);
+    timer.unref?.();
+    return () => clearTimeout(timer);
+  },
+};
+
+/** The Jarvis thread whose current turn this thread's session reports to, if any. */
+function threadOwner(threadId: string): string | null {
+  for (const store of sessions.values()) {
+    if (store.threadId === threadId) {
+      const owner = turnReportsTo(store);
+      if (owner) return owner;
+    }
+  }
+  return null;
+}
+
+/** Whether the user, where presence says they are, should hear about this now. */
+export function worthSending(payload: PushPayload, now = presenceClock.now()): boolean {
+  if (payload.kind === "test") return true;
+  return decide(payload.kind, payload.threadId, liveTabs(now), now, threadOwner);
+}
 
 /**
  * The notification for a turn that ended, or null when it is not news worth
  * interrupting for: a turn the user stopped, one our own shutdown killed, or
- * a child's turn that reports to its Jarvis (the Jarvis turn the report
- * starts is the one to hear about; telling both would say it twice).
+ * a child's turn whose report reached its Jarvis (the Jarvis turn the report
+ * starts is the one to hear about; telling both would say it twice). A child
+ * whose report was refused (its Jarvis mid-turn) is told here, or never.
+ *
+ * reportDelivered is set by the report watcher (reports.ts), a turn-end
+ * listener of its own: it must be registered before watchPush, as server.ts
+ * does, so the flag is set by the time this reads it.
  */
 export function turnEndNotification(turn: EndedTurn): PushPayload | null {
   if (isShuttingDown()) return null;
   if (!turn.threadId) return null;
-  if (turn.reportable && turn.reportOwner) return null;
+  if (turn.reportable && turn.reportOwner && turn.reportDelivered) return null;
   const outcome = turnOutcome(turn);
   if (outcome === "stopped") return null;
   const thread = getThread(turn.threadId);
   if (!thread) return null;
   const botName = getBot(thread.botId)?.name ?? "Your bot";
-  const line = latestLine(lastAssistantMessage(turn.events));
-  const head = outcome === "failed" ? `${botName} hit an error` : `${botName} finished`;
+  const failed = outcome === "failed";
+  const line = failed ? errorLine(turn) : latestLine(lastAssistantMessage(turn.events));
+  const head = failed ? `${botName} failed` : `${botName} finished`;
   return {
     title: thread.title,
     body: line ? `${head}: ${line}` : head,
     tag: `thread-${thread.id}`,
     url: threadUrl(thread.id, thread.botId),
-    kind: outcome === "failed" ? "failed" : "done",
+    kind: failed ? "failed" : "done",
     threadId: thread.id,
     botId: thread.botId,
   };
 }
 
-/** The notification for an approval or question that just appeared. */
-export function approvalNotification(item: PermissionDumpItem): PushPayload {
+const MAX_LABEL = 60;
+
+function capLabel(text: string): string {
+  const line = text.split("\n")[0].trim();
+  return line.length > MAX_LABEL ? `${line.slice(0, MAX_LABEL - 1).trimEnd()}…` : line;
+}
+
+/**
+ * What an approval is for, short enough for a lock screen and never a whole
+ * command (one can carry a token): the tool and the program it runs, with a
+ * plain subcommand ("Bash: npm test…"); the tool and a file's name, not its
+ * path; or a question's text. At most MAX_LABEL characters.
+ */
+export function shortApprovalLabel(toolName: string, input: unknown): string {
+  if (isAskUserQuestion(toolName, input)) return capLabel(askUserQuestionLabel(input));
+  const i = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const pick = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  const command = pick(i.command);
+  if (command) {
+    // Leading VAR=value words are settings, often secrets: skipped.
+    const words = command.split(/\s+/).filter(Boolean);
+    while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) words.shift();
+    const shown = words.slice(0, 1);
+    if (words[1] && /^[a-z][\w:.-]{0,19}$/i.test(words[1])) shown.push(words[1]);
+    const more = words.length > shown.length;
+    return capLabel(`${toolName}: ${shown.join(" ")}${more ? "…" : ""}`);
+  }
+  const file = pick(i.file_path) ?? pick(i.filePath) ?? pick(i.notebook_path) ?? pick(i.path);
+  return capLabel(file ? `${toolName} ${basename(file)}` : toolName);
+}
+
+/** The tag an approval's notification goes under: its thread's, else its session's. */
+function approvalTag(item: PermissionDumpItem): string {
+  const threadId = sessions.get(item.sessionId)?.threadId;
+  return threadId && getThread(threadId) ? `thread-${threadId}` : `session-${item.sessionId}`;
+}
+
+/**
+ * The one notification for everything waiting in one thread (or thread-less
+ * session): these items, all with the same approvalTag. One says what it is;
+ * several are counted.
+ */
+export function approvalNotification(items: readonly PermissionDumpItem[]): PushPayload {
+  const item = items[0];
   const store = sessions.get(item.sessionId);
   const thread = store?.threadId ? getThread(store.threadId) : undefined;
   const botId = thread?.botId ?? store?.botId;
   const botName = (botId ? getBot(botId)?.name : undefined) ?? "Your bot";
-  const question = isAskUserQuestion(item.toolName, item.input);
-  const label = approvalLabel(item.toolName, item.input);
+  const questions = items.filter((x) => isAskUserQuestion(x.toolName, x.input)).length;
+  let body: string;
+  if (items.length === 1) {
+    const label = shortApprovalLabel(item.toolName, item.input);
+    body = questions ? `${botName} asks: ${label}` : `${botName} needs approval: ${label}`;
+  } else if (questions === items.length) {
+    body = `${botName} has ${items.length} questions`;
+  } else if (questions === 0) {
+    body = `${botName} needs ${items.length} approvals`;
+  } else {
+    body = `${botName} needs you: ${items.length} waiting`;
+  }
   return {
     title: thread?.title ?? item.repoName,
-    body: question ? `${botName} has a question: ${label}` : `${botName} needs your approval: ${label}`,
-    tag: thread ? `thread-${thread.id}` : `session-${item.sessionId}`,
+    body,
+    tag: approvalTag(item),
     url: threadUrl(thread?.id, botId),
-    kind: question ? "question" : "approval",
+    kind: questions === items.length ? "question" : "approval",
     threadId: thread?.id,
     botId,
   };
@@ -523,8 +623,9 @@ function send(payload: PushPayload | null): void {
 
 /**
  * Sends a notification on each turn end worth one, and on each approval or
- * question that appears, whichever agent asked. Call once at start. With
- * push off it does nothing (and makes no keys).
+ * question that appears, whichever agent asked. Call once at start, after
+ * watchChildReports (see turnEndNotification). With push off it does nothing
+ * (and makes no keys).
  */
 export function watchPush(): () => void {
   if (!pushEnabled()) {
@@ -532,11 +633,36 @@ export function watchPush(): () => void {
     return () => {};
   }
   vapidKeys();
+
+  // Held finished/failed pushes, by tag. Anything newer for the thread replaces one.
+  const held = new Map<string, { cancel: () => void }>();
+  const cancelHeld = (tag: string) => {
+    held.get(tag)?.cancel();
+    held.delete(tag);
+  };
+  const hold = (payload: PushPayload) => {
+    cancelHeld(payload.tag);
+    // Checked now and again after the hold: watched at either moment, it's not sent.
+    if (!worthSending(payload)) return;
+    const entry = { cancel: () => {} };
+    held.set(payload.tag, entry);
+    entry.cancel = pushTiming.schedule(() => {
+      if (held.get(payload.tag) !== entry) return;
+      held.delete(payload.tag);
+      try {
+        if (!isShuttingDown() && worthSending(payload)) send(payload);
+      } catch (err: any) {
+        console.error(`[push] thread ${payload.threadId}: ${err?.message ?? err}`);
+      }
+    }, pushTiming.holdMs);
+  };
+
   const offTurnEnd = onTurnEnd((_store, turn) => {
     // Nothing here may throw into the emitter: the other listeners would miss the turn end.
     try {
       if (listSubscriptions().length === 0) return;
-      send(turnEndNotification(turn));
+      const payload = turnEndNotification(turn);
+      if (payload) hold(payload);
     } catch (err: any) {
       console.error(`[push] thread ${turn.threadId}: ${err?.message ?? err}`);
     }
@@ -548,19 +674,32 @@ export function watchPush(): () => void {
   let pending = new Set<string>();
   const notifyApprovals = (permissions: PermissionDumpItem[]) => {
     const now = new Set<string>();
-    const fresh: PermissionDumpItem[] = [];
+    const freshTags = new Set<string>();
+    const byTag = new Map<string, PermissionDumpItem[]>();
     for (const item of permissions) {
       const key = `${item.sessionId}:${item.toolUseID}`;
       now.add(key);
-      if (!pending.has(key)) fresh.push(item);
-    }
-    pending = now;
-    if (fresh.length === 0 || isShuttingDown() || listSubscriptions().length === 0) return;
-    for (const item of fresh) {
+      let tag: string;
       try {
-        send(approvalNotification(item));
+        tag = approvalTag(item);
       } catch (err: any) {
         console.error(`[push] approval ${item.toolUseID}: ${err?.message ?? err}`);
+        continue;
+      }
+      byTag.set(tag, [...(byTag.get(tag) ?? []), item]);
+      if (!pending.has(key)) freshTags.add(tag);
+    }
+    pending = now;
+    if (freshTags.size === 0 || isShuttingDown() || listSubscriptions().length === 0) return;
+    // One push per thread with something new, counting all it has waiting.
+    for (const tag of freshTags) {
+      try {
+        const payload = approvalNotification(byTag.get(tag)!);
+        if (!worthSending(payload)) continue;
+        cancelHeld(tag);
+        send(payload);
+      } catch (err: any) {
+        console.error(`[push] approvals ${tag}: ${err?.message ?? err}`);
       }
     }
   };
@@ -577,6 +716,8 @@ export function watchPush(): () => void {
   return () => {
     offTurnEnd();
     permissionsEmitter.off("update", onUpdate);
+    for (const entry of held.values()) entry.cancel();
+    held.clear();
   };
 }
 
@@ -620,7 +761,10 @@ function jsonContentType(req: IRequest): boolean {
   return (header(req, "content-type") ?? "").split(";")[0].trim().toLowerCase() === "application/json";
 }
 
-const POST_ROUTES = ["/push/subscribe", "/push/unsubscribe", "/push/test", "/push/subscriptions", "/push/subscriptions/delete"];
+const POST_ROUTES = ["/push/subscribe", "/push/unsubscribe", "/push/test", "/push/subscriptions", "/push/subscriptions/delete", "/push/presence"];
+
+/** A presence report is a few short fields; anything bigger is not one. */
+export const MAX_PRESENCE_BODY = 1024;
 
 export async function handlePushRoutes(req: IRequest, res: IResponse): Promise<boolean> {
   const method = req.method ?? "GET";
@@ -652,7 +796,31 @@ export async function handlePushRoutes(req: IRequest, res: IResponse): Promise<b
     jsonError(res, 404, "Push notifications are off on this gitbot (GITBOT_PUSH=0)");
     return true;
   }
+  if (path === "/push/presence" && Number(header(req, "content-length") ?? 0) > MAX_PRESENCE_BODY) {
+    jsonError(res, 413, "Presence report too large");
+    return true;
+  }
   const body = await readBody(req);
+
+  // A tab saying where the user is (src/presence.ts). Under /push/ for the
+  // checks above: only gitbot's own page, JSON only, no CORS preflight
+  // answered, so another site can't mute the user's notifications.
+  if (path === "/push/presence") {
+    const update = parsePresence(body);
+    if (!update) {
+      jsonError(res, 400, "Not a presence report");
+      return true;
+    }
+    try {
+      recordPresence(update);
+    } catch (err) {
+      if (!(err instanceof PresenceLimitError)) throw err;
+      jsonError(res, 429, err.message);
+      return true;
+    }
+    jsonOk(res, { ok: true });
+    return true;
+  }
 
   if (path === "/push/subscribe") {
     const sub = parseSubscription(body?.subscription ?? body);

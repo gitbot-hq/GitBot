@@ -634,6 +634,9 @@ export async function start(network: string = "local", portOverride?: number, ca
   // A Jarvis turn ending is news on its thread until someone views it.
   watchThreadActivity();
   // A turn ending, or an agent waiting on you, is a push to subscribed browsers (GITBOT_PUSH=0: off).
+  // After watchChildReports: push reads the reportDelivered flag it sets on
+  // the same turn, to stay quiet about a child whose report Jarvis has
+  // (test/push.test.ts pins this order).
   watchPush();
 
   const { server, caffeinatePid } = await createHttpServer({
