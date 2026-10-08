@@ -3,7 +3,7 @@
 import AnimatedActionIcon from "./animated-action-icon";
 import { ChevronDownIcon } from "@animateicons/react/lucide/chevron-down-icon";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { createPortal } from "react-dom";
 import { IconBolt, IconHelpCircle } from "@tabler/icons-react";
 import { askDetail, askStatus, askSummary } from "../lib/ask-ui";
@@ -11,7 +11,10 @@ import type { AskRecord } from "../lib/gitbot";
 import {
   changedPath,
   extractChangedFiles,
+  hasToolDetail,
+  pluralNoun,
   TOOL_ICONS,
+  toolDetail,
   toolSummary,
   type ToolChip,
 } from "../lib/tool-ui";
@@ -34,7 +37,7 @@ function AskRow({
   return (
     <div className="act-row act-ask" data-ask-status={status}>
       <button type="button" className="act-head" onClick={onToggle} aria-expanded={open}>
-        <span className="act-icon" aria-hidden="true">
+        <span className={open ? "act-icon open" : "act-icon"} aria-hidden="true">
           <span className="act-glyph">
             <IconHelpCircle size={13} stroke={2} aria-hidden="true" />
           </span>
@@ -63,7 +66,8 @@ function AskRow({
 
 // One activity row: 28px, tool icon that swaps to a chevron on hover
 // (or while open), medium label, and the key detail in an inline mono
-// chip. Detail expands below on a left rail.
+// chip, one line, cut with an ellipsis. Clicking the row opens the whole
+// input below on a left rail, wrapped; clicking it again folds it back.
 export function ActionRow({
   group,
   open,
@@ -79,18 +83,29 @@ export function ActionRow({
   /** A question row whose answer card is up right now. */
   waiting?: boolean;
 }) {
+  const detailId = useId();
   const ask = group.items[0].ask;
   if (ask) return <AskRow ask={ask} waiting={!!waiting} open={open} onToggle={onToggle} />;
   const Icon = TOOL_ICONS[group.name] ?? IconBolt;
   const multi = group.items.length > 1;
-  const chip = toolSummary(group.items[0].input);
+  // Nothing to open when no call carries an input. Checked cheaply: the
+  // full text is only formatted for a row that is showing it.
+  const hasDetail = group.items.some((t) => hasToolDetail(t.input));
+  const expandable = !archived && hasDetail;
+  const shown = open || !!archived;
+  const details = shown && hasDetail ? group.items.map((t) => toolDetail(t.input)) : null;
+  // Open, the full text below replaces the cut one: a single call drops its
+  // chip, a group says how many calls it holds.
+  const chip = shown && expandable
+    ? multi ? pluralNoun(group.name, group.items.length) : ""
+    : toolSummary(group.items[0].input);
   const head = (
     <>
-      <span className="act-icon" aria-hidden="true">
+      <span className={open && expandable ? "act-icon open" : "act-icon"} aria-hidden="true">
         <span className="act-glyph">
           <Icon size={13} stroke={2} aria-hidden="true" />
         </span>
-        {!archived && (
+        {expandable && (
           <AnimatedActionIcon icon={ChevronDownIcon}
             size={12}
             aria-hidden="true"
@@ -99,30 +114,29 @@ export function ActionRow({
         )}
       </span>
       <span className="act-name">{group.name}</span>
-      {chip ? <span className="act-chip">{chip}</span> : null}
+      {chip ? (
+        <span className={shown && expandable ? "act-count" : "act-chip"}>{chip}</span>
+      ) : null}
     </>
   );
   return (
     <div className="act-row">
-      {multi && !archived ? (
+      {expandable ? (
         <button
           type="button"
           className="act-head"
           onClick={onToggle}
           aria-expanded={open}
+          aria-controls={open ? detailId : undefined}
         >
           {head}
         </button>
       ) : (
         <div className="act-head static">{head}</div>
       )}
-      {(open || archived || !multi) && group.items.length > 1 && (
-        <div className="act-items">
-          {group.items.map((t, i) => (
-            <span key={i} className="act-item" title={toolSummary(t.input)}>
-              {toolSummary(t.input)}
-            </span>
-          ))}
+      {details && (
+        <div className="act-items" id={detailId}>
+          {details.map((d, i) => (d ? <pre key={i} className="act-item">{d}</pre> : null))}
         </div>
       )}
     </div>

@@ -30,6 +30,30 @@ export function toolSummary(input: unknown) {
   return s.slice(0, 200);
 }
 
+/** The whole tool input, for a row opened to read it: the server's label
+ *  uncapped, and JSON (raw or a label that is JSON) pretty-printed. */
+export function toolDetail(input: unknown): string {
+  if (typeof input === "string") {
+    const t = input.trim();
+    if (/^[[{]/.test(t)) {
+      try {
+        return JSON.stringify(JSON.parse(t), null, 2);
+      } catch {
+        // Not JSON after all: show it as sent.
+      }
+    }
+    return input;
+  }
+  if (input == null) return "";
+  return JSON.stringify(input, null, 2) ?? String(input);
+}
+
+/** Whether toolDetail(input) would be non-empty, without formatting it:
+ *  only a missing input or an empty string has nothing to show. */
+export function hasToolDetail(input: unknown): boolean {
+  return input != null && input !== "";
+}
+
 // One icon per tool. Unknown tools get the bolt.
 export const TOOL_ICONS: Record<string, typeof IconBolt> = {
   Bash: IconTerminal2,

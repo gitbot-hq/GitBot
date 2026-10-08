@@ -1158,7 +1158,7 @@ export default function V2() {
             <span className="presence" aria-hidden="true" />
           </span>
           <span className="bot-row-text">
-            <b>{b.name}</b>
+            <b title={b.name}>{b.name}</b>
             <small className={attentionLabel ? "needs-you" : undefined}>
               <i aria-hidden="true" />
               {attentionLabel
@@ -1625,7 +1625,7 @@ export default function V2() {
                           >
                             <ThreadStatus state={indicator} />
                             <span className="thread-row-copy">
-                              <span className="thread-row-title">{t.title}</span>
+                              <span className="thread-row-title" title={t.title}>{t.title}</span>
                               {isJarvis && preview && <span className="thread-row-preview">{preview}</span>}
                             </span>
                             {t.id === activeThread?.id && <AnimatedActionIcon icon={CheckIcon} className="thread-selected-mark" size={16} aria-hidden="true" />}

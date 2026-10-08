@@ -291,11 +291,15 @@ pre {
   overflow: hidden;
 }
 
+/* Vertical only. With overflow-y: auto, a visible overflow-x computes to
+   auto too, so anything poking past a row's edge (even an invisible
+   tooltip pseudo-element) would give the sidebar a sideways scrollbar. */
 .side-scroll-content,
 .side-scroll-region > .threads-list {
   width: 100%;
   height: 100%;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
 }
@@ -3603,6 +3607,8 @@ pre {
    medium label, key detail in an inline mono chip. Breathing room
    around prose handled below. */
 .act-row {
+  min-width: 0;
+  max-width: 100%;
   margin: 2px 0;
   animation: msg-in 220ms var(--ease-out);
 }
@@ -3623,10 +3629,16 @@ pre {
   margin-top: 12px;
 }
 
+/* A <button> sizes to its content, not its container, so the head is
+   given the row's width (plus the 6px bleed each side) outright: without it
+   a long chip widens the button and the chat scrolls sideways. */
 .act-head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  box-sizing: border-box;
+  width: calc(100% + 12px);
+  min-width: 0;
   min-height: 28px;
   margin-inline: -6px;
   padding-inline: 6px;
@@ -3679,7 +3691,11 @@ button.act-head:hover .act-glyph,
   opacity: 0;
 }
 
-button.act-head:hover .act-swap,
+/* Closed, the chevron points at the row (it opens); open, it points down. */
+button.act-head:hover .act-swap {
+  opacity: 1;
+}
+
 .act-icon.open .act-swap {
   opacity: 1;
   transform: none;
@@ -3687,8 +3703,21 @@ button.act-head:hover .act-swap,
 
 .act-name {
   flex: none;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text);
   font-weight: 550;
+}
+
+/* An open group's head: how many calls, the calls themselves below. */
+.act-count {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .act-chip {
@@ -3733,6 +3762,11 @@ button.act-head:hover .act-swap,
   color: var(--muted);
 }
 
+.act-ask-detail dt,
+.act-ask-detail dd {
+  overflow-wrap: anywhere;
+}
+
 .act-ask-detail dd {
   margin: 0;
   color: var(--text);
@@ -3745,16 +3779,21 @@ button.act-head:hover .act-swap,
 
 .act-items {
   display: grid;
+  min-width: 0;
   gap: 2px;
   margin: 2px 0 2px var(--space-2);
   padding-left: 14px;
   border-left: 1px solid var(--border);
 }
 
+/* An open row's calls, in full: wrapped, long tokens broken anywhere, so
+   nothing scrolls sideways. A huge input scrolls inside its own box. */
 .act-item {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-height: 320px;
+  margin: 0;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -3785,9 +3824,18 @@ button.act-head:hover .act-swap,
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   margin-top: var(--space-3);
   padding-top: var(--space-3);
   border-top: 1px solid var(--border);
+}
+
+/* The hover wrapper is the flex item: it must be allowed to shrink, or a
+   long path keeps its full width and the chat scrolls sideways. */
+.file-chips > [data-diffchip] {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .file-chip {
@@ -4751,6 +4799,11 @@ button.file-chip:hover {
 .bot-row-wrap:hover .bot-profile-btn,
 .bot-row-wrap:focus-within .bot-profile-btn { opacity: 1; }
 .bot-profile-btn:hover { background: var(--surface-2); color: var(--text); }
+/* The button sits at the row's right edge: its tooltip lines up with that
+   edge and opens inward, instead of centering past the sidebar's edge. */
+.bot-profile-btn[data-tip]::after { left: auto; right: 0; translate: none; }
+/* Collapsed, the column is barely wider than the one-line label: wrap it. */
+.side.closing .bot-profile-btn[data-tip]::after { width: max-content; max-width: 64px; white-space: normal; text-align: right; }
 .side.closing .bot-row-wrap .bot-row { padding-inline: var(--space-1); }
 .side.closing .bot-profile-btn { right: -2px; top: auto; bottom: -2px; transform: none; }
 .thread-row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
