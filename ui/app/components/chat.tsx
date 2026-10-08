@@ -2762,6 +2762,7 @@ export default function Chat({
                 <button type="button" className="menu-scrim" onClick={() => setActiveMenu(null)} aria-label="Close permissions" tabIndex={-1} />
               </>}
             </div>}
+            {/* TODO: dictation disabled pending a design rethink; hook and logic kept in place
             {!streaming && (
               <button
                 type="button"
@@ -2786,6 +2787,7 @@ export default function Chat({
                 )}
               </button>
             )}
+            */}
             {streaming ? (
               <div className="composer-action">
                 {escapeStopArmed && (
