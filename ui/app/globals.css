@@ -1471,7 +1471,7 @@ pre {
 
 .composer-pill {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-end;
   column-gap: var(--space-2);
   padding: var(--space-2);
@@ -1492,6 +1492,11 @@ pre {
   font: inherit;
   line-height: 1.45;
   resize: none;
+}
+
+/* No permissions row (Jarvis): send sits beside the text box, on the right. */
+.composer-pill:not(:has(.composer-permissions)) textarea {
+  grid-column: 1;
 }
 
 .composer-pill textarea:focus {
