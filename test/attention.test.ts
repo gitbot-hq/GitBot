@@ -7,7 +7,7 @@ import { join } from "path";
 import { createBot, createThread, getThread, JARVIS_BOT_ID, jarvisDir, setRunningFor } from "../src/bot-store";
 import { recoverInterruptedChildren } from "../src/restart-recovery";
 import { coalesce } from "../ui/app/lib/coalesce";
-import { latestLine, watchThreadActivity } from "../src/attention";
+import { errorLine, latestLine, resultError, turnOutcome, watchThreadActivity } from "../src/attention";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
 import {
@@ -325,4 +325,26 @@ test("seen clears has news, keeps the list order, and a client cannot forge eith
   assert.equal(hasNews(patched), true);
 
   assert.equal((await request("POST", "/threads/nope/seen")).status, 404);
+});
+
+test("a turn whose result reports an error failed, whatever its status; an earlier turn's result doesn't count", () => {
+  const ev = (seq: number, type: string, data: Record<string, unknown> = {}) => ({ seq, type, ...data });
+  const base = { status: "done" as const, abortRequested: false, reportable: false };
+  const apiError = [ev(1, "user_prompt"), ev(2, "result", { subtype: "success", is_error: true, result: "API Error: 529 Overloaded" })];
+  assert.equal(resultError(apiError), "API Error: 529 Overloaded");
+  assert.equal(turnOutcome({ ...base, events: apiError }), "failed");
+  assert.equal(errorLine({ events: apiError }), "API Error: 529 Overloaded");
+
+  const budget = [ev(1, "user_prompt"), ev(2, "result", { subtype: "error_max_budget_usd" })];
+  assert.equal(turnOutcome({ ...base, events: budget }), "failed");
+  assert.equal(errorLine({ events: budget }), "it reached its budget");
+  const during = [ev(1, "user_prompt"), ev(2, "result", { subtype: "error_during_execution", errors: ["", "Tool crashed"] })];
+  assert.equal(errorLine({ events: during }), "Tool crashed");
+
+  // The failure was last turn's; this one succeeded.
+  const recovered = [...apiError, ev(3, "user_prompt"), ev(4, "result", { subtype: "success", result: "ok" })];
+  assert.equal(resultError(recovered), null);
+  assert.equal(turnOutcome({ ...base, events: recovered }), "done");
+  // No result at all (Codex, OpenCode): status decides.
+  assert.equal(turnOutcome({ ...base, events: [ev(1, "user_prompt")] }), "done");
 });

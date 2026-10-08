@@ -454,6 +454,8 @@ export function formatMessage(
         return {
           type: "result",
           subtype: "success",
+          // True when the turn ended on an API error: result is then its text (attention.ts resultError).
+          ...(msg.is_error ? { is_error: true } : {}),
           result: msg.result,
           cost: msg.total_cost_usd,
           duration_ms: msg.duration_ms,
