@@ -34,11 +34,70 @@ const MAX_ID_LENGTH = 128;
 /** The clock. A seam: tests move time instead of waiting. */
 export const presenceClock = { now: (): number => Date.now() };
 
-const tabs = new Map<string, TabPresence>();
+/** The timer that ends lapsed reports. A seam: tests run it by hand. */
+export const presenceTimer = {
+  schedule(fn: () => void, ms: number): () => void {
+    const timer = setTimeout(fn, ms);
+    timer.unref?.();
+    return () => clearTimeout(timer);
+  },
+};
 
-/** Drops reports past their lease. Runs on every read and write. */
+const tabs = new Map<string, TabPresence>();
+const changeListeners = new Set<() => void>();
+let cancelExpiry: (() => void) | null = null;
+let changePending = false;
+
+/**
+ * Calls the listener after the tabs change: a report that differs from the
+ * one it replaces, an "away", or a report lapsing (on its own timer, so even
+ * with no further requests). Calls are batched and come after the change, never
+ * during it.
+ */
+export function onPresenceChange(listener: () => void): () => void {
+  changeListeners.add(listener);
+  return () => { changeListeners.delete(listener); };
+}
+
+function changed(): void {
+  if (changePending || changeListeners.size === 0) return;
+  changePending = true;
+  queueMicrotask(() => {
+    changePending = false;
+    for (const listener of [...changeListeners]) {
+      try { listener(); } catch (err: any) { console.error(`[presence] ${err?.message ?? err}`); }
+    }
+  });
+}
+
+/** Drops reports past their lease, saying so if any went. Runs on every read and write. */
 function prune(now: number): void {
-  for (const [id, tab] of tabs) if (tab.expiresAt <= now) tabs.delete(id);
+  let dropped = false;
+  for (const [id, tab] of tabs) {
+    if (tab.expiresAt <= now) {
+      tabs.delete(id);
+      dropped = true;
+    }
+  }
+  if (dropped) changed();
+}
+
+/** Sets the one timer for the next report to lapse (none when no tab is kept). */
+function armExpiry(now: number): void {
+  cancelExpiry?.();
+  cancelExpiry = null;
+  if (tabs.size === 0) return;
+  const next = Math.min(...[...tabs.values()].map((t) => t.expiresAt));
+  cancelExpiry = presenceTimer.schedule(() => {
+    cancelExpiry = null;
+    expirePresence();
+  }, Math.max(0, next - now) + 1);
+}
+
+/** Ends the reports that have lapsed, now. What the expiry timer runs. */
+export function expirePresence(now = presenceClock.now()): void {
+  prune(now);
+  armExpiry(now);
 }
 
 /** Every tab whose report still counts. */
@@ -47,9 +106,11 @@ export function liveTabs(now = presenceClock.now()): TabPresence[] {
   return [...tabs.values()];
 }
 
-/** For tests: forget every tab, as a restart does. */
+/** For tests, and push being turned off: forget every tab, as a restart does. */
 export function clearPresence(): void {
   tabs.clear();
+  cancelExpiry?.();
+  cancelExpiry = null;
 }
 
 export type PresenceUpdate = { tab: string; threadId: string | null; state: PresenceState | "away" };
@@ -86,12 +147,16 @@ export class PresenceLimitError extends Error {
  */
 export function recordPresence(update: PresenceUpdate, now = presenceClock.now()): void {
   prune(now);
+  const before = tabs.get(update.tab);
   if (update.state === "away") {
-    tabs.delete(update.tab);
-    return;
+    if (tabs.delete(update.tab)) changed();
+  } else {
+    if (!before && tabs.size >= MAX_PRESENCE_TABS) throw new PresenceLimitError();
+    tabs.set(update.tab, { threadId: update.threadId, state: update.state, expiresAt: now + PRESENCE_LEASE_MS });
+    // A renewal of the same report is no change.
+    if (!before || before.threadId !== update.threadId || before.state !== update.state) changed();
   }
-  if (!tabs.has(update.tab) && tabs.size >= MAX_PRESENCE_TABS) throw new PresenceLimitError();
-  tabs.set(update.tab, { threadId: update.threadId, state: update.state, expiresAt: now + PRESENCE_LEASE_MS });
+  armExpiry(now);
 }
 
 export type NotificationKind = "done" | "failed" | "approval" | "question";

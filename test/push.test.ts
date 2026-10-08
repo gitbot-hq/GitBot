@@ -12,7 +12,7 @@ import { join } from "path";
 import { createBot, createThread, dataDir, JARVIS_BOT_ID, jarvisDir } from "../src/bot-store";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
-import { clearPresence, MAX_PRESENCE_TABS, PRESENCE_LEASE_MS, presenceClock, recordPresence, type PresenceUpdate } from "../src/presence";
+import { clearPresence, MAX_PRESENCE_TABS, PRESENCE_LEASE_MS, presenceClock, presenceTimer, recordPresence, type PresenceUpdate } from "../src/presence";
 import { watchChildReports } from "../src/reports";
 import {
   DEFAULT_PUSH_SUBJECT,
@@ -60,6 +60,9 @@ let unwatch: () => void = () => {};
 let unwatchReports: () => void = () => {};
 const realSchedule = pushTiming.schedule;
 const realNow = presenceClock.now;
+const realPresenceTimer = presenceTimer.schedule;
+/** The presence expiry timer's latest callback and when it would fire: run by hand. */
+let expiryTimer: { fn: () => void; ms: number; cancelled: boolean } | null = null;
 /** Held finished/failed pushes, when a test holds them instead of sending at once. */
 let heldRuns: Array<() => void> | null = null;
 
@@ -84,6 +87,11 @@ before(() => {
     else fn();
     return () => {};
   };
+  presenceTimer.schedule = (fn, ms) => {
+    const timer = { fn, ms, cancelled: false };
+    expiryTimer = timer;
+    return () => { timer.cancelled = true; };
+  };
   // In server.ts's order: the report watcher first, so push sees reportDelivered.
   unwatchReports = watchChildReports(ALL_AGENTS);
   unwatch = watchPush();
@@ -97,6 +105,7 @@ beforeEach(() => {
   heldRuns = null;
   clearPresence();
   presenceClock.now = realNow;
+  expiryTimer = null;
 });
 afterEach(() => {
   for (const s of runs) sessions.delete(s.gitbotId);
@@ -109,6 +118,7 @@ after(() => {
   unwatchReports();
   pushSender.send = realSend;
   pushTiming.schedule = realSchedule;
+  presenceTimer.schedule = realPresenceTimer;
   Object.assign(agentRunners, realRunners);
 });
 
@@ -348,7 +358,7 @@ test("an approval or a question is a push once, when it appears", async () => {
   assert.equal(sent.length, 1);
   assert.equal(sent[0].payload.kind, "approval");
   assert.equal(sent[0].payload.title, "Fix the flaky test");
-  assert.equal(sent[0].payload.body, "Builder needs approval: Bash: npm ci…");
+  assert.equal(sent[0].payload.body, "Builder needs approval: Bash: npm");
   assert.equal(sent[0].payload.url, `/?thread=${thread.id}&bot=${thread.botId}`);
   assert.equal(sent[0].urgency, "high");
   assert.equal(sent[0].ttl, 24 * 60 * 60);
@@ -988,15 +998,68 @@ test("a failed turn's push says what went wrong, and an error result counts as f
   assert.equal(sent[0].payload.body, "Tester failed: it reached its turn limit");
 });
 
-test("approval labels name the tool and program, never a whole command", () => {
-  assert.equal(shortApprovalLabel("Bash", { command: "npm test" }), "Bash: npm test");
-  assert.equal(shortApprovalLabel("Bash", { command: "npm ci\nnpm test" }), "Bash: npm ci…");
-  assert.equal(shortApprovalLabel("Bash", { command: "GH_TOKEN=ghp_secret gh pr create --title x" }), "Bash: gh pr…");
-  assert.equal(shortApprovalLabel("Bash", { command: "curl -H 'Authorization: Bearer abc' https://x" }), "Bash: curl…");
+test("approval labels name the tool and program, never an argument", () => {
+  const bash = (command: string) => shortApprovalLabel("Bash", { command });
+  // Plain commands: the program's name only.
+  assert.equal(bash("npm test"), "Bash: npm");
+  assert.equal(bash("npm ci\nnpm test"), "Bash: npm");
+  assert.equal(bash("./scripts/deploy.sh --prod"), "Bash: deploy.sh");
+  assert.equal(bash("  \n git push"), "Bash: git");
+  // Assignments before the program are skipped whole, quotes and spaces included.
+  assert.equal(bash("PASSWORD='s3cr3t pa55w0rd' ./deploy.sh"), "Bash: deploy.sh");
+  assert.equal(bash('TOKEN="abc def" curl x'), "Bash: curl");
+  assert.equal(bash("A=1 B='x y' C=\"p q\" make"), "Bash: make");
+  assert.equal(bash("GH_TOKEN=ghp_secret gh pr create --title x"), "Bash: gh");
+  assert.equal(bash("env X=y cmd --flag"), "Bash: cmd");
+  assert.equal(bash("env -i PATH=/bin sh"), "Bash: env");
+  // Arguments never show, whatever they hold.
+  assert.equal(bash("echo hunter2 | sudo -S rm -rf /"), "Bash: echo");
+  assert.equal(bash("curl https://user:pa55@example.com/x"), "Bash: curl");
+  assert.equal(bash("cat <<EOF > .env\nAPI_KEY=sk-live-123\nEOF"), "Bash: cat");
+  assert.equal(bash("mysql -psecret -e 'select 1'"), "Bash: mysql");
+  // Anything ambiguous before the program: the tool alone.
+  for (const unclear of [
+    "PASSWORD='unclosed ./deploy.sh",
+    'TOKEN="$(cat ~/.token)" curl x',
+    "TOKEN=`cat t` curl x",
+    "X=$(pass show y) run",
+    '"$CMD" arg',
+    "$TOOL --key abc",
+    "'ls' -la",
+    "(cd x && make)",
+    "{ echo a; }",
+    "",
+    "   ",
+    "# comment",
+  ]) {
+    assert.equal(bash(unclear), "Bash", unclear);
+  }
+  for (const secret of ["s3cr3t", "pa55w0rd", "hunter2", "abc", "def", "ghp_secret", "pa55", "sk-live"]) {
+    for (const cmd of [
+      "PASSWORD='s3cr3t pa55w0rd' ./deploy.sh",
+      'TOKEN="abc def" curl x',
+      "echo hunter2 | sudo -S x",
+      "GH_TOKEN=ghp_secret gh pr create",
+      "curl https://user:pa55@example.com/x",
+      "cat <<EOF\nsk-live\nEOF",
+    ]) {
+      assert.ok(!bash(cmd).includes(secret), `${cmd} → ${bash(cmd)}`);
+    }
+  }
+
+  // Files: the name, not the path.
   assert.equal(shortApprovalLabel("Edit", { file_path: "/Users/me/secret/project/src/app.ts" }), "Edit app.ts");
-  assert.equal(shortApprovalLabel("WebFetch", { url: "https://x" }), "WebFetch");
-  const long = shortApprovalLabel("Bash", { command: `${"x".repeat(100)} y` });
-  assert.ok(long.length <= 60, long);
+  assert.equal(shortApprovalLabel("Write", { file_path: "/tmp/x/.env" }), "Write .env");
+  assert.equal(shortApprovalLabel("Read", { file_path: "/a/b/token is here.txt" }), "Read");
+  // URLs: the host, never a password, path or query.
+  assert.equal(shortApprovalLabel("WebFetch", { url: "https://user:pa55@api.example.com/v1?key=sk-123" }), "WebFetch: api.example.com");
+  assert.equal(shortApprovalLabel("WebFetch", { url: "not a url sk-123" }), "WebFetch");
+  // MCP tools and anything else: the tool name only.
+  assert.equal(shortApprovalLabel("mcp__github__create_issue", { title: "token ghp_x", body: "secret" }), "mcp__github__create_issue");
+  assert.equal(shortApprovalLabel("Grep", { pattern: "sk-live-[a-z]+" }), "Grep");
+  assert.equal(shortApprovalLabel("mcp__x__run", { command: "echo secret" }), "mcp__x__run");
+  const long = bash(`${"x".repeat(100)} y`);
+  assert.equal(long, "Bash");
   const asked = shortApprovalLabel("AskUserQuestion", { questions: [{ question: "Which branch should I use for the release that ships next week?", header: "B", options: [{ label: "a" }, { label: "b" }] }] });
   assert.ok(asked.length <= 60 && asked.startsWith("Which branch"), asked);
 });
@@ -1042,4 +1105,119 @@ test("at the cap a new tab is refused, and none is pushed out; lapsed ones make 
   assert.equal((await request("POST", "/push/presence", { tab: "cap-tab-0", thread: null, state: "present" })).status, 200);
   presenceClock.now = () => start + PRESENCE_LEASE_MS + 1;
   assert.equal((await request("POST", "/push/presence", fresh)).status, 200);
+});
+
+// --- A needs-you muted by a "watching" that ends ---
+
+/** A thread with a turn running; `ask(id)` makes it wait on an approval, `answer()` clears them. */
+async function waitingThread() {
+  const thread = plainThread("Builder");
+  const started = startTurn({ threadId: thread.id, prompt: "build it" }, ALL_AGENTS);
+  assert.ok(started.ok);
+  const store = runs[runs.length - 1];
+  await tick();
+  return {
+    thread,
+    ask(id: string) {
+      store.pendingPermissions.set(id, { resolve: () => {}, input: { command: "npm test" }, toolName: "Bash", toolUseID: id });
+      notifyPermissionsChanged();
+    },
+    answer() {
+      store.pendingPermissions.clear();
+      notifyPermissionsChanged();
+    },
+  };
+}
+
+test("a needs-you muted by a watching tab whose report then lapses is pushed, with no further requests", async () => {
+  await subscribe("a");
+  const start = Date.now();
+  presenceClock.now = () => start;
+  const { thread, ask, answer } = await waitingThread();
+  // The iPhone app, swiped away without a word: its last report says watching.
+  tab("watching", thread.id);
+  ask("tu-1");
+  await settle();
+  assert.equal(sent.length, 0, "muted while watched");
+
+  // Its lease runs out: the expiry timer fires, nothing else happens.
+  assert.ok(expiryTimer && !expiryTimer.cancelled);
+  assert.ok(expiryTimer.ms > PRESENCE_LEASE_MS - 1000 && expiryTimer.ms <= PRESENCE_LEASE_MS + 1);
+  presenceClock.now = () => start + expiryTimer!.ms;
+  expiryTimer.fn();
+  await settle();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.body, "Builder needs approval: Bash: npm");
+
+  // Once only: more presence changes don't send it again.
+  tab("present");
+  tab("glancing", thread.id);
+  await settle();
+  assert.equal(sent.length, 1);
+  answer();
+});
+
+test("a needs-you muted while watched is pushed when the tab says away, glancing, or moves on", async () => {
+  await subscribe("a");
+  for (const leave of ["away", "glancing", "other"] as const) {
+    sent = [];
+    const { thread, ask, answer } = await waitingThread();
+    const other = plainThread("Other");
+    const t = tab("watching", thread.id);
+    ask(`tu-${leave}`);
+    await settle();
+    assert.equal(sent.length, 0, leave);
+    if (leave === "away") recordPresence({ tab: t, threadId: null, state: "away" });
+    if (leave === "glancing") recordPresence({ tab: t, threadId: thread.id, state: "glancing" });
+    if (leave === "other") recordPresence({ tab: t, threadId: other.id, state: "watching" });
+    await settle();
+    assert.equal(sent.length, 1, leave);
+    assert.equal(sent[0].payload.threadId, thread.id);
+    answer();
+    clearPresence();
+  }
+});
+
+test("a needs-you answered while watched is never pushed", async () => {
+  await subscribe("a");
+  const { thread, ask, answer } = await waitingThread();
+  const t = tab("watching", thread.id);
+  ask("tu-1");
+  await settle();
+  answer();
+  await settle();
+  recordPresence({ tab: t, threadId: null, state: "away" });
+  await settle();
+  assert.equal(sent.length, 0);
+});
+
+test("a needs-you stays muted while the thread is still watched", async () => {
+  await subscribe("a");
+  const start = Date.now();
+  presenceClock.now = () => start;
+  const { thread, ask, answer } = await waitingThread();
+  const t = tab("watching", thread.id);
+  ask("tu-1");
+  await settle();
+  // Renewed before the lease ends; another tab comes and goes meanwhile.
+  presenceClock.now = () => start + 20_000;
+  recordPresence({ tab: t, threadId: thread.id, state: "watching" });
+  const other = tab("present");
+  recordPresence({ tab: other, threadId: null, state: "away" });
+  // The timer set for the first lease fires late: the renewal still counts.
+  presenceClock.now = () => start + PRESENCE_LEASE_MS + 1;
+  expiryTimer!.fn();
+  await settle();
+  assert.equal(sent.length, 0);
+  answer();
+});
+
+test("with no tab kept, no expiry timer is left behind", async () => {
+  const t = tab("watching", "abc");
+  assert.ok(expiryTimer && !expiryTimer.cancelled);
+  const armed = expiryTimer;
+  recordPresence({ tab: t, threadId: null, state: "away" });
+  assert.ok(armed.cancelled);
+  clearPresence();
+  assert.ok(expiryTimer!.cancelled);
 });

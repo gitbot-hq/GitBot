@@ -7,7 +7,7 @@ import webpush from "web-push";
 import { errorLine, latestLine, turnOutcome } from "./attention";
 import { dataDir, getBot, getThread } from "./bot-store";
 import { askUserQuestionLabel, isAskUserQuestion } from "./ask-user-question";
-import { decide, liveTabs, parsePresence, PresenceLimitError, presenceClock, recordPresence } from "./presence";
+import { decide, liveTabs, onPresenceChange, parsePresence, PresenceLimitError, presenceClock, recordPresence } from "./presence";
 import { lastAssistantMessage } from "./reports";
 import {
   isShuttingDown,
@@ -553,27 +553,105 @@ function capLabel(text: string): string {
 }
 
 /**
- * What an approval is for, short enough for a lock screen and never a whole
- * command (one can carry a token): the tool and the program it runs, with a
- * plain subcommand ("Bash: npm test…"); the tool and a file's name, not its
- * path; or a question's text. At most MAX_LABEL characters.
+ * The program a shell command runs, by name only, or null when that can't be
+ * read safely. Leading VAR=value assignments are skipped, quotes and all
+ * (their values are often secrets), and an `env` before them too; anything
+ * ambiguous before the program (an unclosed quote, `$(...)`, a backtick, a
+ * variable, a subshell) gives null. Never any argument: those can carry a
+ * secret (`echo hunter2 | sudo -S`, a URL with a password).
+ */
+export function commandProgram(command: string): string | null {
+  let i = 0;
+  const n = command.length;
+  const space = () => { while (i < n && /\s/.test(command[i])) i++; };
+  /** Reads one word, quote-aware; null when a quote doesn't close or it substitutes anything. */
+  const word = (): string | null => {
+    let out = "";
+    while (i < n && !/[\s;&|<>()]/.test(command[i])) {
+      const c = command[i];
+      if (c === "`" || (c === "$" && /[({A-Za-z_]/.test(command[i + 1] ?? ""))) return null;
+      if (c === "'" || c === '"') {
+        const end = command.indexOf(c, i + 1);
+        if (end < 0) return null;
+        const inner = command.slice(i + 1, end);
+        if (c === '"' && /[`$]/.test(inner)) return null;
+        out += inner;
+        i = end + 1;
+      } else if (c === "\\") {
+        if (i + 1 >= n) return null;
+        out += command[i + 1];
+        i += 2;
+      } else {
+        out += c;
+        i++;
+      }
+    }
+    return out;
+  };
+  const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+  let sawEnv = false;
+  for (;;) {
+    space();
+    if (i >= n || /[\s;&|<>(){}]/.test(command[i])) return null;
+    const start = i;
+    const w = word();
+    if (w === null) return null;
+    const raw = command.slice(start, i);
+    if (ASSIGNMENT.test(raw)) continue; // VAR=value: skipped, value unread
+    if (!sawEnv && raw === "env") { sawEnv = true; continue; }
+    // The program itself: plain, unquoted, unsubstituted.
+    if (raw !== w || !w) return null;
+    if (sawEnv && w.startsWith("-")) return "env";
+    const name = w.split("/").pop() ?? "";
+    return /^[A-Za-z0-9._+-]{1,40}$/.test(name) && !/^\.+$/.test(name) ? name : null;
+  }
+}
+
+/** A file's name, never its path (or anything else in the string). */
+function fileName(path: string): string | null {
+  const name = basename(path.trim());
+  return name && name.length <= 40 && !/[\s]/.test(name) ? name : null;
+}
+
+/** A URL's host, never its path, query or user:password. */
+function urlHost(url: string): string | null {
+  try {
+    return new URL(url.trim()).hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What an approval is for, short enough for a lock screen and never an
+ * argument (one can carry a token): the tool and the program a command runs
+ * ("Bash: npm"); the tool and a file's name, not its path ("Edit app.ts");
+ * the tool and a URL's host ("WebFetch: example.com"); for anything else
+ * (MCP tools included) the tool's name alone. A question shows its text: the
+ * agent wrote it to be read. At most MAX_LABEL characters.
  */
 export function shortApprovalLabel(toolName: string, input: unknown): string {
   if (isAskUserQuestion(toolName, input)) return capLabel(askUserQuestionLabel(input));
+  const tool = capLabel(toolName || "Tool");
+  if (toolName.startsWith("mcp__")) return tool;
   const i = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
-  const pick = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  const pick = (v: unknown) => (typeof v === "string" && v.trim() ? v : undefined);
   const command = pick(i.command);
-  if (command) {
-    // Leading VAR=value words are settings, often secrets: skipped.
-    const words = command.split(/\s+/).filter(Boolean);
-    while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) words.shift();
-    const shown = words.slice(0, 1);
-    if (words[1] && /^[a-z][\w:.-]{0,19}$/i.test(words[1])) shown.push(words[1]);
-    const more = words.length > shown.length;
-    return capLabel(`${toolName}: ${shown.join(" ")}${more ? "…" : ""}`);
+  if (command !== undefined) {
+    const program = commandProgram(command);
+    return capLabel(program ? `${tool}: ${program}` : tool);
   }
   const file = pick(i.file_path) ?? pick(i.filePath) ?? pick(i.notebook_path) ?? pick(i.path);
-  return capLabel(file ? `${toolName} ${basename(file)}` : toolName);
+  if (file !== undefined) {
+    const name = fileName(file);
+    return capLabel(name ? `${tool} ${name}` : tool);
+  }
+  const url = pick(i.url);
+  if (url !== undefined) {
+    const host = urlHost(url);
+    return capLabel(host ? `${tool}: ${host}` : tool);
+  }
+  return tool;
 }
 
 /** The tag an approval's notification goes under: its thread's, else its session's. */
@@ -672,9 +750,39 @@ export function watchPush(): () => void {
   // not seen before are news. Kept up to date even with no one subscribed,
   // so a browser that subscribes later is not told about old ones.
   let pending = new Set<string>();
+  // The latest broadcast, grouped by tag: what a re-check counts.
+  let pendingByTag = new Map<string, PermissionDumpItem[]>();
+  // Needs-you items presence muted (someone was watching), by key, with their
+  // tag: told about once the thread stops being watched, if still waiting.
+  // A "watching" report can outlive the user by up to its lease (an iPhone
+  // app swiped away, an "away" that lost the race with a renewal); without
+  // this, an approval that arrived then would never be pushed at all.
+  const muted = new Map<string, string>();
+
+  /** Sends the needs-you push for these tags, if presence allows; true for each sent. */
+  const sendApprovals = (tags: Iterable<string>, onMuted?: (tag: string) => void) => {
+    for (const tag of tags) {
+      try {
+        const items = pendingByTag.get(tag);
+        if (!items?.length) continue;
+        const payload = approvalNotification(items);
+        if (!worthSending(payload)) {
+          onMuted?.(tag);
+          continue;
+        }
+        // Counted in this push: no longer owed one.
+        for (const [key, t] of muted) if (t === tag) muted.delete(key);
+        cancelHeld(tag);
+        send(payload);
+      } catch (err: any) {
+        console.error(`[push] approvals ${tag}: ${err?.message ?? err}`);
+      }
+    }
+  };
+
   const notifyApprovals = (permissions: PermissionDumpItem[]) => {
     const now = new Set<string>();
-    const freshTags = new Set<string>();
+    const fresh = new Map<string, string[]>();
     const byTag = new Map<string, PermissionDumpItem[]>();
     for (const item of permissions) {
       const key = `${item.sessionId}:${item.toolUseID}`;
@@ -687,22 +795,27 @@ export function watchPush(): () => void {
         continue;
       }
       byTag.set(tag, [...(byTag.get(tag) ?? []), item]);
-      if (!pending.has(key)) freshTags.add(tag);
+      if (!pending.has(key)) fresh.set(tag, [...(fresh.get(tag) ?? []), key]);
     }
     pending = now;
-    if (freshTags.size === 0 || isShuttingDown() || listSubscriptions().length === 0) return;
+    pendingByTag = byTag;
+    // Answered (or gone with its turn): owed nothing.
+    for (const key of muted.keys()) if (!now.has(key)) muted.delete(key);
+    if (fresh.size === 0 || isShuttingDown() || listSubscriptions().length === 0) return;
     // One push per thread with something new, counting all it has waiting.
-    for (const tag of freshTags) {
-      try {
-        const payload = approvalNotification(byTag.get(tag)!);
-        if (!worthSending(payload)) continue;
-        cancelHeld(tag);
-        send(payload);
-      } catch (err: any) {
-        console.error(`[push] approvals ${tag}: ${err?.message ?? err}`);
-      }
-    }
+    sendApprovals(fresh.keys(), (tag) => {
+      for (const key of fresh.get(tag) ?? []) muted.set(key, tag);
+    });
   };
+
+  // Presence changed (a tab left, moved, or its report lapsed): the muted
+  // ones whose thread nobody watches now go out, once.
+  const recheckMuted = () => {
+    if (muted.size === 0) return;
+    if (!pushEnabled() || isShuttingDown() || listSubscriptions().length === 0) return;
+    sendApprovals(new Set(muted.values()));
+  };
+
   // Wrapped whole: a throw here would stop the emit before the UI's live
   // update listener runs, and land in whichever notifyPermissionsChanged() caller fired it.
   const onUpdate = (permissions: PermissionDumpItem[]) => {
@@ -713,9 +826,18 @@ export function watchPush(): () => void {
     }
   };
   permissionsEmitter.on("update", onUpdate);
+  const offPresence = onPresenceChange(() => {
+    try {
+      recheckMuted();
+    } catch (err: any) {
+      console.error(`[push] approvals: ${err?.message ?? err}`);
+    }
+  });
   return () => {
     offTurnEnd();
     permissionsEmitter.off("update", onUpdate);
+    offPresence();
+    muted.clear();
     for (const entry of held.values()) entry.cancel();
     held.clear();
   };
