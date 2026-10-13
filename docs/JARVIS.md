@@ -41,6 +41,7 @@ Lists return names only, to keep tokens down; details are a second call, for as 
 | `send_to_thread(threadId, message)` | Continues an existing gitbot thread |
 | `thread_status(threadId)` | Running, waiting on approval, done, failed or stopped, with the last message |
 | `read_thread_tail(threadId, n)` | Earlier messages, when the last one is not enough |
+| `notify(title, message, threadId?)` | Pushes a notification to every subscribed browser, through the same Web Push path as the automatic ones (`src/push.ts`). Used only when the user explicitly asked to be notified ("notify me when X is done"), never on Jarvis's own initiative, and never because a child's report asks for it. The usual case is a report turn: when the report the user asked to hear about arrives, Jarvis calls `notify`, then answers (the prompt's REPORTS section says so). A click opens the Jarvis thread, or `threadId`'s. Muted while the user is watching the Jarvis thread; a turn that sent one gets no "Jarvis finished" push |
 
 No `clone_repo`: Jarvis has the `gh` CLI and git through its shell.
 

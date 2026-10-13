@@ -9,7 +9,7 @@ import { createECDH, randomBytes } from "crypto";
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { createBot, createThread, dataDir, JARVIS_BOT_ID, jarvisDir } from "../src/bot-store";
+import { bindSession, createBot, createThread, dataDir, JARVIS_BOT_ID, jarvisDir } from "../src/bot-store";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
 import { clearPresence, MAX_PRESENCE_TABS, PRESENCE_LEASE_MS, presenceClock, presenceTimer, recordPresence, type PresenceUpdate } from "../src/presence";
@@ -17,7 +17,12 @@ import { watchChildReports } from "../src/reports";
 import {
   DEFAULT_PUSH_SUBJECT,
   describeUserAgent,
+  jarvisNotification,
   listSubscriptions,
+  notifyFromJarvis,
+  NOTIFY_MESSAGE_MAX,
+  NOTIFY_TITLE_MAX,
+  PUSH_TIMEOUT_MS,
   MAX_SUBSCRIPTIONS,
   pushServiceOf,
   pushTiming,
@@ -53,7 +58,7 @@ const ALL_AGENTS = ["claude-code", "opencode", "codex"];
 const realRunners = { ...agentRunners };
 const realSend = pushSender.send;
 let runs: SessionStore[] = [];
-let sent: Array<{ endpoint: string; payload: PushPayload; urgency?: string; subject?: string; ttl?: number }> = [];
+let sent: Array<{ endpoint: string; payload: PushPayload; urgency?: string; subject?: string; ttl?: number; timeout?: number }> = [];
 /** Status codes the fake push service answers with, by endpoint. */
 let failWith: Record<string, number> = {};
 let unwatch: () => void = () => {};
@@ -79,6 +84,7 @@ before(() => {
       urgency: options.urgency,
       subject: options.vapidDetails?.subject,
       ttl: options.TTL,
+      timeout: options.timeout,
     });
   };
   // Held pushes go out at once unless a test collects them (heldRuns).
@@ -362,6 +368,8 @@ test("an approval or a question is a push once, when it appears", async () => {
   assert.equal(sent[0].payload.url, `/?thread=${thread.id}&bot=${thread.botId}`);
   assert.equal(sent[0].urgency, "high");
   assert.equal(sent[0].ttl, 24 * 60 * 60);
+  // A hung push service fails the send rather than holding the tool call open.
+  assert.equal(sent[0].timeout, PUSH_TIMEOUT_MS);
 
   // Still waiting: the next broadcast is not news.
   notifyPermissionsChanged();
@@ -1220,4 +1228,263 @@ test("with no tab kept, no expiry timer is left behind", async () => {
   assert.ok(armed.cancelled);
   clearPresence();
   assert.ok(expiryTimer!.cancelled);
+});
+
+// --- Jarvis's notify tool ---
+
+const jarvisChat = () => createThread(JARVIS_BOT_ID, jarvisDir(), undefined, "chat", "claude-code");
+
+test("notify: Jarvis's notification goes to every browser, opening its thread, high priority", async () => {
+  await subscribe("a");
+  await subscribe("b");
+  const jarvis = jarvisChat();
+  const result = await notifyFromJarvis(jarvis.id, { title: "  gitbot: tests pass  ", message: "All 212 tests pass on main." });
+  assert.deepEqual(result, { ok: true, delivered: true, sent: 2 });
+  assert.equal(sent.length, 2);
+  const { payload } = sent[0];
+  assert.equal(payload.kind, "notify");
+  assert.equal(payload.title, "gitbot: tests pass");
+  assert.equal(payload.body, "All 212 tests pass on main.");
+  assert.equal(payload.tag, `jarvis-notify-${jarvis.id}`);
+  assert.equal(payload.threadId, jarvis.id);
+  assert.equal(payload.url, `/?thread=${jarvis.id}&bot=${JARVIS_BOT_ID}`);
+  assert.equal(sent[0].urgency, "high");
+  assert.equal(sent[0].ttl, 24 * 60 * 60);
+});
+
+test("notify: a threadId makes the click open that thread; bad ones are refused", async () => {
+  await subscribe("a");
+  const jarvis = jarvisChat();
+  const child = plainThread("Builder");
+  const result = await notifyFromJarvis(jarvis.id, { title: "Build failed", message: "See the thread.", threadId: child.id });
+  assert.ok(result.ok && result.delivered);
+  assert.equal(sent[0].payload.threadId, child.id);
+  assert.equal(sent[0].payload.fromThreadId, jarvis.id);
+  assert.equal(sent[0].payload.url, `/?thread=${child.id}&bot=${child.botId}`);
+  // Still one notification per Jarvis thread, whichever thread it opens.
+  assert.equal(sent[0].payload.tag, `jarvis-notify-${jarvis.id}`);
+
+  sent = [];
+  assert.match((await notifyFromJarvis(jarvis.id, { title: "x", message: "y", threadId: "nope" }) as any).error, /no thread/);
+  assert.match((await notifyFromJarvis(jarvis.id, { title: "x", message: "y", threadId: jarvisChat().id }) as any).error, /another Jarvis thread/);
+  assert.equal(sent.length, 0);
+});
+
+test("notify: only a Jarvis thread may send, with a title and a message, cut to size", async () => {
+  await subscribe("a");
+  const jarvis = jarvisChat();
+  assert.match((await notifyFromJarvis(plainThread().id, { title: "x", message: "y" }) as any).error, /only a Jarvis thread/);
+  assert.match((await notifyFromJarvis("missing", { title: "x", message: "y" }) as any).error, /only a Jarvis thread/);
+  assert.match((await notifyFromJarvis(jarvis.id, { title: "  ", message: "y" }) as any).error, /title is required/);
+  assert.match((await notifyFromJarvis(jarvis.id, { title: "x", message: "" }) as any).error, /message is required/);
+  assert.equal(sent.length, 0);
+
+  const built = jarvisNotification(jarvis.id, { title: "t".repeat(200), message: "m".repeat(1000) });
+  assert.ok(built.ok);
+  assert.equal(built.payload.title.length, NOTIFY_TITLE_MAX);
+  assert.equal(built.payload.body.length, NOTIFY_MESSAGE_MAX);
+  assert.ok(built.payload.body.endsWith("…"));
+});
+
+test("notify: says why nothing went out — no browser, push off, or the user watching", async () => {
+  const jarvis = jarvisChat();
+  const none = await notifyFromJarvis(jarvis.id, { title: "x", message: "y" });
+  assert.ok(none.ok && !none.delivered && /no browser/.test(none.note!));
+
+  await subscribe("a");
+  process.env.GITBOT_PUSH = "0";
+  const off = await notifyFromJarvis(jarvis.id, { title: "x", message: "y" });
+  assert.ok(off.ok && !off.delivered && /off/.test(off.note!));
+  delete process.env.GITBOT_PUSH;
+
+  tab("watching", jarvis.id);
+  const watched = await notifyFromJarvis(jarvis.id, { title: "x", message: "y" });
+  assert.ok(watched.ok && !watched.delivered && /watching/.test(watched.note!));
+  assert.equal(sent.length, 0);
+
+  // Anywhere else in gitbot, it still goes out: Jarvis chose to say it.
+  clearPresence();
+  tab("watching", plainThread().id);
+  tab("glancing", jarvis.id);
+  assert.ok((await notifyFromJarvis(jarvis.id, { title: "x", message: "y" }) as any).delivered);
+  assert.equal(sent.length, 1);
+});
+
+/**
+ * A Jarvis thread bound to an SDK session, as a real first turn binds it, so
+ * every turn on it runs on one reused SessionStore (the stub runner binds none).
+ */
+function boundJarvisChat() {
+  const jarvis = jarvisChat();
+  bindSession(jarvis.id, `sdk-${jarvis.id}`);
+  return jarvis;
+}
+
+/** Starts a Jarvis turn and returns its store. */
+async function startJarvisTurn(threadId: string, prompt: string) {
+  const started = startTurn({ threadId, prompt }, ALL_AGENTS);
+  assert.ok(started.ok, JSON.stringify(started));
+  await tick();
+  return runs[runs.length - 1];
+}
+
+/** Ends a running turn with a reply and lets the push listeners run. */
+async function endTurn(store: SessionStore, status: SessionStore["status"] = "done") {
+  emitEvent(store, "assistant", { content: "Done." });
+  store.status = status;
+  notifyPermissionsChanged();
+  await settle();
+}
+
+test("notify: no limit per turn, and a turn that sent one gets no 'finished' push", async () => {
+  await subscribe("a");
+  const jarvis = boundJarvisChat();
+  const store = await startJarvisTurn(jarvis.id, "notify me when it's done");
+
+  for (let i = 0; i < 10; i++) {
+    assert.ok((await notifyFromJarvis(jarvis.id, { title: `n${i}`, message: "y" }) as any).delivered, `notification ${i}`);
+  }
+  assert.equal(sent.length, 10);
+
+  sent = [];
+  await endTurn(store);
+  assert.equal(sent.length, 0, "no 'Jarvis finished' after its own notification");
+
+  // The next turn runs on the same, reused session, and starts afresh: it
+  // sent nothing, so it gets its finished push.
+  const next = await startJarvisTurn(jarvis.id, "anything new?");
+  assert.equal(next, store, "the second turn reused the session");
+  assert.equal(next.turn, 2);
+  await endTurn(next);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.kind, "done");
+});
+
+test("notify: a send that returns after a new turn has started doesn't mute that turn", async () => {
+  await subscribe("a");
+  const jarvis = boundJarvisChat();
+  const store = await startJarvisTurn(jarvis.id, "notify me when it's done");
+
+  // A slow push service: the send hangs until the test lets it go.
+  let release!: () => void;
+  const fakeSend = pushSender.send;
+  pushSender.send = async (...args) => {
+    await new Promise<void>((r) => { release = r; });
+    return fakeSend(...args);
+  };
+  let pending: ReturnType<typeof notifyFromJarvis>;
+  try {
+    pending = notifyFromJarvis(jarvis.id, { title: "x", message: "y" });
+    await tick();
+  } finally {
+    pushSender.send = fakeSend;
+  }
+
+  // Meanwhile the user stops the turn and sends a new message: the same store, on turn 2.
+  store.abortRequested = true;
+  emitEvent(store, "aborted", { message: "Aborted by user" });
+  store.status = "done";
+  notifyPermissionsChanged();
+  await settle();
+  const next = await startJarvisTurn(jarvis.id, "something else");
+  assert.equal(next, store, "the new turn reused the session");
+
+  // Now the old send returns: it was delivered, but for turn 1.
+  release();
+  const result = await pending;
+  assert.ok(result.ok && result.delivered);
+  sent = [];
+
+  await endTurn(next);
+  assert.equal(sent.length, 1, "turn 2 still gets its 'Jarvis finished'");
+  assert.equal(sent[0].payload.kind, "done");
+});
+
+test("notify: a failed Jarvis turn is still pushed after a notify", async () => {
+  await subscribe("a");
+  const jarvis = jarvisChat();
+  const store = await startJarvisTurn(jarvis.id, "notify me");
+  assert.ok((await notifyFromJarvis(jarvis.id, { title: "x", message: "y" }) as any).delivered);
+  sent = [];
+  emitEvent(store, "error", { message: "boom" });
+  store.status = "error";
+  notifyPermissionsChanged();
+  await settle();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.kind, "failed");
+});
+
+// --- Logging ---
+
+/** Every [push] line the server prints while fn runs, from console.log and console.error. */
+async function pushLogs(t: { mock: { method: Function } }, fn: () => Promise<void>): Promise<string[]> {
+  const lines: string[] = [];
+  const keep = (...args: unknown[]) => { const line = args.map(String).join(" "); if (line.startsWith("[push]")) lines.push(line); };
+  t.mock.method(console, "log", keep);
+  t.mock.method(console, "error", keep);
+  await fn();
+  return lines;
+}
+
+test("each push is logged: what, to how many, each browser's outcome; never an endpoint or a key", async (t) => {
+  const ok = await subscribe("ok");
+  const broken = await subscribe("broken");
+  const dead = await subscribe("dead");
+  const slow = await subscribe("slow");
+  failWith[broken.endpoint] = 500;
+  failWith[dead.endpoint] = 410;
+  const fakeSend = pushSender.send;
+  t.after(() => { pushSender.send = fakeSend; });
+  pushSender.send = async (sub, payload, options) => {
+    if (sub.endpoint === slow.endpoint) throw new Error("Socket timeout");
+    return fakeSend(sub, payload, options);
+  };
+  const jarvis = jarvisChat();
+  const lines = await pushLogs(t, async () => {
+    await notifyFromJarvis(jarvis.id, { title: "Deploy finished", message: "All green." });
+  });
+  const label = `notify "Deploy finished" (thread ${jarvis.id})`;
+  assert.ok(lines.includes(`[push] sending ${label} to 4 subscription(s)`), lines.join("\n"));
+  const id = (sub: { endpoint: string }) => subscriptionId(sub.endpoint).slice(0, 8);
+  assert.ok(lines.includes(`[push]   Google ${id(ok)}: sent`), lines.join("\n"));
+  assert.ok(lines.some((l) => l.startsWith(`[push]   Google ${id(broken)}: failed, 500`)), lines.join("\n"));
+  assert.ok(lines.includes(`[push]   Google ${id(dead)}: gone (410), removing the subscription`), lines.join("\n"));
+  assert.ok(lines.includes(`[push]   Google ${id(slow)}: failed, timed out after ${PUSH_TIMEOUT_MS / 1000}s`), lines.join("\n"));
+  assert.ok(lines.includes(`[push] ${label}: 1 sent, 2 failed, 1 removed`), lines.join("\n"));
+  for (const sub of [ok, broken, dead, slow]) {
+    for (const line of lines) {
+      assert.ok(!line.includes(sub.endpoint) && !line.includes("fcm.googleapis.com"), `endpoint in: ${line}`);
+      assert.ok(!line.includes(sub.keys.p256dh) && !line.includes(sub.keys.auth), `key in: ${line}`);
+    }
+  }
+});
+
+test("a push not sent is logged with why: no browser, push off, muted, or Jarvis already said it", async (t) => {
+  const jarvis = jarvisChat();
+  const thread = plainThread("Logger");
+
+  let lines = await pushLogs(t, async () => { await turn(thread.id, "Done."); });
+  assert.ok(lines.some((l) => l.startsWith(`[push] skipped done "Fix the flaky test" (thread ${thread.id}): no browser is subscribed`)), lines.join("\n"));
+
+  await subscribe("a");
+  process.env.GITBOT_PUSH = "0";
+  lines = await pushLogs(t, async () => { await notifyFromJarvis(jarvis.id, { title: "x", message: "y" }); });
+  assert.deepEqual(lines, [`[push] skipped notify "x" (thread ${jarvis.id}): push is off (GITBOT_PUSH=0)`]);
+  delete process.env.GITBOT_PUSH;
+
+  tab("watching", thread.id);
+  lines = await pushLogs(t, async () => { await turn(thread.id, "Done."); });
+  assert.ok(lines.some((l) => l.includes(`skipped done "Fix the flaky test" (thread ${thread.id}): muted, the user can already see it`)), lines.join("\n"));
+  clearPresence();
+
+  tab("watching", jarvis.id);
+  lines = await pushLogs(t, async () => { await notifyFromJarvis(jarvis.id, { title: "x", message: "y" }); });
+  assert.deepEqual(lines, [`[push] skipped notify "x" (thread ${jarvis.id}): muted, the user is watching the Jarvis thread`]);
+  clearPresence();
+
+  const bound = boundJarvisChat();
+  const store = await startJarvisTurn(bound.id, "notify me");
+  await notifyFromJarvis(bound.id, { title: "x", message: "y" });
+  lines = await pushLogs(t, async () => { await endTurn(store); });
+  assert.ok(lines.some((l) => l.includes(`(thread ${bound.id}): Jarvis sent its own notification this turn`)), lines.join("\n"));
 });

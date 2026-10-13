@@ -5,7 +5,7 @@ import { basename, join } from "path";
 import { parse as legacyParse } from "url";
 import webpush from "web-push";
 import { errorLine, latestLine, turnOutcome } from "./attention";
-import { dataDir, getBot, getThread } from "./bot-store";
+import { dataDir, getBot, getThread, isJarvisBot } from "./bot-store";
 import { askUserQuestionLabel, isAskUserQuestion } from "./ask-user-question";
 import { decide, liveTabs, onPresenceChange, parsePresence, PresenceLimitError, presenceClock, recordPresence } from "./presence";
 import { lastAssistantMessage } from "./reports";
@@ -22,6 +22,7 @@ import {
   type IRequest,
   type IResponse,
   type PermissionDumpItem,
+  type SessionStore,
 } from "./server-common";
 
 // Browser push notifications (Web Push). A browser that opted in from the UI
@@ -401,9 +402,12 @@ export interface PushPayload {
   tag: string;
   /** Where a click goes: the app, opened on the thread. */
   url: string;
-  kind: "done" | "failed" | "approval" | "question" | "test";
+  /** "notify": Jarvis chose to tell the user something (its notify tool). */
+  kind: "done" | "failed" | "approval" | "question" | "test" | "notify";
   threadId?: string;
   botId?: string;
+  /** For "notify": the Jarvis thread that sent it, when the click opens another. */
+  fromThreadId?: string;
 }
 
 /** The send call. A seam: tests swap it to record instead of reaching a push service. */
@@ -426,12 +430,49 @@ export interface SendResult {
  * of a turn's end an hour.
  */
 export function ttlSeconds(kind: PushPayload["kind"]): number {
-  return kind === "approval" || kind === "question" ? 24 * 60 * 60 : 60 * 60;
+  return kind === "approval" || kind === "question" || kind === "notify" ? 24 * 60 * 60 : 60 * 60;
 }
+
+/** How long one push service request may take before it is given up as failed. */
+export const PUSH_TIMEOUT_MS = 10_000;
 
 /** Sends one notification to every subscribed browser, dropping the ones that are gone. */
 export function sendToAll(payload: PushPayload): Promise<SendResult> {
   return sendTo(listSubscriptions(), payload);
+}
+
+// --- Logging ---
+// One line per notification sent or skipped, and one per browser it went to,
+// in the server's output. Never an endpoint (a secret: whoever has it can push
+// to that browser) or a key: a browser is its push service and the first
+// characters of its subscriptionId, as the settings list shows it.
+
+/** What a notification is, for the log: kind, title and the thread it opens. */
+export function pushLogLabel(payload: PushPayload): string {
+  const where = payload.threadId ? `thread ${payload.threadId}` : payload.tag;
+  return `${payload.kind} "${capLabel(payload.title ?? "")}" (${where})`;
+}
+
+/** A subscription for the log: no endpoint, no keys. */
+function subscriptionLogLabel(sub: StoredSubscription): string {
+  return `${pushServiceOf(sub.endpoint) ?? "unknown service"} ${subscriptionId(sub.endpoint).slice(0, 8)}`;
+}
+
+/** Logs a notification that was not sent, and why. */
+export function logPushSkipped(payload: PushPayload, reason: string): void {
+  console.log(`[push] skipped ${pushLogLabel(payload)}: ${reason}`);
+}
+
+export const SKIP_PUSH_OFF = "push is off (GITBOT_PUSH=0)";
+export const SKIP_NO_SUBSCRIPTIONS = "no browser is subscribed";
+export const SKIP_MUTED = "muted, the user can already see it (presence)";
+
+/** Why one send failed, short: the status and the push service's words, or the timeout. */
+function sendError(err: any): string {
+  if (/socket timeout/i.test(String(err?.message ?? ""))) return `timed out after ${PUSH_TIMEOUT_MS / 1000}s`;
+  const status = err?.statusCode;
+  const detail = String(err?.body || err?.message || err || "").trim().slice(0, 200);
+  return [status, detail].filter((x) => x !== undefined && x !== "").join(" ") || "unknown error";
 }
 
 async function sendTo(subs: StoredSubscription[], payload: PushPayload): Promise<SendResult> {
@@ -440,32 +481,47 @@ async function sendTo(subs: StoredSubscription[], payload: PushPayload): Promise
   // endpoint off the known push services, or one that web-push's url.parse()
   // would resolve to another host than WHATWG URL does (pushServiceOf checks both).
   subs = subs.filter((s) => pushServiceOf(s.endpoint));
-  if (!pushEnabled() || subs.length === 0) return result;
+  if (!pushEnabled()) {
+    logPushSkipped(payload, SKIP_PUSH_OFF);
+    return result;
+  }
+  if (subs.length === 0) {
+    logPushSkipped(payload, SKIP_NO_SUBSCRIPTIONS);
+    return result;
+  }
+  console.log(`[push] sending ${pushLogLabel(payload)} to ${subs.length} subscription(s)`);
   const { publicKey, privateKey } = vapidKeys();
   const options: webpush.RequestOptions = {
     TTL: ttlSeconds(payload.kind),
-    urgency: payload.kind === "approval" || payload.kind === "question" ? "high" : "normal",
+    urgency: payload.kind === "approval" || payload.kind === "question" || payload.kind === "notify" ? "high" : "normal",
     vapidDetails: { subject: vapidSubject(), publicKey, privateKey },
+    // A push service that hangs counts as a failure, not a wait without end:
+    // Jarvis's notify tool awaits this send.
+    timeout: PUSH_TIMEOUT_MS,
   };
   const body = JSON.stringify(payload);
   const gone: string[] = [];
   await Promise.all(
     subs.map(async (sub) => {
+      const who = subscriptionLogLabel(sub);
       try {
-        await pushSender.send(sub, body, options);
+        const res: any = await pushSender.send(sub, body, options);
         result.sent++;
+        console.log(`[push]   ${who}: sent${typeof res?.statusCode === "number" ? ` (${res.statusCode})` : ""}`);
       } catch (err: any) {
         const status = err?.statusCode;
         if (status === 404 || status === 410) {
           gone.push(sub.endpoint);
+          console.log(`[push]   ${who}: gone (${status}), removing the subscription`);
         } else {
           result.failed++;
-          console.error(`[push] ${new URL(sub.endpoint).host}: ${status ?? ""} ${err?.body || err?.message || err}`.trim());
+          console.error(`[push]   ${who}: failed, ${sendError(err)}`);
         }
       }
     }),
   );
   if (gone.length && removeSubscriptions(gone)) result.removed = gone.length;
+  console.log(`[push] ${pushLogLabel(payload)}: ${result.sent} sent, ${result.failed} failed, ${result.removed} removed`);
   return result;
 }
 
@@ -508,6 +564,12 @@ function threadOwner(threadId: string): string | null {
 /** Whether the user, where presence says they are, should hear about this now. */
 export function worthSending(payload: PushPayload, now = presenceClock.now()): boolean {
   if (payload.kind === "test") return true;
+  // Jarvis's own notification: muted only while the user is watching the
+  // Jarvis thread that sent it, where they see the call as it happens.
+  if (payload.kind === "notify") {
+    const from = payload.fromThreadId ?? payload.threadId;
+    return !liveTabs(now).some((t) => t.threadId === from && t.state === "watching");
+  }
   return decide(payload.kind, payload.threadId, liveTabs(now), now, threadOwner);
 }
 
@@ -694,6 +756,111 @@ export function approvalNotification(items: readonly PermissionDumpItem[]): Push
   };
 }
 
+// --- Jarvis's notify tool ---
+//
+// Jarvis pushes a notification when the user asked to be notified ("notify me
+// when X is done"). It goes out through sendToAll like every other push, to
+// every subscribed browser, under presence's rule for it (worthSending). A
+// Jarvis turn that sent one gets no "Jarvis finished" push of its own when it
+// ends: that would say it twice. A failed turn still does.
+
+export const NOTIFY_TITLE_MAX = 80;
+export const NOTIFY_MESSAGE_MAX = 300;
+
+/** The turn (store.turn) in which each Jarvis session last sent one; sessions are reused across turns. */
+const notifiedTurns = new WeakMap<SessionStore, number>();
+
+function clip(text: string, max: number): string {
+  const t = text.trim();
+  return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
+}
+
+/** The running turn of a thread, if one is in memory. */
+function runningStore(threadId: string): SessionStore | undefined {
+  for (const store of sessions.values()) if (store.threadId === threadId && store.status === "running") return store;
+  return undefined;
+}
+
+export interface JarvisNotifyArgs {
+  title: string;
+  message: string;
+  /** A thread the notification is about: a click opens it. Default: the Jarvis thread. */
+  threadId?: string;
+}
+
+export type JarvisNotifyResult =
+  | { ok: true; delivered: boolean; sent: number; note?: string }
+  | { ok: false; error: string };
+
+/** Builds the notification for Jarvis's notify tool, or says why it can't. */
+export function jarvisNotification(
+  jarvisThreadId: string,
+  args: JarvisNotifyArgs,
+): { ok: true; payload: PushPayload } | { ok: false; error: string } {
+  const owner = getThread(jarvisThreadId);
+  if (!owner || !isJarvisBot(getBot(owner.botId))) return { ok: false, error: "only a Jarvis thread can send a notification" };
+  const title = clip(String(args.title ?? ""), NOTIFY_TITLE_MAX);
+  const body = clip(String(args.message ?? ""), NOTIFY_MESSAGE_MAX);
+  if (!title) return { ok: false, error: "title is required" };
+  if (!body) return { ok: false, error: "message is required" };
+  let target = owner;
+  if (args.threadId && args.threadId !== owner.id) {
+    const thread = getThread(args.threadId);
+    if (!thread) return { ok: false, error: `no thread with id "${args.threadId}": use list_threads` };
+    if (isJarvisBot(getBot(thread.botId))) return { ok: false, error: "that is another Jarvis thread; leave threadId out to link this one" };
+    if (thread.kind === "setup") return { ok: false, error: "that is a bot's setup thread; leave threadId out" };
+    target = thread;
+  }
+  return {
+    ok: true,
+    payload: {
+      title,
+      body,
+      // One per Jarvis thread: a newer one replaces the older, and neither
+      // replaces a thread's own finished or needs-you notification.
+      tag: `jarvis-notify-${owner.id}`,
+      url: threadUrl(target.id, target.botId),
+      kind: "notify",
+      threadId: target.id,
+      botId: target.botId,
+      ...(target.id !== owner.id ? { fromThreadId: owner.id } : {}),
+    },
+  };
+}
+
+/** Jarvis's notify tool: sends its notification now, through sendToAll. */
+export async function notifyFromJarvis(jarvisThreadId: string, args: JarvisNotifyArgs): Promise<JarvisNotifyResult> {
+  const built = jarvisNotification(jarvisThreadId, args);
+  if (!built.ok) return built;
+  if (!pushEnabled()) {
+    logPushSkipped(built.payload, SKIP_PUSH_OFF);
+    return { ok: true, delivered: false, sent: 0, note: "push notifications are off on this gitbot (GITBOT_PUSH=0)" };
+  }
+  if (listSubscriptions().length === 0) {
+    logPushSkipped(built.payload, SKIP_NO_SUBSCRIPTIONS);
+    return { ok: true, delivered: false, sent: 0, note: "no browser has turned on notifications (Profile → Notifications), so nothing was sent" };
+  }
+  if (!worthSending(built.payload)) {
+    logPushSkipped(built.payload, "muted, the user is watching the Jarvis thread");
+    return { ok: true, delivered: false, sent: 0, note: "the user is watching this thread now, so it was not pushed; your reply reaches them" };
+  }
+  // The turn that called, fixed before the send: a slow push service, a Stop
+  // and a new message can put the same (reused) session on a later turn by
+  // the time it returns, and that turn must keep its own "finished" push.
+  const store = runningStore(jarvisThreadId);
+  const turnNumber = store?.turn;
+  const result = await sendToAll(built.payload);
+  if (store && result.sent > 0 && store.turn === turnNumber) notifiedTurns.set(store, turnNumber);
+  return result.sent > 0
+    ? { ok: true, delivered: true, sent: result.sent }
+    : { ok: true, delivered: false, sent: 0, note: "every subscribed browser's push service refused it" };
+}
+
+/** True when this Jarvis turn already pushed a notification with its notify tool. */
+export function turnNotified(store: SessionStore): boolean {
+  return notifiedTurns.get(store) === store.turn;
+}
+
 function send(payload: PushPayload | null): void {
   if (!payload) return;
   sendToAll(payload).catch((err) => console.error(`[push] ${err?.message ?? err}`));
@@ -721,26 +888,40 @@ export function watchPush(): () => void {
   const hold = (payload: PushPayload) => {
     cancelHeld(payload.tag);
     // Checked now and again after the hold: watched at either moment, it's not sent.
-    if (!worthSending(payload)) return;
+    if (!worthSending(payload)) {
+      logPushSkipped(payload, SKIP_MUTED);
+      return;
+    }
     const entry = { cancel: () => {} };
     held.set(payload.tag, entry);
     entry.cancel = pushTiming.schedule(() => {
       if (held.get(payload.tag) !== entry) return;
       held.delete(payload.tag);
       try {
-        if (!isShuttingDown() && worthSending(payload)) send(payload);
+        if (isShuttingDown()) return;
+        if (worthSending(payload)) send(payload);
+        else logPushSkipped(payload, `${SKIP_MUTED}, at the re-check after ${pushTiming.holdMs / 1000}s`);
       } catch (err: any) {
         console.error(`[push] thread ${payload.threadId}: ${err?.message ?? err}`);
       }
     }, pushTiming.holdMs);
   };
 
-  const offTurnEnd = onTurnEnd((_store, turn) => {
+  const offTurnEnd = onTurnEnd((store, turn) => {
     // Nothing here may throw into the emitter: the other listeners would miss the turn end.
     try {
-      if (listSubscriptions().length === 0) return;
       const payload = turnEndNotification(turn);
-      if (payload) hold(payload);
+      if (!payload) return;
+      if (listSubscriptions().length === 0) {
+        logPushSkipped(payload, SKIP_NO_SUBSCRIPTIONS);
+        return;
+      }
+      // Jarvis already told the user what mattered in this turn (its notify tool).
+      if (payload.kind === "done" && turnNotified(store)) {
+        logPushSkipped(payload, "Jarvis sent its own notification this turn");
+        return;
+      }
+      hold(payload);
     } catch (err: any) {
       console.error(`[push] thread ${turn.threadId}: ${err?.message ?? err}`);
     }
@@ -767,7 +948,11 @@ export function watchPush(): () => void {
         if (!items?.length) continue;
         const payload = approvalNotification(items);
         if (!worthSending(payload)) {
-          onMuted?.(tag);
+          // Logged the first time only: a re-check that finds it still muted is not news.
+          if (onMuted) {
+            logPushSkipped(payload, `${SKIP_MUTED}; sent later if still waiting once the thread is not watched`);
+            onMuted(tag);
+          }
           continue;
         }
         // Counted in this push: no longer owed one.
@@ -801,7 +986,17 @@ export function watchPush(): () => void {
     pendingByTag = byTag;
     // Answered (or gone with its turn): owed nothing.
     for (const key of muted.keys()) if (!now.has(key)) muted.delete(key);
-    if (fresh.size === 0 || isShuttingDown() || listSubscriptions().length === 0) return;
+    if (fresh.size === 0 || isShuttingDown()) return;
+    if (listSubscriptions().length === 0) {
+      for (const tag of fresh.keys()) {
+        try {
+          logPushSkipped(approvalNotification(byTag.get(tag)!), SKIP_NO_SUBSCRIPTIONS);
+        } catch (err: any) {
+          console.error(`[push] approvals ${tag}: ${err?.message ?? err}`);
+        }
+      }
+      return;
+    }
     // One push per thread with something new, counting all it has waiting.
     sendApprovals(fresh.keys(), (tag) => {
       for (const key of fresh.get(tag) ?? []) muted.set(key, tag);
