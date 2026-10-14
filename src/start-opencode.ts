@@ -214,6 +214,9 @@ export async function runAgent(store: SessionStore): Promise<void> {
       scheduleCleanup(store);
       return;
     }
+    // OpenCode has stored the prompt: its history carries it from here on,
+    // however the turn ends (a provider error arrives as session.error).
+    store.promptDelivered = true;
     // completion signaled via event stream (session.idle or session.status idle)
   } catch (err: any) {
     console.error("[query] error:", err.message);
@@ -399,6 +402,9 @@ async function resolveParentStore(client: any, sdkSessionId: string): Promise<Se
  */
 export function opencodeLifecycleEvent(store: SessionStore, type: string, props: any): void {
   if (type === "message.updated" && props?.info?.role === "user" && store.status === "running") {
+    // OpenCode has the turn's prompt, even if a provider error beats
+    // promptAsync's own answer here: its history carries it.
+    store.promptDelivered = true;
     delete store.opencodeStaleEnd;
     return;
   }

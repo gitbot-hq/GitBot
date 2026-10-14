@@ -20,8 +20,10 @@ import type { ScheduledTurn } from "./schedule-tag";
 /**
  * `at`: the message's transcript time, where the agent records one (claude-code).
  * `scheduled`: a user message a schedule sent, read back from its tag.
+ * `error`: not the agent's words but why a turn failed (its content says the
+ * same, as text): a scheduled run that failed before its agent started.
  */
-export type TranscriptMessage = { role: string; content: any[]; at?: string; scheduled?: ScheduledTurn };
+export type TranscriptMessage = { role: string; content: any[]; at?: string; scheduled?: ScheduledTurn; error?: string };
 
 /**
  * How each agent's transcript is read back — the same readers the thread view
@@ -35,10 +37,55 @@ export const transcriptLoaders: Record<BotAgent, (sdkSessionId: string, repoPath
 
 /** A thread's messages from its agent's own transcript; none before its first turn. */
 export async function loadThreadMessages(thread: Thread): Promise<TranscriptMessage[]> {
-  if (!thread.sdkSessionId) return [];
+  // No session yet (no turn has reached its agent): only failed runs to show.
+  if (!thread.sdkSessionId) return withFailedRuns(thread, []);
   // Older threads, or an agent this build does not know: Claude Code, as ever.
   const load = transcriptLoaders[thread.agent as BotAgent] ?? transcriptLoaders["claude-code"];
-  return withPendingPrompt(thread, await load(thread.sdkSessionId, thread.repoPath));
+  return withPendingPrompt(thread, withFailedRuns(thread, await load(thread.sdkSessionId, thread.repoPath)));
+}
+
+/** True when the thread's agent keeps a time on each transcript message (Claude Code). */
+export function transcriptHasTimes(thread: Pick<Thread, "agent">): boolean {
+  return (thread.agent ?? "claude-code") === "claude-code";
+}
+
+/**
+ * The transcript, with the scheduled runs that failed before their agent
+ * started (Thread.failedRuns) merged in by time: each its prompt, as a
+ * scheduled user message, then its error. The agent never saw them, so its
+ * transcript has none of them. One the transcript does have after all (a
+ * user message between its start and its end) is left out.
+ *
+ * A transcript without times (Codex, OpenCode) can't place them, so they
+ * are only ever shown last, while nothing newer has reached the agent: the
+ * next turn that does drops them for good (scheduler.ts,
+ * dropSupersededFailedRuns), and one that is running now, or ended in the
+ * moment before that, hides those older than it here.
+ */
+function withFailedRuns(thread: Thread, messages: TranscriptMessage[]): TranscriptMessage[] {
+  let runs = (Array.isArray(thread.failedRuns) ? thread.failedRuns : [])
+    .filter((r) => !messages.some((m) => m.role === "user" && m.at !== undefined && m.at >= r.at && m.at <= r.endedAt))
+    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  if (runs.length && !transcriptHasTimes(thread)) {
+    const delivered = deliveredPromptAt(thread.id);
+    if (delivered) runs = runs.filter((r) => r.at > delivered);
+  }
+  if (!runs.length) return messages;
+  const out: TranscriptMessage[] = [];
+  let next = 0;
+  const flushUntil = (at?: string) => {
+    while (next < runs.length && (at === undefined || runs[next].at < at)) {
+      const r = runs[next++];
+      out.push({ role: "user", content: r.prompt ? [{ type: "text", text: r.prompt }] : [], at: r.at, scheduled: r.scheduled });
+      out.push({ role: "assistant", content: [{ type: "text", text: r.error }], at: r.endedAt, error: r.error });
+    }
+  };
+  for (const m of messages) {
+    if (m.at !== undefined) flushUntil(m.at);
+    out.push(m);
+  }
+  flushUntil();
+  return out;
 }
 
 /**
@@ -75,6 +122,17 @@ function withPendingPrompt(thread: Thread, messages: TranscriptMessage[]): Trans
   }
   const scheduled = turn.scheduled as ScheduledTurn | undefined;
   return content.length ? [...messages, { role: "user", content, at: sentAt, ...(scheduled ? { scheduled } : {}) }] : messages;
+}
+
+/** When the thread's current (or last) turn in memory was sent, if its agent got the prompt. */
+function deliveredPromptAt(threadId: string): string | undefined {
+  let at: string | undefined;
+  for (const s of sessions.values()) {
+    if (s.threadId !== threadId || !s.promptDelivered) continue;
+    const sent = s.events.find((e) => e.type === "user_prompt")?.at;
+    if (typeof sent === "string" && (!at || sent > at)) at = sent;
+  }
+  return at;
 }
 
 /**
@@ -121,6 +179,8 @@ function cap(text: string, max: number): string {
 
 /** A transcript message as plain text: its words, and a short line per tool call. */
 function messageText(message: TranscriptMessage): string {
+  // Not the agent's words: a run that failed before its agent started.
+  if (message.error) return `[the run failed before the agent started: ${cap(message.error, MESSAGE_CHARS)}]`;
   const parts: string[] = [];
   for (const block of message.content ?? []) {
     if (block?.type === "text" && block.text) parts.push(String(block.text));
@@ -135,7 +195,8 @@ function messageText(message: TranscriptMessage): string {
 /** The last assistant message that has words in it, from a transcript. */
 function lastAssistantText(messages: TranscriptMessage[]): string | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role !== "assistant") continue;
+    // A failed run's error is not something the agent said.
+    if (messages[i].role !== "assistant" || messages[i].error) continue;
     const text = (messages[i].content ?? [])
       .filter((b) => b?.type === "text" && b.text)
       .map((b) => String(b.text))

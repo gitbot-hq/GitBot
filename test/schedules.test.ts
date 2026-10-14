@@ -15,7 +15,7 @@ import { addSubscription, pushSender, pushTiming, watchPush, type PushPayload } 
 import { createECDH, randomBytes } from "crypto";
 import { watchChildReports } from "../src/reports";
 import { Cron } from "croner";
-import { ERROR_BACKOFF_MS, LATE_GRACE_MS, MIN_REARM_MS, RATE_CAP_STARTS, RATE_RETRY_MS, RATE_WINDOW_MS, schedulerClock, startScheduler, stopScheduler, TIMER_CAP_MS } from "../src/scheduler";
+import { clipAtWord, ERROR_BACKOFF_MS, LATE_GRACE_MS, MIN_REARM_MS, RATE_CAP_STARTS, RATE_RETRY_MS, RATE_WINDOW_MS, schedulerClock, startScheduler, stopScheduler, TIMER_CAP_MS } from "../src/scheduler";
 import { countOccurrences, minGapMinutes, nextOccurrence } from "../src/schedule-time";
 import { createSchedule, getSchedule, listSchedules, nextRunsOf, SCHEDULES_MAX, SCHEDULES_PER_THREAD_MAX, updateSchedule, type Schedule } from "../src/schedules";
 import {
@@ -32,7 +32,8 @@ import {
 } from "../src/server-common";
 import { handleRequest } from "../src/server";
 import { claudeQuery, runAgent } from "../src/start-claude-code";
-import { readThreadTail } from "../src/thread-tools";
+import { opencodeLifecycleEvent } from "../src/start-opencode";
+import { readThreadTail, threadStatus, transcriptLoaders, type TranscriptMessage } from "../src/thread-tools";
 import { agentRunners, startTurn } from "../src/turns";
 
 const ALL_AGENTS = ["claude-code", "opencode", "codex"];
@@ -45,12 +46,14 @@ let runs: SessionStore[] = [];
 let nextSdkId = 0;
 /** Called inside startTurn, at the moment the agent would start. */
 let onRun: ((store: SessionStore) => void) | null = null;
+/** Off: the agent never binds a session, as when it never launches. */
+let bindOnRun = true;
 for (const agent of Object.keys(agentRunners) as SessionStore["agent"][]) {
   agentRunners[agent] = async (store) => {
     runs.push(store);
     onRun?.(store);
     // Reaches `init`, as Claude Code would: the thread is bound, and the turn runs on.
-    if (!store.sdkSessionId) {
+    if (!store.sdkSessionId && bindOnRun) {
       store.sdkSessionId = `sdk-sched-${++nextSdkId}`;
       if (store.threadId) bindSession(store.threadId, store.sdkSessionId);
     }
@@ -71,6 +74,7 @@ beforeEach(() => {
   now = Date.now();
   timer = null;
   onRun = null;
+  bindOnRun = true;
   rmSync(join(dataDir(), "schedules.json"), { force: true });
   startScheduler(ALL_AGENTS);
 });
@@ -2693,4 +2697,280 @@ test("pausing an ended schedule that holds a fire drops it and leaves it ended, 
 
   await endTurn(runs[0]);
   assert.equal(runs.length, 1, "neither dropped fire ran");
+});
+
+// --- Failed runs in the thread's history (05 follow-up) ---
+
+/** The transcript the thread's agent "has": stubbed, restored after the test. */
+function stubTranscript(t: TestContext, messages: () => TranscriptMessage[]): void {
+  const real = transcriptLoaders["claude-code"];
+  transcriptLoaders["claude-code"] = async () => messages();
+  t.after(() => { transcriptLoaders["claude-code"] = real; });
+}
+
+/** A turn that fails after its agent started: it said something first. */
+async function failAfterStart(store: SessionStore): Promise<void> {
+  store.promptDelivered = true;
+  emitEvent(store, "assistant", { content: "Looking…" });
+  await endTurn(store, "error");
+}
+
+const textOf = (m: TranscriptMessage) => (m.content ?? []).map((b: any) => b.text ?? "").join("");
+
+test("each scheduled run that fails before its agent starts shows in history with its error", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const thread = plainThread("Doomed");
+  const before = new Date(Date.now() - 60_000).toISOString();
+  let transcript: TranscriptMessage[] = [
+    { role: "user", content: [{ type: "text", text: "Reply: ready" }], at: before },
+    { role: "assistant", content: [{ type: "text", text: "ready" }], at: before },
+  ];
+  stubTranscript(t, () => transcript);
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+
+  await endTurn(await runNow(s.id), "error");
+  await endTurn(await runNow(s.id), "error");
+  const kept = getThread(thread.id)!.failedRuns!;
+  assert.equal(kept.length, 2);
+  assert.deepEqual(kept.map((r) => [r.scheduled.run, r.error, r.prompt]), [[1, "it broke", s.prompt], [2, "it broke", s.prompt]]);
+
+  const got = await serve("GET", `/threads/${thread.id}/messages`);
+  assert.equal(got.status, 200);
+  const messages: TranscriptMessage[] = got.body.messages;
+  // Each run its own scheduled message and its error, after what came before; run 2 not twice.
+  assert.deepEqual(
+    messages.map((m) => [m.role, textOf(m), m.scheduled?.run ?? null, m.error ?? null]),
+    [
+      ["user", "Reply: ready", null, null],
+      ["assistant", "ready", null, null],
+      ["user", s.prompt, 1, null],
+      ["assistant", "it broke", null, "it broke"],
+      ["user", s.prompt, 2, null],
+      ["assistant", "it broke", null, "it broke"],
+    ],
+  );
+
+  // A later turn the transcript has comes after them, by time.
+  const later = new Date(Date.now() + 1000).toISOString();
+  transcript = [...transcript, { role: "user", content: [{ type: "text", text: "and now?" }], at: later }];
+  const again: TranscriptMessage[] = (await serve("GET", `/threads/${thread.id}/messages`)).body.messages;
+  assert.deepEqual(again.map((m) => textOf(m)).slice(-3), [s.prompt, "it broke", "and now?"]);
+
+  // One the transcript does have after all (a user message between its start and its end) is not shown twice.
+  const first = kept[0];
+  transcript = [...transcript, { role: "user", content: [{ type: "text", text: s.prompt }], at: first.at, scheduled: { id: s.id, name: s.name, run: 1 } }];
+  const covered: TranscriptMessage[] = (await serve("GET", `/threads/${thread.id}/messages`)).body.messages;
+  assert.equal(covered.filter((m) => m.scheduled?.run === 1).length, 1);
+  assert.equal(covered.filter((m) => m.error).length, 1, "only run 2's error is gitbot's to show");
+});
+
+test("a run that reached its agent, and a user's own failed turn, are not kept as failed runs", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const thread = plainThread("Demo");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  await failAfterStart(await runNow(s.id));
+  assert.equal(getSchedule(s.id)!.consecutiveFailures, 1, "the agent-side failure still counts");
+  assert.ok(startTurn({ threadId: thread.id, prompt: "mine" }, ALL_AGENTS).ok);
+  await endTurn(runs.at(-1)!, "error");
+  await endTurn(await runNow(s.id), "done");
+  await stopTurn(await runNow(s.id));
+  assert.equal(getThread(thread.id)!.failedRuns, undefined);
+
+  // And PATCH /threads can't write them.
+  await serve("PATCH", `/threads/${thread.id}`, { failedRuns: [{ at: "x", endedAt: "x", prompt: "p", scheduled: { id: "a", name: "b", run: 1 }, error: "e" }] });
+  assert.equal(getThread(thread.id)!.failedRuns, undefined);
+});
+
+test("a thread keeps its last 20 failed runs", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const thread = plainThread("Doomed");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  for (let i = 0; i < 23; i++) {
+    await endTurn(await runNow(s.id), "error");
+    // Resumed each time it pauses, so it keeps running.
+    if (!getSchedule(s.id)!.enabled) await serve("PATCH", `/schedules/${s.id}`, { enabled: true });
+  }
+  const kept = getThread(thread.id)!.failedRuns!;
+  assert.equal(kept.length, 20);
+  assert.equal(kept[0].scheduled.run, 4);
+  assert.equal(kept[19].scheduled.run, 23);
+});
+
+test("a pausedReason cuts a long error at a word, with an ellipsis", async (t) => {
+  t.mock.method(console, "log", () => {});
+  assert.equal(clipAtWord("short", 10), "short");
+  assert.equal(clipAtWord("one two three four", 12), "one two…");
+  assert.equal(clipAtWord("/a/very/long/path/without/spaces", 10), "/a/very/l…");
+
+  const thread = plainThread("Doomed");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  const long = "Claude Code native binary at /usr/lib/node_modules/claude/cli exists but failed to launch. This usually means the binary does not match this system's libc, or its folder is gone";
+  for (let i = 0; i < 3; i++) {
+    const store = await runNow(s.id);
+    emitEvent(store, "error", { message: long });
+    store.status = "error";
+    notifyPermissionsChanged();
+    await settle();
+  }
+  const reason = getSchedule(s.id)!.pausedReason!;
+  assert.ok(reason.startsWith("paused after 3 failed runs: Claude Code native binary"), reason);
+  assert.ok(reason.endsWith("…"), reason);
+  const kept = reason.slice("paused after 3 failed runs: ".length, -1);
+  assert.ok(kept.length <= 160);
+  assert.ok(long.startsWith(kept) && long[kept.length] === " ", `cut at a word: ${kept}`);
+  // The kept failed run has the whole error.
+  assert.equal(getThread(thread.id)!.failedRuns!.at(-1)!.error, long);
+});
+
+test("a run now on a paused schedule logs it as paused, not ended", async (t) => {
+  const logs = t.mock.method(console, "log", () => {});
+  const thread = plainThread("Demo");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  await serve("PATCH", `/schedules/${s.id}`, { enabled: false });
+  await runNow(s.id);
+  const line = logs.mock.calls.map((c) => String(c.arguments[0])).find((l) => l.startsWith(`[schedules] fire ${s.id} run 1:`));
+  assert.ok(line?.endsWith("; the schedule is paused"), line);
+});
+
+// --- Failed runs: review fixes (05-fix-review) ---
+
+function codexThread(title?: string) {
+  return createThread("builtin-codex", folder(), title, "chat", "codex");
+}
+
+/** Codex/OpenCode transcripts: no times on the messages. Stubbed for both. */
+function stubUntimed(t: TestContext, messages: () => TranscriptMessage[]): void {
+  const real = { codex: transcriptLoaders.codex, opencode: transcriptLoaders.opencode };
+  transcriptLoaders.codex = async () => messages();
+  transcriptLoaders.opencode = async () => messages();
+  t.after(() => Object.assign(transcriptLoaders, real));
+}
+
+test("untimed transcripts: a failed run shows last only until a later turn reaches the agent", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const thread = codexThread("Codex");
+  let transcript: TranscriptMessage[] = [
+    { role: "user", content: [{ type: "text", text: "hi" }] },
+    { role: "assistant", content: [{ type: "text", text: "hello" }] },
+  ];
+  stubUntimed(t, () => transcript);
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  await endTurn(await runNow(s.id), "error");
+  assert.equal(getThread(thread.id)!.failedRuns?.length, 1);
+  let messages: TranscriptMessage[] = (await serve("GET", `/threads/${thread.id}/messages`)).body.messages;
+  assert.deepEqual(messages.map((m) => textOf(m)), ["hi", "hello", s.prompt, "it broke"], "the newest thing: shown last");
+
+  // The user's next turn reaches the agent: while it runs, the old run is hidden...
+  assert.ok(startTurn({ threadId: thread.id, prompt: "fixed now?" }, ALL_AGENTS).ok);
+  const store = runs.at(-1)!;
+  store.promptDelivered = true;
+  transcript = [...transcript, { role: "user", content: [{ type: "text", text: "fixed now?" }] }];
+  messages = (await serve("GET", `/threads/${thread.id}/messages`)).body.messages;
+  assert.deepEqual(messages.map((m) => textOf(m)), ["hi", "hello", "fixed now?"]);
+  assert.ok(!messages.some((m) => m.error));
+
+  // ...and once it ends it is gone for good: nothing pinned under newer turns.
+  transcript = [...transcript, { role: "assistant", content: [{ type: "text", text: "yes" }] }];
+  await endTurn(store, "done");
+  assert.equal(getThread(thread.id)!.failedRuns, undefined);
+  messages = (await serve("GET", `/threads/${thread.id}/messages`)).body.messages;
+  assert.deepEqual(messages.map((m) => textOf(m)), ["hi", "hello", "fixed now?", "yes"]);
+  // Jarvis reads the real last reply, not an old error.
+  const status = await threadStatus(thread.id);
+  assert.ok(status.ok && (status as any).lastMessage === "yes", JSON.stringify(status));
+
+  // A turn that failed before its agent started drops nothing.
+  await endTurn(await runNow(s.id), "error");
+  assert.ok(startTurn({ threadId: thread.id, prompt: "again" }, ALL_AGENTS).ok);
+  await endTurn(runs.at(-1)!, "error");
+  assert.equal(getThread(thread.id)!.failedRuns?.length, 1);
+});
+
+test("Claude Code transcripts keep failed runs in place after later turns", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const thread = plainThread("Timed");
+  stubTranscript(t, () => []);
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  await endTurn(await runNow(s.id), "error");
+  const store = await runNow(s.id);
+  store.promptDelivered = true;
+  await endTurn(store, "done");
+  assert.equal(getThread(thread.id)!.failedRuns?.length, 1, "timed: still placeable, so kept");
+  // Jarvis: the error is labelled as a failed run, and never "what it last said".
+  const tail = await readThreadTail(thread.id);
+  assert.ok(tail.ok);
+  assert.ok((tail as any).messages.some((m: any) => m.text.startsWith("[the run failed before the agent started: it broke")), JSON.stringify(tail));
+  const status = await threadStatus(thread.id);
+  assert.notEqual((status as any).lastMessage, "it broke");
+});
+
+test("a run whose agent had the prompt is never kept as a failed start, whatever its events (OpenCode resume)", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const thread = plainThread("Resumed");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  // A provider error after OpenCode stored the prompt: status, agent_error, no system event.
+  const store = await runNow(s.id);
+  store.promptDelivered = true;
+  emitEvent(store, "status", { status: "thinking" });
+  emitEvent(store, "agent_error", { message: "Rate limit exceeded" });
+  store.status = "error";
+  notifyPermissionsChanged();
+  await settle();
+  assert.equal(getThread(thread.id)!.failedRuns, undefined);
+  assert.equal(getSchedule(s.id)!.consecutiveFailures, 1, "still a failure");
+
+  // Before the prompt got there (promptAsync refused): kept, with the runner's own words.
+  const refused = await runNow(s.id);
+  emitEvent(refused, "agent_error", { message: "Provider auth failed" });
+  refused.status = "error";
+  notifyPermissionsChanged();
+  await settle();
+  assert.deepEqual(getThread(thread.id)!.failedRuns!.map((r) => r.error), ["Provider auth failed"]);
+});
+
+test("a thread with no session yet still shows its failed runs", async (t) => {
+  t.mock.method(console, "log", () => {});
+  bindOnRun = false;
+  const thread = plainThread("Never ran");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  await endTurn(await runNow(s.id), "error");
+  await endTurn(await runNow(s.id), "error");
+  assert.equal(getThread(thread.id)!.sdkSessionId, null);
+  const messages: TranscriptMessage[] = (await serve("GET", `/threads/${thread.id}/messages`)).body.messages;
+  assert.deepEqual(
+    messages.map((m) => [m.role, m.scheduled?.run ?? null, m.error ?? null]),
+    [["user", 1, null], ["assistant", null, "it broke"], ["user", 2, null], ["assistant", null, "it broke"]],
+  );
+});
+
+test("a run that sent system/init and then failed before delivery is kept (OpenCode's first turn)", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const thread = plainThread("First turn");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  // gitbot's OpenCode runner sends init on creating the session, then presetTools or promptAsync fails.
+  const store = await runNow(s.id);
+  emitEvent(store, "system", { subtype: "init", session_id: "ses_1" });
+  emitEvent(store, "agent_error", { message: "Prompt failed" });
+  emitEvent(store, "error", { message: "Prompt failed" });
+  store.status = "error";
+  notifyPermissionsChanged();
+  await settle();
+  assert.deepEqual(getThread(thread.id)!.failedRuns!.map((r) => [r.scheduled.run, r.error]), [[1, "Prompt failed"]]);
+});
+
+test("OpenCode's user message arriving marks the prompt delivered, ahead of promptAsync's answer", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const thread = plainThread("Raced");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  const store = await runNow(s.id);
+  assert.equal(store.promptDelivered, false);
+  // OpenCode stored the prompt, then the provider failed before promptAsync answered.
+  opencodeLifecycleEvent(store, "message.updated", { info: { id: "msg_u1", role: "user" } });
+  assert.equal(store.promptDelivered, true);
+  emitEvent(store, "agent_error", { message: "Rate limit exceeded" });
+  store.status = "error";
+  notifyPermissionsChanged();
+  await settle();
+  assert.equal(getThread(thread.id)!.failedRuns, undefined, "an ordinary failed turn: in OpenCode's history");
+  assert.equal(getSchedule(s.id)!.consecutiveFailures, 1);
 });

@@ -265,6 +265,14 @@ export interface SessionStore {
   abortRequested?: boolean;
   reportable?: boolean;
   /**
+   * Per turn, reset by startTurn: the agent has this turn's prompt, so its
+   * own transcript will carry it. Set by each runner once it hands the prompt
+   * over: Claude Code on the SDK's first message, Codex on its first event,
+   * OpenCode once promptAsync accepts it. A turn that ends without it failed
+   * before the agent started (scheduler.ts keeps such scheduled runs).
+   */
+  promptDelivered?: boolean;
+  /**
    * Counts this store's turns (startTurn bumps it), so a stop belongs to the
    * turn it stopped: an abort call still in flight when the next turn starts
    * must not end that one.
@@ -418,6 +426,8 @@ export interface EndedTurn {
   reportOwner?: string;
   /** The schedule that started this turn, if one did. */
   scheduled?: ScheduledTurn;
+  /** The agent had this turn's prompt (SessionStore.promptDelivered). */
+  promptDelivered: boolean;
   /**
    * store.turn as this turn ended. Sessions are reused across turns, and a
    * deferred turn (deferred-turns.ts) or the user may start the next one on
@@ -466,6 +476,7 @@ export function notifyPermissionsChanged(): void {
       reportable: !!store.reportable,
       reportOwner: store.reportOwner,
       ...(store.scheduled ? { scheduled: store.scheduled } : {}),
+      promptDelivered: !!store.promptDelivered,
       turnNumber: store.turn,
     }]);
   }

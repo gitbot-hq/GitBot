@@ -70,6 +70,7 @@ export const agentRunners: Record<SessionStore["agent"], (store: SessionStore) =
 function startTurnFlags(store: SessionStore, request: TurnRequest): void {
   store.turn += 1;
   store.abortRequested = false;
+  store.promptDelivered = false;
   store.reportable = !!request.reportable;
   // Like reportable: a reused store must never carry the last turn's chip.
   store.scheduled = request.scheduled;

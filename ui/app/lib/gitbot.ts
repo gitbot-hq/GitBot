@@ -116,6 +116,9 @@ export type HistoryMsg = {
   /** Set on a user message a schedule sent: the server reads it back from
    *  the agent's tag, so the text itself never carries it. */
   scheduled?: ScheduledTurn;
+  /** Not the agent's words but why a turn failed: a scheduled run that
+   *  failed before its agent started (the server keeps those). */
+  error?: string;
 };
 
 /** Tools the "Allow all edits" shortcut on an approval card covers

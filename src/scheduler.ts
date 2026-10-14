@@ -1,4 +1,5 @@
-import { getThread, type Thread } from "./bot-store";
+import { addFailedRun, clearFailedRuns, getThread, type Thread } from "./bot-store";
+import { transcriptHasTimes } from "./thread-tools";
 import { runningChildOf } from "./child-lock";
 import { errorLine, latestLine, turnOutcome } from "./attention";
 import { sendSchedulePausedPush } from "./push";
@@ -417,7 +418,7 @@ export function fireSchedule(
   const where = run.threadId ? ` on thread ${run.threadId}` : "";
   const why = run.error ? ` (${run.error})` : "";
   const late = run.delayedMs ? ` ${Math.round(run.delayedMs / 1000)}s late (rate cap)` : "";
-  const end = schedule.enabled || paused ? "" : "; the schedule has ended";
+  const end = schedule.enabled || paused ? "" : schedule.pausedReason ? "; the schedule is paused" : "; the schedule has ended";
   console.log(`[schedules] fire ${id} run ${runNumber}: ${run.outcome}${where}${late}${why}${end}`);
   if (paused) announcePause(schedule, paused);
   return { schedule, run };
@@ -694,13 +695,25 @@ function countResult(s: Schedule, result: "done" | "failed", error: string, gone
     paused = { reason: gone, body: `⏰ ${s.name} paused: ${gone}` };
   } else if (s.consecutiveFailures >= PAUSE_AFTER_FAILURES) {
     const runs = `paused after ${PAUSE_AFTER_FAILURES} failed runs`;
-    const line = latestLine(error);
+    const line = clipAtWord(latestLine(error, Infinity), PAUSED_LINE_MAX);
     paused = { reason: line ? `${runs}: ${line}` : runs, body: `⏰ ${s.name} ${runs}` };
   } else {
     return undefined;
   }
   pauseSchedule(s, paused.reason);
   return paused;
+}
+
+/** How much of the last error a pausedReason keeps. */
+const PAUSED_LINE_MAX = 160;
+
+/** `text` cut to at most `max` characters at a word boundary, with "…" when cut. */
+export function clipAtWord(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 1);
+  const space = cut.lastIndexOf(" ");
+  // A single long word (a path) is cut where it is.
+  return `${(space > max / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
 
 /** A run that failed to start counts as a failure; a busy skip does not. */
@@ -734,12 +747,19 @@ export function noteScheduledTurnEnd(turn: EndedTurn): void {
   const scheduled = turn.scheduled;
   if (!scheduled || isShuttingDown()) return;
   const outcome = turnOutcome(turn);
+  if (outcome === "failed") {
+    try {
+      keepFailedStart(turn, scheduled);
+    } catch (err: any) {
+      console.error(`[scheduler] thread ${turn.threadId}: could not keep a failed run: ${err?.message ?? err}`);
+    }
+  }
   let paused: Paused | undefined;
   const after = updateSchedule(scheduled.id, (s) => {
     const entry = [...s.history].reverse().find((h) => h.outcome === "started" && h.threadId === turn.threadId && !h.turnOutcome);
     if (entry) entry.turnOutcome = outcome;
     if (outcome === "stopped") return entry ? undefined : false;
-    paused = countResult(s, outcome, errorLine(turn));
+    paused = countResult(s, outcome, errorLine(turn, Infinity));
   });
   if (paused && after) {
     turn.schedulePaused = true;
@@ -747,8 +767,66 @@ export function noteScheduledTurnEnd(turn: EndedTurn): void {
   }
 }
 
+/** How much of a failed run's error is kept. */
+const FAILED_RUN_ERROR_MAX = 2000;
+
+/**
+ * A scheduled turn that failed before its agent started (its folder is gone,
+ * the agent would not launch): kept on the thread (Thread.failedRuns), since
+ * its prompt never reaches the transcript. Without it, history shows only the
+ * newest such prompt (the one still in memory), and never the error.
+ */
+function keepFailedStart(turn: EndedTurn, scheduled: NonNullable<EndedTurn["scheduled"]>): void {
+  if (!turn.threadId) return;
+  let i = turn.events.length - 1;
+  while (i >= 0 && turn.events[i].type !== "user_prompt") i--;
+  if (i < 0) return;
+  const sent = turn.events[i] as { at?: unknown; prompt?: unknown };
+  const after = turn.events.slice(i + 1);
+  // Decided by promptDelivered alone, which each runner sets once the agent
+  // has the prompt. Never by event types: gitbot sends some of the agent's
+  // (OpenCode's system/init on a new session) before the prompt goes out.
+  if (typeof sent.at !== "string" || turn.promptDelivered) return;
+  // What the turn said went wrong: its error, else what the agent's runner reported.
+  const said = (type: string) => {
+    for (let j = after.length - 1; j >= 0; j--) {
+      const e = after[j] as { type: string; message?: unknown };
+      if (e.type === type && typeof e.message === "string" && e.message.trim()) return e.message.trim();
+    }
+    return "";
+  };
+  let error = said("error") || said("agent_error");
+  error ||= errorLine(turn) || "The run failed before the agent started";
+  addFailedRun(turn.threadId, {
+    at: sent.at,
+    endedAt: new Date().toISOString(),
+    prompt: typeof sent.prompt === "string" ? sent.prompt : "",
+    scheduled: { id: scheduled.id, name: scheduled.name, run: scheduled.run },
+    error: error.length > FAILED_RUN_ERROR_MAX ? `${error.slice(0, FAILED_RUN_ERROR_MAX - 1)}…` : error,
+  });
+}
+
+/**
+ * A turn that reached its agent, on a thread whose transcript has no times
+ * (Codex, OpenCode): the failed runs kept before it can't be placed among
+ * the transcript's messages any more, so they go. Until then they are the
+ * newest thing on the thread, and history shows them last. (Claude Code
+ * transcripts carry times: theirs stay, merged in by time.)
+ */
+export function dropSupersededFailedRuns(turn: EndedTurn): void {
+  if (!turn.threadId || !turn.promptDelivered) return;
+  const thread = getThread(turn.threadId);
+  if (!thread?.failedRuns?.length || transcriptHasTimes(thread)) return;
+  clearFailedRuns(thread.id);
+}
+
 function watchScheduledTurns(): () => void {
   return onTurnEnd((_store, turn) => {
+    try {
+      dropSupersededFailedRuns(turn);
+    } catch (err: any) {
+      console.error(`[scheduler] thread ${turn.threadId}: ${err?.message ?? err}`);
+    }
     try {
       noteScheduledTurnEnd(turn);
     } catch (err: any) {

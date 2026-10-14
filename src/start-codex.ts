@@ -207,6 +207,8 @@ export async function runAgent(store: SessionStore): Promise<void> {
 
     try {
       for await (const ev of events) {
+        // Codex is up and has the prompt: its transcript will carry it.
+        store.promptDelivered = true;
         handleEvent(ev, store);
         if (ev.type === "turn.completed") receivedCompletion = true;
         if (ev.type === "turn.failed") {

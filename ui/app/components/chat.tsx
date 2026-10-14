@@ -106,6 +106,9 @@ type Msg = {
   /** A user message a schedule sent: its bubble wears the "Scheduled" chip.
    *  Only ever from the server's structured field, never from the text. */
   scheduled?: ScheduledTurn;
+  /** Why a turn failed, from history: drawn as the error line a live turn
+   *  shows, not as a bubble. */
+  error?: string;
 };
 
 let seq = 0;
@@ -852,6 +855,10 @@ export default function Chat({
   // Turn bookkeeping for the end-of-turn card.
   const turnStart = useRef(0);
   const pendingRun = useRef<{ secs: number; stopped: boolean } | null>(null);
+  /** The scheduled run the open stream is following, from its user_prompt;
+   *  null for any other turn. Only that run's error row in history may
+   *  stand in for the live error line. */
+  const followedRun = useRef<ScheduledTurn | null>(null);
   // Client-side overlays: tool records + receipts reattached to history
   // messages, keyed by thread then message index. Server history is
   // append-only, so indices stay valid across refetches; guards skip
@@ -1072,6 +1079,11 @@ export default function Chat({
     };
     const out: Msg[] = [];
     messages.forEach((m) => {
+      // A failed scheduled run's error: its own row, never merged.
+      if (typeof m.error === "string" && m.error) {
+        out.push({ id: `h${out.length}`, role: "assistant", segs: [], error: m.error, ...(m.at ? { at: m.at } : {}) });
+        return;
+      }
       const { role, segs } = flatten(m.role, m.content);
       if (segs.length === 0) return;
       const prev = out[out.length - 1];
@@ -1095,10 +1107,10 @@ export default function Chat({
         (s) => s.kind === "tools" || s.text.trim().length > 0,
       );
     }
-    const visible = out.filter((m) => m.segs.length > 0);
+    const visible = out.filter((m) => m.segs.length > 0 || m.error);
     visible.forEach((m, i) => {
       // A report is not the user's to resend.
-      if (m.role === "assistant" && visible[i - 1]?.role === "user" && !msgReport(visible[i - 1])) {
+      if (m.role === "assistant" && !m.error && visible[i - 1]?.role === "user" && !msgReport(visible[i - 1])) {
         m.retryPrompt = msgText(visible[i - 1]);
       }
     });
@@ -1550,6 +1562,8 @@ export default function Chat({
       setLive((prev) =>
         prev ? { ...prev, shown: liveTextLen(prev.segs) } : prev,
       );
+      // Read now: the next stream may open before the reload lands.
+      const followed = followedRun.current;
       reloadTimer.current = window.setTimeout(() => {
         if (threadRef.current !== tid) return;
         getMessages(tid)
@@ -1566,7 +1580,7 @@ export default function Chat({
               const idx = flat
                 .map((m, i) => ({ m, i }))
                 .reverse()
-                .find(({ m }) => m.role === "assistant")?.i;
+                .find(({ m }) => m.role === "assistant" && !m.error)?.i;
               if (idx != null) {
                 const list = overlays.current[tid] ?? [];
                 if (!list.some((e) => e.index === idx)) {
@@ -1582,6 +1596,13 @@ export default function Chat({
             applyOverlays(tid, flat);
             setLive(null);
             setMsgs(flat);
+            // The failed scheduled run this stream followed: history now
+            // shows its error, so the live line would say it twice. Only
+            // that run's own row counts, never an older one.
+            const [asked, failed] = flat.slice(-2);
+            if (followed && failed?.error && asked?.scheduled?.id === followed.id && asked.scheduled.run === followed.run) {
+              setTurnError(null);
+            }
             seedPlan(messages);
             maybeFlush(tid);
           })
@@ -1615,11 +1636,13 @@ export default function Chat({
     };
     // A replayed event the loaded history already shows.
     const shown = (ev: Event) => replayed(ev) && historyCoversRef.current;
+    followedRun.current = null;
     es.addEventListener("user_prompt", (ev) => {
+      const d = data(ev);
+      followedRun.current = isScheduled(d.scheduled) ? d.scheduled : null;
       // Live prompts are this client's own, already on screen; a replayed one
       // is shown only when no history covers it (a turn gitbot started).
       if (!replayed(ev) || historyCoversRef.current) return;
-      const d = data(ev);
       const files = Array.isArray(d.attachments) ? d.attachments.length : 0;
       const text = stripGitbotNotes(String(d.prompt ?? "")) || (files ? `_${files} attachment${files === 1 ? "" : "s"}_` : "");
       const scheduled = isScheduled(d.scheduled) ? d.scheduled : undefined;
@@ -2517,6 +2540,7 @@ export default function Chat({
           visibleMsgs.map((m, i) => {
             const report = msgReport(m);
             const before = approvalRowsOf(rowsBefore.get(i));
+            if (m.error) return <Fragment key={m.id}>{before}<p className="chat-error">{m.error}</p></Fragment>;
             if (report) return <Fragment key={m.id}>{before}<ReportRow report={report} botColor={botAvatar?.color} /></Fragment>;
             return (
             <Fragment key={m.id}>

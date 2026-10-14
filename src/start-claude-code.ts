@@ -177,6 +177,8 @@ export async function runAgent(store: SessionStore): Promise<void> {
     const taskCalls = new Map<string, { tool: string; input: unknown }>();
     try {
       for await (const msg of q) {
+        // Claude Code is up and has the prompt: its transcript will carry it.
+        store.promptDelivered = true;
         if (msg.type === "system" && msg.subtype === "init") {
           const newSdkId = (msg as any).session_id;
           if (newSdkId && !store.sdkSessionId) {

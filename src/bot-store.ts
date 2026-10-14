@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from "fs";
 import { basename, join } from "path";
 import { dataDir, readCollection, writeCollection } from "./json-store";
 import type { EffortLevel } from "./claude-models";
+import type { ScheduledTurn } from "./schedule-tag";
 
 // --- Types ---
 
@@ -142,9 +143,31 @@ export interface Thread {
   lastOutcome?: TurnOutcome;
   /** When someone last viewed the thread (POST /threads/:id/seen), on any device. */
   lastSeenAt?: string;
+  /**
+   * Scheduled turns that failed before their agent started (a missing
+   * folder, an agent that would not launch), oldest first, the last
+   * FAILED_RUNS_MAX. Their prompt never reaches the agent's transcript, so
+   * the thread's history would not show them, or why they failed: gitbot
+   * keeps them and history merges them in (thread-tools.ts). gitbot's own.
+   */
+  failedRuns?: FailedRun[];
   createdAt: string;
   updatedAt: string;
 }
+
+/** A scheduled turn that failed before its agent started (Thread.failedRuns). */
+export interface FailedRun {
+  /** When its prompt was sent (the user_prompt event's time). */
+  at: string;
+  /** When the turn ended. */
+  endedAt: string;
+  prompt: string;
+  scheduled: ScheduledTurn;
+  /** What went wrong, as the turn's error said it. */
+  error: string;
+}
+
+export const FAILED_RUNS_MAX = 20;
 
 /** One approval a Jarvis-owned child asked for: a row gitbot places in the Jarvis thread. */
 export interface ChildApproval {
@@ -514,6 +537,26 @@ export function setQueuedReports(id: string, edit: (queue: QueuedReport[]) => Qu
   else delete thread.queuedReports;
   writeCollection(THREADS_FILE, threads);
   return after;
+}
+
+/** Adds a failed run to a thread's failedRuns, keeping the last FAILED_RUNS_MAX. Not an edit: updatedAt stays. */
+export function addFailedRun(id: string, run: FailedRun): Thread | undefined {
+  const threads = readCollection<Thread>(THREADS_FILE);
+  const thread = threads.find((t) => t.id === id);
+  if (!thread) return undefined;
+  const runs = Array.isArray(thread.failedRuns) ? thread.failedRuns : [];
+  thread.failedRuns = [...runs, run].slice(-FAILED_RUNS_MAX);
+  writeCollection(THREADS_FILE, threads);
+  return thread;
+}
+
+/** Forgets a thread's failed runs. Not an edit: updatedAt stays. */
+export function clearFailedRuns(id: string): void {
+  const threads = readCollection<Thread>(THREADS_FILE);
+  const thread = threads.find((t) => t.id === id);
+  if (!thread?.failedRuns) return;
+  delete thread.failedRuns;
+  writeCollection(THREADS_FILE, threads);
 }
 
 /**
