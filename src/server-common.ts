@@ -7,6 +7,7 @@ import qrcode from "qrcode-terminal";
 import { serveUiFile, uiAvailable, uiFileFor } from "./static-ui";
 import { listRepos, cloneRepo, createFolder, listDir, readFile, getRepoDetails, browseDirs } from "./workspace";
 import { DEFAULT_CLAUDE_EFFORT, EFFORT_LEVELS, supportedClaudeModels } from "./claude-models";
+import type { ScheduledTurn } from "./schedule-tag";
 
 // --- Transport abstractions ---
 // These interfaces cover the exact surface area that route handlers use.
@@ -16,6 +17,8 @@ export interface IRequest {
   method: string;
   url: string;
   headers: Record<string, string | string[] | undefined>;
+  /** Who sent it, where the transport knows (http.IncomingMessage does). */
+  socket?: { remoteAddress?: string };
   on(event: "close", listener: () => void): this;
   on(event: "data", listener: (chunk: Buffer | string) => void): this;
   on(event: "end", listener: () => void): this;
@@ -276,6 +279,12 @@ export interface SessionStore {
   opencodeStaleEnd?: number;
   /** The Jarvis thread a reportable turn reports to, fixed when it starts. */
   reportOwner?: string;
+  /**
+   * Per turn, reset by startTurn: the schedule that started this turn, if one
+   * did. The agent gets it as a tag on its prompt (turn-prompt.ts); gitbot's
+   * own copies of the prompt stay clean.
+   */
+  scheduled?: ScheduledTurn;
 }
 
 /** The parts of a bot that shape the agent run. Mirrors fields on Bot in bot-store. */
@@ -355,6 +364,8 @@ export interface SessionSummaryItem {
   botId: string | null;
   /** The user stopped this session's turn: its "done" or "error" was not its own. */
   stopped: boolean;
+  /** The schedule that started the current (or last) turn, or null. */
+  scheduled: ScheduledTurn | null;
 }
 
 /**
@@ -385,6 +396,7 @@ export function buildSessionsDump(): SessionSummaryItem[] {
     reportTo: turnReportsTo(store),
     botId: store.botId ?? null,
     stopped: store.status !== "running" && turnStopped(store),
+    scheduled: store.scheduled ?? null,
   }));
 }
 
@@ -404,6 +416,8 @@ export interface EndedTurn {
   abortRequested: boolean;
   reportable: boolean;
   reportOwner?: string;
+  /** The schedule that started this turn, if one did. */
+  scheduled?: ScheduledTurn;
   /**
    * Set by the report watcher once this turn's report has started on its
    * Jarvis thread: Jarvis has been told, so the thread counts as seen.
@@ -435,6 +449,7 @@ export function notifyPermissionsChanged(): void {
       abortRequested: !!store.abortRequested,
       reportable: !!store.reportable,
       reportOwner: store.reportOwner,
+      ...(store.scheduled ? { scheduled: store.scheduled } : {}),
     }]);
   }
   const broadcast = () => permissionsEmitter.emit("update", buildPermissionsDump(), buildSessionsDump());

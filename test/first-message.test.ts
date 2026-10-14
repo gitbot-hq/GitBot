@@ -146,3 +146,33 @@ test("a later turn's prompt is shown before the transcript has it, and not twice
   const later = await serve("GET", `/threads/${thread.id}/messages`);
   assert.deepEqual(userTexts(later.body.messages), ["one", "two"]);
 });
+
+test("a scheduled first turn gives a clean auto title and preview", async () => {
+  const folder = project().folder;
+  const thread = createThread("builtin-claude-code", folder, undefined, "chat", "claude-code");
+  assert.equal(getThread(thread.id)!.titleIsAuto, true);
+  const scheduled = { id: "sch-first", name: "Hello", run: 1 };
+  assert.ok(startTurn({ threadId: thread.id, prompt: "Say hello in three words", scheduled }, ALL_AGENTS).ok);
+  const store = runs[0];
+  const t = getThread(thread.id)!;
+  assert.equal(t.title, "Say hello in three words");
+  assert.equal(t.preview, "Say hello in three words");
+  assert.equal(t.titleIsAuto, false);
+
+  // History: the prompt as written, with its schedule, before and after the transcript has it.
+  const early = await serve("GET", `/threads/${thread.id}/messages`);
+  assert.deepEqual(userTexts(early.body.messages), ["Say hello in three words"]);
+  assert.deepEqual(early.body.messages[0].scheduled, scheduled);
+  // What Claude Code writes is what the agent got: the tag first.
+  writePrompt(store, '<gitbot-schedule id="sch-first" name="Hello" run="1"/>\nSay hello in three words');
+  const later = await serve("GET", `/threads/${thread.id}/messages`);
+  assert.deepEqual(userTexts(later.body.messages), ["Say hello in three words"]);
+  assert.deepEqual(later.body.messages[0].scheduled, scheduled);
+  assert.ok(later.body.messages[0].at > store.events[0].at, "the transcript's own line, not the stand-in");
+
+  // The thread list says the same.
+  const listed = await serve("GET", `/threads?botId=builtin-claude-code`);
+  const row = listed.body.threads.find((x: any) => x.id === thread.id);
+  assert.equal(row.title, "Say hello in three words");
+  assert.ok(!JSON.stringify(row).includes("gitbot-schedule"));
+});

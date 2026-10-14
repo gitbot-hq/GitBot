@@ -8,6 +8,7 @@ import { isModelValue } from "./claude-models";
 import { loadTranscript as loadCodexTranscript } from "./start-codex";
 import { getSessionHistory as loadOpencodeHistory } from "./start-opencode";
 import { askLine } from "./ask-user-question";
+import type { ScheduledTurn } from "./schedule-tag";
 
 // Jarvis's read-only view of gitbot threads: list them, ask how one stands,
 // read its last few messages. Plain functions, so they can be tested without
@@ -16,8 +17,11 @@ import { askLine } from "./ask-user-question";
 
 // --- Transcripts ---
 
-/** `at`: the message's transcript time, where the agent records one (claude-code). */
-export type TranscriptMessage = { role: string; content: any[]; at?: string };
+/**
+ * `at`: the message's transcript time, where the agent records one (claude-code).
+ * `scheduled`: a user message a schedule sent, read back from its tag.
+ */
+export type TranscriptMessage = { role: string; content: any[]; at?: string; scheduled?: ScheduledTurn };
 
 /**
  * How each agent's transcript is read back — the same readers the thread view
@@ -69,7 +73,8 @@ function withPendingPrompt(thread: Thread, messages: TranscriptMessage[]): Trans
   for (const a of (turn.attachments as Array<{ url: string }> | undefined) ?? []) {
     content.push({ type: "image_url", url: a.url });
   }
-  return content.length ? [...messages, { role: "user", content, at: sentAt }] : messages;
+  const scheduled = turn.scheduled as ScheduledTurn | undefined;
+  return content.length ? [...messages, { role: "user", content, at: sentAt, ...(scheduled ? { scheduled } : {}) }] : messages;
 }
 
 /**

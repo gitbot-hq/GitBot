@@ -15,6 +15,7 @@ import { resolveThreadTurn } from "./bot-routes";
 import { getBot, getThread, setRunningFor, touchThread, updateThread } from "./bot-store";
 import { childLabel, clearPendingNote, pendingNoteFor, runningChildOf, withNote } from "./child-lock";
 import type { EffortLevel } from "./claude-models";
+import type { ScheduledTurn } from "./schedule-tag";
 
 // Starting a turn: what POST /chat does once it has read the request, and what
 // gitbot itself does when it starts a turn without one (Jarvis's start_thread).
@@ -39,6 +40,12 @@ export interface TurnRequest {
   report?: boolean;
   /** Jarvis started this turn: when it ends, it reports to the thread's Jarvis. */
   reportable?: boolean;
+  /**
+   * A schedule started this turn (scheduler.ts). Never reportable: it takes
+   * no pending note, leaves the thread's owner and running mark alone, and
+   * the agent alone sees it, as a tag on the prompt.
+   */
+  scheduled?: ScheduledTurn;
 }
 
 export type TurnResult =
@@ -64,11 +71,17 @@ function startTurnFlags(store: SessionStore, request: TurnRequest): void {
   store.turn += 1;
   store.abortRequested = false;
   store.reportable = !!request.reportable;
+  // Like reportable: a reused store must never carry the last turn's chip.
+  store.scheduled = request.scheduled;
   // Who the report goes to is fixed now, not when the turn ends.
   store.reportOwner = store.reportable && request.threadId ? getThread(request.threadId)?.reportTo : undefined;
   // Persisted, so a restart mid-turn can tell its Jarvis (restart-recovery.ts).
-  // Written either way: a turn that reports nowhere clears a stale mark.
-  if (request.threadId) setRunningFor(request.threadId, store.reportOwner);
+  // Written either way: a turn that reports nowhere clears a stale mark. A
+  // scheduled turn reports nowhere, so it does not mark the thread and does
+  // not clear a mark at its start. (When it ends, watchRunningMarks clears
+  // the thread's mark as for any turn. That is harmless: the busy check means
+  // no reportable turn is running there, so no live mark exists.)
+  if (request.threadId && !request.scheduled) setRunningFor(request.threadId, store.reportOwner);
 }
 
 /**
@@ -118,7 +131,7 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
   if (waitingOn) {
     return { ok: false, status: 409, message: `Waiting on ${childLabel(waitingOn.threadId)}: stop it or wait for its report` };
   }
-  const note = pendingNoteFor(threadId, request.report);
+  const note = pendingNoteFor(threadId, request.report, request.scheduled);
   const sent = withNote(note, prompt);
   // The turn's prompt, as gitbot records it. `at` is when it was sent: until
   // the agent's transcript has a user message from then on, the thread's
@@ -127,6 +140,7 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
     prompt: sent ?? '',
     at: new Date().toISOString(),
     ...(attachments?.length ? { attachments } : {}),
+    ...(request.scheduled ? { scheduled: request.scheduled } : {}),
   });
 
   let store = existingId ? sessions.get(existingId) : undefined;

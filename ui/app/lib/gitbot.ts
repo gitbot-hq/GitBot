@@ -105,11 +105,17 @@ export type AskRecord = {
   state?: "answered" | "none";
 };
 
+/** The schedule that sent a user message, and which of its runs it was. */
+export type ScheduledTurn = { id: string; name: string; run: number };
+
 export type HistoryMsg = {
   role: string;
   content: HistoryBlock[];
   /** The transcript's time for the message (ISO), where the agent keeps one. */
   at?: string;
+  /** Set on a user message a schedule sent: the server reads it back from
+   *  the agent's tag, so the text itself never carries it. */
+  scheduled?: ScheduledTurn;
 };
 
 /** Tools the "Allow all edits" shortcut on an approval card covers

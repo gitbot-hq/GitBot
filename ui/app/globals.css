@@ -819,6 +819,18 @@ pre {
   color: #f5f5f5;
 }
 
+/* What sent a user message when it was not typed: a schedule coming due. */
+.scheduled-chip {
+  display: block;
+  margin-bottom: var(--space-1);
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(245, 245, 245, 0.72);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* --- Plan panel --- */
 /* The agent's todo list, kept above the composer so the current step is always
    in view. Collapsed to a single line by default; the list it hides is capped

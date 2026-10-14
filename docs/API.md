@@ -94,6 +94,34 @@ Both accept `attachments: { url }[]`. Session `permissionMode` values are `ask-p
 
 Errors: `400` with `{ agentUnavailable: "<agent>" }` when the bot's agent is not installed; `409` with `{ setupRequired: true }` when the bot still needs setup; `409` when that session is already running.
 
+## Schedules
+
+A schedule sends a prompt into a thread at a given time, as a real turn: it goes through the same path as `POST /chat`, so it is streamed, stoppable and in the thread's history like any other. Stored in `<dataDir>/schedules.json` (`src/schedules.ts`) and fired by `src/scheduler.ts`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/schedules?threadId=<id>` | `{ schedules: Schedule[], owner: { pid, thisProcess: true } }`, optionally for one target thread |
+| `POST` | `/schedules` | Create one. Body: `{ name, prompt, when: { kind: "once", at }, target: { kind: "thread", threadId } }`. Returns the stored schedule |
+| `DELETE` | `/schedules/:id` | Delete it; a fire still due never happens. `{ ok: true }` |
+| `POST` | `/schedules/:id/run` | Fire it now. Returns `{ schedule, run }`. Counts as a run (`runCount`, `history`) and leaves `nextRunAt` as it was, unless that time has already come — then this is that fire. `400` for a schedule of a kind this build does not run |
+
+Only `when.kind: "once"` and `target.kind: "thread"` are supported so far; other kinds are refused with `400` "not supported yet". `400` too for: `at` not an ISO time with a zone (`Z` or `±hh:mm`), not a real date and time (`2026-02-30T10:00Z` is refused), or not in the future; an unknown thread or a setup thread; a `name` that is empty, over 60 characters, or contains `"`, `'`, `<` or `>`; a `prompt` that is empty or over 4000 characters; `attachments`; more than 20 *active* schedules on one thread (ones that can still fire: a fired or missed `once` is kept for its history but does not count), or 100 stored in all (every schedule counts). Every write is logged as `[schedules] <verb> <id> from <remote address>`, and a created schedule records it as `createdBy: { kind: "user", remote }`. The address is the connection's peer: behind a proxy, that is the proxy (the log adds any `X-Forwarded-For`, which is never trusted or stored). There is no access guard yet.
+
+**Scheduled turns always auto-approve.** Nobody is there to answer an approval when a schedule fires, so every scheduled turn runs with `permissionMode: "yolo"` (tools run without asking) and never in plan-only mode, whatever the bot's default and whatever permission mode the user picked for the thread in the composer. That pick is a browser setting and is left untouched: the user's own next message runs in it as before, and the chat never adopts a scheduled turn's mode as the thread's. `GET /sessions/:id/config` returns `scheduled` for a session whose current (or last) turn a schedule started. Jarvis threads run auto-approve anyway. A scheduled turn's model and effort are the thread's own, as for any turn.
+
+A schedule of a kind this build does not run (a `cron` or `interval`, or a `new-thread` target, written by a later build or by hand) is left exactly as it is: it never fires here and is logged once. A `schedules.json` that does not parse is read as no schedules (gitbot still starts), and is moved aside to `schedules.json.bad-<time>` before the next write, so nothing overwrites it.
+
+A schedule has `id`, `name`, `prompt`, `when`, `target`, `createdBy`, `enabled`, `overlap` (`queue`), `notify` (`always`), `runCount`, `consecutiveFailures`, `nextRunAt` (null once it will not fire again), `lastRunAt`, `history` (the last 20 runs) and `createdAt` / `updatedAt`. A run is `{ at, outcome, threadId?, turnOutcome?, error?, missedCount? }`, where `outcome` is:
+
+- `started`: its turn began; `turnOutcome` (`done`, `failed` or `stopped`) is added when it ends
+- `skipped-busy`: the thread had a turn running (or is a Jarvis thread waiting on a child), so nothing started
+- `failed-to-start`: the turn was refused (the thread is gone, its agent is not installed, its bot still needs to set up this machine, …); `error` says why
+- `missed`: its time passed while gitbot was not running. A missed `once` is never fired late
+
+A fire is claimed before its turn starts: `runCount` and `lastRunAt` are saved first (and a `once` is disabled, with `nextRunAt: null`), so a crash in between never fires it twice. A scheduled turn never reports to Jarvis, never changes who owns the thread, and does not take a Jarvis thread's pending note (that waits for the user's next message).
+
+**What the agent sees.** The agent's prompt starts with `<gitbot-schedule id="…" name="…" run="N"/>` on its own line. When history is read back, only a tag at the very start of a user message counts (never one quoted later in a message, or in a compaction summary). Nowhere else carries it: the thread's title and preview, the `user_prompt` event and `GET /threads/:id/messages` all have the prompt as written. Instead, `user_prompt` and the user message in history carry `scheduled: { id, name, run }`, and the chat draws "⏰ Scheduled · name · run N" on the bubble from that. The transcript side is Claude Code's only, for now: on Codex and OpenCode threads a schedule's turn runs untagged, so its message loses `scheduled` (and the chip) once it is read back from the agent's own transcript.
+
 ## Marketplace
 
 The Discover page reads from a separate service, the gitbot marketplace API, which indexes the
@@ -142,7 +170,7 @@ Events carry a `seq` field and an SSE `id:`, so a client that reconnects with `L
 
 | Event | Payload | Meaning |
 |---|---|---|
-| `user_prompt` | `prompt`, `attachments?` | The prompt that started the turn |
+| `user_prompt` | `prompt`, `attachments?`, `scheduled?` | The prompt that started the turn; `scheduled` when a [schedule](#schedules) sent it |
 | `system` | `subtype`, `data` or `session_id` | Agent session initialised |
 | `assistant` | `content` | Assistant text |
 | `tool_use` | `tool_name`, `tool_input` | The agent is calling a tool |

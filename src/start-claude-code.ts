@@ -15,7 +15,9 @@ import {
 } from "./server-common";
 import { bindSession } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcome } from "./bot-prompt";
-import { isJarvisTool, jarvisQueryOptions, stripJarvisReminder, withJarvisReminder } from "./jarvis";
+import { isJarvisTool, jarvisQueryOptions, stripJarvisReminder } from "./jarvis";
+import { agentPromptText } from "./turn-prompt";
+import { parseScheduleTag, type ScheduledTurn } from "./schedule-tag";
 import { contextUsage, tokensInContext, DEFAULT_CLAUDE_MODEL, type ContextUsage } from "./context-window";
 import { captureSupportedModels, DEFAULT_CLAUDE_EFFORT } from "./claude-models";
 import { ASK_USER_QUESTION, askRecord, askResult, askUserQuestionLabel, parseAskUserQuestion, type AskRecord } from "./ask-user-question";
@@ -52,8 +54,9 @@ export async function runAgent(store: SessionStore): Promise<void> {
 
     const lastUserEvent = [...store.events].reverse().find(e => e.type === "user_prompt");
     const shownText = (lastUserEvent?.prompt as string) ?? "";
-    // Jarvis's turn reminder goes to the agent, not into the shown message.
-    const promptText = store.botPreset?.jarvis ? withJarvisReminder(shownText) : shownText;
+    // The schedule tag and Jarvis's turn reminder go to the agent, not into
+    // the shown message. Used by the attachments branch below too.
+    const promptText = agentPromptText(store, shownText);
     const attachments = lastUserEvent?.attachments as Array<{ url: string }> | undefined;
 
     let promptParam: string | AsyncIterable<any>;
@@ -498,7 +501,7 @@ function projectDir(cwd: string): string {
 export async function loadTranscript(
   sessionId: string,
   cwd: string
-): Promise<{ role: string; content: any[]; at?: string }[]> {
+): Promise<{ role: string; content: any[]; at?: string; scheduled?: ScheduledTurn }[]> {
   const transcriptPath = join(projectDir(cwd), `${sessionId}.jsonl`);
 
   // Callers only ask for sessions that have already run, so a missing file means
@@ -510,7 +513,7 @@ export async function loadTranscript(
 
   // Each message carries its transcript time (`at`) when the line has one:
   // the UI places gitbot's own rows (a child's approvals) among them by time.
-  const messages: { role: string; content: any[]; at?: string }[] = [];
+  const messages: { role: string; content: any[]; at?: string; scheduled?: ScheduledTurn }[] = [];
   // AskUserQuestion rows by tool_use_id, so the answer in a later tool_result
   // lands on the row that asked.
   const asks = new Map<string, any>();
@@ -578,17 +581,31 @@ export async function loadTranscript(
       if (entry.type === "user" && entry.userType === "external" && !entry.isMeta && !notice) {
         const rawContent = entry.message?.content;
         const blocks: any[] = [];
+        // A scheduled turn's tag comes back as the message's `scheduled`;
+        // the text is shown without it. Only the message's opening text can
+        // carry it, and never a compaction summary, which quotes earlier
+        // messages (tags included) word for word.
+        let scheduled: ScheduledTurn | undefined;
+        let first = !entry.isCompactSummary;
+        const clean = (raw: string) => {
+          const text = stripJarvisReminder(raw);
+          if (!first) return text;
+          first = false;
+          const parsed = parseScheduleTag(text);
+          scheduled = parsed.scheduled;
+          return parsed.text;
+        };
         if (typeof rawContent === "string") {
-          const text = stripJarvisReminder(rawContent);
+          const text = clean(rawContent);
           if (text) blocks.push({ type: "text", text });
         } else if (Array.isArray(rawContent)) {
           for (const b of rawContent) {
-            const text = b.type === "text" && b.text ? stripJarvisReminder(b.text) : "";
+            const text = b.type === "text" && b.text ? clean(b.text) : "";
             if (text) blocks.push({ type: "text", text });
             else if (b.type === "image" && b.source?.url) blocks.push({ type: "image_url", url: b.source.url });
           }
         }
-        if (blocks.length) messages.push({ role: "user", content: blocks, ...at });
+        if (blocks.length) messages.push({ role: "user", content: blocks, ...at, ...(scheduled ? { scheduled } : {}) });
       }
 
       if (entry.type === "assistant") {

@@ -35,6 +35,8 @@ import { flattenAskAnswers, isAskUserQuestion, type AskAnswers } from "./ask-use
 import { recoverInterruptedChildren, watchRunningMarks } from "./restart-recovery";
 import { watchThreadActivity } from "./attention";
 import { handlePushRoutes, watchPush } from "./push";
+import { handleScheduleRoutes } from "./schedule-routes";
+import { startScheduler } from "./scheduler";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
 import { uiFileFor } from "./static-ui";
 import { EFFORT_LEVELS, isEffortLevel, isModelValue, MODEL_MAX_LENGTH } from "./claude-models";
@@ -93,6 +95,9 @@ export async function handleRequest(
 
     // Browser push notifications: /push/*
     if (await handlePushRoutes(req, res)) return;
+
+    // Schedules: /schedules
+    if (await handleScheduleRoutes(req, res, availableAgents)) return;
 
     // GET /sessions
     if (method === "GET" && path === "/sessions") {
@@ -170,6 +175,9 @@ export async function handleRequest(
         mode: store.mode ?? null,
         permissionMode: store.permissionMode,
         context: store.context ?? null,
+        // A schedule started the current (or last) turn: its mode is always
+        // auto-approve, and not the thread's pick (the chat must not adopt it).
+        scheduled: store.scheduled ?? null,
       });
       return;
     }
@@ -633,6 +641,11 @@ export async function start(network: string = "local", portOverride?: number, ca
   watchChildApprovals();
   // A Jarvis turn ending is news on its thread until someone views it.
   watchThreadActivity();
+  // Schedules fire as real turns on their threads; a once missed while gitbot
+  // was down is recorded, never fired late. Its turn-end listener runs after
+  // the report watcher's and before push's (test/push.test.ts pins this).
+  // Never throws: a broken schedules.json is logged, and gitbot boots.
+  startScheduler(availableAgents);
   // A turn ending, or an agent waiting on you, is a push to subscribed browsers (GITBOT_PUSH=0: off).
   // After watchChildReports: push reads the reportDelivered flag it sets on
   // the same turn, to stay quiet about a child whose report Jarvis has

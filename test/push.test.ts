@@ -774,6 +774,21 @@ test("server.ts registers the report watcher before push, so push sees reportDel
   assert.ok(reports < push, "watchChildReports is registered first");
 });
 
+test("server.ts starts the scheduler, and its turn-end listener, after reports and before push", () => {
+  const source = readFileSync(join(__dirname, "../src/server.ts"), "utf-8");
+  const start = source.slice(source.indexOf("export async function start("));
+  const reports = start.indexOf("watchChildReports(availableAgents)");
+  const scheduler = start.indexOf("startScheduler(availableAgents)");
+  const push = start.indexOf("watchPush()");
+  assert.ok(reports > 0 && scheduler > 0 && push > 0, "all three are called in start()");
+  assert.ok(reports < scheduler, "after the report watcher");
+  assert.ok(scheduler < push, "before push");
+  // startScheduler registers its listener synchronously, so call order is listener order.
+  const schedulerSource = readFileSync(join(__dirname, "../src/scheduler.ts"), "utf-8");
+  const body = schedulerSource.slice(schedulerSource.indexOf("export function startScheduler("));
+  assert.ok(body.indexOf("watchScheduledTurns()") > 0 && body.indexOf("watchScheduledTurns()") < body.indexOf("\n}\n"), "registered inside startScheduler");
+});
+
 /** A Jarvis thread with a child just started on it; the child's store is returned. */
 function jarvisWithChild() {
   const folder = realpathSync(mkdtempSync(join(tmpdir(), "gitbot-push-proj-")));

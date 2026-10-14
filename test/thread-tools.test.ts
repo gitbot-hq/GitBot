@@ -376,3 +376,38 @@ test("GET /threads/:id/messages: 404 for no thread, empty before a turn, the tra
   assert.deepEqual(full.body.messages, [text("user", "hi")]);
   assert.deepEqual(loaded, ["claude-code:sdk-route"]);
 });
+
+test("withPendingPrompt carries scheduled before the transcript has the prompt", async () => {
+  const thread = createThread(createBot({ name: "Sched" }).id, project().folder, undefined, "chat", "claude-code");
+  updateThread(thread.id, { sdkSessionId: "sdk-sched-pending" });
+  const scheduled = { id: "sch-9", name: "Ping", run: 4 };
+  const store = createSession("g-sched-pending", "claude-code", thread.repoPath, undefined, undefined, undefined, { threadId: thread.id });
+  store.sdkSessionId = "sdk-sched-pending";
+  const sentAt = "2026-10-14T12:00:00.000Z";
+  emitEvent(store, "user_prompt", { prompt: "Reply with exactly: pong", at: sentAt, scheduled });
+
+  // Only the earlier turn is in the transcript yet: the prompt is served in its place.
+  transcripts.set("sdk-sched-pending", [{ ...text("user", "earlier"), at: "2026-10-14T11:00:00.000Z" }]);
+  const early = await getMessages(thread.id);
+  assert.deepEqual(early.body.messages.at(-1), { role: "user", content: [{ type: "text", text: "Reply with exactly: pong" }], at: sentAt, scheduled });
+  assert.equal(early.body.messages[0].scheduled, undefined);
+  const tail = await readThreadTail(thread.id);
+  assert.ok(tail.ok);
+  assert.deepEqual(tail.messages.map((m) => m.text), ["earlier", "Reply with exactly: pong"]);
+
+  // Once the transcript has it (the loader parsed the tag back), it is shown once, from there.
+  const fromTranscript = { ...text("user", "Reply with exactly: pong"), at: "2026-10-14T12:00:01.000Z", scheduled };
+  transcripts.set("sdk-sched-pending", [{ ...text("user", "earlier"), at: "2026-10-14T11:00:00.000Z" }, fromTranscript]);
+  const later = await getMessages(thread.id);
+  assert.equal(later.body.messages.length, 2);
+  assert.deepEqual(later.body.messages[1], fromTranscript);
+
+  // A user's own turn has no scheduled.
+  sessions.delete(store.gitbotId);
+  const plain = createSession("g-sched-plain", "claude-code", thread.repoPath, undefined, undefined, undefined, { threadId: thread.id });
+  plain.sdkSessionId = "sdk-sched-pending";
+  emitEvent(plain, "user_prompt", { prompt: "thanks", at: "2026-10-14T13:00:00.000Z" });
+  const own = await getMessages(thread.id);
+  assert.ok(!("scheduled" in own.body.messages.at(-1)));
+  sessions.delete(plain.gitbotId);
+});

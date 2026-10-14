@@ -146,7 +146,15 @@ export interface ContextUsage {
 }
 
 export function getSessionConfig(sessionId: string) {
-  return req<{ permissionMode: SessionPermissionMode; mode?: string | null; model?: string | null; effort?: string | null; context?: ContextUsage | null }>(
+  return req<{
+    permissionMode: SessionPermissionMode;
+    mode?: string | null;
+    model?: string | null;
+    effort?: string | null;
+    context?: ContextUsage | null;
+    /** Set when a schedule started the session's current (or last) turn. */
+    scheduled?: import("./gitbot").ScheduledTurn | null;
+  }>(
     `/sessions/${encodeURIComponent(sessionId)}/config`,
   );
 }

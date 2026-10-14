@@ -1,6 +1,7 @@
 import { basename } from "path";
 import { appendNote, getBot, getThread, isJarvisBot, setRunningFor, updateThread, type Thread } from "./bot-store";
 import { sessions, turnReportsTo, type SessionStore } from "./server-common";
+import type { ScheduledTurn } from "./schedule-tag";
 
 // Lock and Stop. A Jarvis thread is locked exactly while one of its children
 // has a running turn that reports back to it. The lock is derived from the
@@ -73,10 +74,15 @@ export function addPendingNote(jarvisThreadId: string, note: string): void {
 
 /**
  * The note waiting for a user turn on a Jarvis thread, if any. A report is
- * not the user's message, so it never carries one.
+ * not the user's message, and neither is a scheduled turn, so neither ever
+ * carries one: the note waits for the user's own next message.
  */
-export function pendingNoteFor(threadId: string | undefined, report: boolean | undefined): string | undefined {
-  if (!threadId || report) return undefined;
+export function pendingNoteFor(
+  threadId: string | undefined,
+  report: boolean | undefined,
+  scheduled?: ScheduledTurn,
+): string | undefined {
+  if (!threadId || report || scheduled) return undefined;
   const thread = getThread(threadId);
   if (!thread?.pendingNote || !isJarvisBot(getBot(thread.botId))) return undefined;
   return thread.pendingNote;

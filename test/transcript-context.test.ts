@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { loadTranscriptContext } from "../src/start-claude-code";
+import { loadTranscript, loadTranscriptContext } from "../src/start-claude-code";
+import { withJarvisReminder } from "../src/jarvis";
 
 // The transcript lives under CLAUDE_CONFIG_DIR, read when the loader runs.
 const configDir = mkdtempSync(join(tmpdir(), "gitbot-ctx-"));
@@ -56,4 +57,48 @@ test("no transcript, or no usage in it, means no reading", async () => {
   assert.equal(await loadTranscriptContext("missing", cwd), null);
   transcript("s4", [{ type: "user", message: { content: "hi" } }]);
   assert.equal(await loadTranscriptContext("s4", cwd), null);
+});
+
+test("loadTranscript returns clean text plus scheduled for a tagged user message", async () => {
+  const tag = '<gitbot-schedule id="sch-1" name="Ping" run="2"/>';
+  const user = (content: unknown, at: string) =>
+    ({ type: "user", userType: "external", timestamp: at, message: { role: "user", content } });
+  transcript("tagged", [
+    // A user's own message: untouched, no scheduled.
+    user("hello", "2026-10-14T10:00:00.000Z"),
+    // A scheduled turn, as Claude Code records it: a string prompt.
+    user(`${tag}\nReply with exactly: pong`, "2026-10-14T10:01:00.000Z"),
+    // On a Jarvis thread: the tag first, the reminder last.
+    user(withJarvisReminder(`${tag}\nremind me to stretch`), "2026-10-14T10:02:00.000Z"),
+    // As content blocks (the attachments path).
+    user([{ type: "text", text: `${tag}\nlook at this` }, { type: "image", source: { type: "url", url: "https://x/y.png" } }], "2026-10-14T10:03:00.000Z"),
+    // A pending note, then the user's words; and a child's report header: no tag, untouched.
+    user(withJarvisReminder("[you stopped PR Validator on Trophy]\n\nhow did it go?"), "2026-10-14T10:04:00.000Z"),
+    user("[Tester · demo · thread t1 · done]\nAll green.", "2026-10-14T10:05:00.000Z"),
+    // A tag that is not well-formed stays as text.
+    user('<gitbot-schedule name="x"/>\nplain', "2026-10-14T10:06:00.000Z"),
+    // A user who pastes a tag mid-message gets no chip, and keeps their text.
+    user(`look at this: ${tag} odd`, "2026-10-14T10:07:00.000Z"),
+    // A compaction summary quotes earlier messages, tags and all: no chip, text kept.
+    { ...user(`${tag}\nThis session is being continued. Earlier: ${tag}`, "2026-10-14T10:08:00.000Z"), isCompactSummary: true },
+    // Content blocks: only the opening text block can carry it.
+    user([{ type: "text", text: "first" }, { type: "text", text: `${tag}\nsecond` }], "2026-10-14T10:09:00.000Z"),
+  ]);
+  const messages = (await loadTranscript("tagged", cwd)).filter((m) => m.role === "user");
+  const shown = messages.map((m) => [m.content.map((b: any) => b.text ?? b.url).join("|"), m.scheduled?.run ?? null]);
+  assert.deepEqual(shown, [
+    ["hello", null],
+    ["Reply with exactly: pong", 2],
+    ["remind me to stretch", 2],
+    ["look at this|https://x/y.png", 2],
+    ["[you stopped PR Validator on Trophy]\n\nhow did it go?", null],
+    ["[Tester · demo · thread t1 · done]\nAll green.", null],
+    ['<gitbot-schedule name="x"/>\nplain', null],
+    [`look at this: ${tag} odd`, null],
+    [`${tag}\nThis session is being continued. Earlier: ${tag}`, null],
+    [`first|${tag}\nsecond`, null],
+  ]);
+  assert.deepEqual(messages[1].scheduled, { id: "sch-1", name: "Ping", run: 2 });
+  assert.equal(messages[1].at, "2026-10-14T10:01:00.000Z");
+  assert.ok(!("scheduled" in messages[0]), "no field at all on a user's own message");
 });

@@ -58,6 +58,7 @@ import {
   type AskRecord,
   type HistoryMsg,
   type PermRequest,
+  type ScheduledTurn,
   type ThreadFull,
   type TodoItem,
 } from "../lib/gitbot";
@@ -101,6 +102,9 @@ type Msg = {
   /** When the message began (ISO): the transcript's time, or this client's
    *  for a live one. Approval rows are placed among messages by it. */
   at?: string;
+  /** A user message a schedule sent: its bubble wears the "Scheduled" chip.
+   *  Only ever from the server's structured field, never from the text. */
+  scheduled?: ScheduledTurn;
 };
 
 let seq = 0;
@@ -490,6 +494,21 @@ function SetupIntro({
         </button>
       )}
     </header>
+  );
+}
+
+/** A `scheduled` field as the server sends it: a name and a run number. */
+function isScheduled(v: unknown): v is ScheduledTurn {
+  const s = v as ScheduledTurn | undefined;
+  return !!s && typeof s === "object" && typeof s.name === "string" && Number.isFinite(s.run);
+}
+
+/** "⏰ Scheduled · Ping · run 1": what sent this message, on its bubble. */
+function ScheduledChip({ scheduled }: { scheduled: ScheduledTurn }) {
+  return (
+    <span className="scheduled-chip" title={`Sent by the schedule "${scheduled.name}". Scheduled runs always auto-approve tools.`}>
+      <span aria-hidden="true">⏰</span> Scheduled · {scheduled.name} · run {scheduled.run}
+    </span>
   );
 }
 
@@ -1052,14 +1071,16 @@ export default function Chat({
       const { role, segs } = flatten(m.role, m.content);
       if (segs.length === 0) return;
       const prev = out[out.length - 1];
-      // A child's report is its own row: never merged with a neighbour.
+      // A child's report is its own row, and a scheduled message its own
+      // bubble: neither is merged with a neighbour.
       const report = (s: Seg[]) => s[0]?.kind === "text" && !!parseReport(s[0].text);
+      const scheduled = role === "user" && isScheduled(m.scheduled) ? m.scheduled : undefined;
       const target =
-        prev && prev.role === role && !(role === "user" && (report(segs) || report(prev.segs)))
+        prev && prev.role === role && !(role === "user" && (report(segs) || report(prev.segs) || scheduled || prev.scheduled))
           ? prev.segs
           : (() => {
               const fresh: Seg[] = [];
-              out.push({ id: `h${out.length}`, role, segs: fresh, ...(m.at ? { at: m.at } : {}) });
+              out.push({ id: `h${out.length}`, role, segs: fresh, ...(m.at ? { at: m.at } : {}), ...(scheduled ? { scheduled } : {}) });
               return fresh;
             })();
       for (const s of segs) pushSeg(target, s);
@@ -1188,12 +1209,14 @@ export default function Chat({
           return;
         }
         // The session's mode is the truth: a child Jarvis started runs in
-        // its own, not the bot's default.
+        // its own, not the bot's default. Not a scheduled turn's, though: a
+        // schedule always runs in auto-approve, which is not the thread's
+        // pick, so adopting it would overwrite the user's own choice.
         const adoptMode = () =>
           getSessionConfig(sid)
-            .then(({ permissionMode, mode, model, context }) => {
+            .then(({ permissionMode, mode, model, context, scheduled }) => {
               if (threadRef.current !== tid) return;
-              rememberMode(tid, mode === "plan" ? "plan" : permissionMode);
+              if (!scheduled) rememberMode(tid, mode === "plan" ? "plan" : permissionMode);
               if (model !== undefined) {
                 setContextInfo(prev => ({
                   model: model ?? prev.model,
@@ -1565,7 +1588,8 @@ export default function Chat({
       const d = data(ev);
       const files = Array.isArray(d.attachments) ? d.attachments.length : 0;
       const text = stripGitbotNotes(String(d.prompt ?? "")) || (files ? `_${files} attachment${files === 1 ? "" : "s"}_` : "");
-      if (text) setMsgs((prev) => [...prev, { id: nid(), role: "user", segs: [{ kind: "text", text }], at: new Date().toISOString() }]);
+      const scheduled = isScheduled(d.scheduled) ? d.scheduled : undefined;
+      if (text) setMsgs((prev) => [...prev, { id: nid(), role: "user", segs: [{ kind: "text", text }], at: new Date().toISOString(), ...(scheduled ? { scheduled } : {}) }]);
     });
     es.addEventListener("assistant", (ev) => {
       if (shown(ev)) return;
@@ -2416,6 +2440,7 @@ export default function Chat({
               key={m.id}
               className={`${m.role === "user" ? "bubble user" : "bubble assistant"}${m.id.startsWith("m") ? " msg-in" : ""}`}
             >
+              {m.role === "user" && m.scheduled && <ScheduledChip scheduled={m.scheduled} />}
               <SegmentList
                 segs={m.segs}
                 keyPrefix={`${m.id}:`}

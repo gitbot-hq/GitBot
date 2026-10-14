@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
 import { basename, join } from "path";
-import { homedir } from "os";
+import { dataDir, readCollection, writeCollection } from "./json-store";
 import type { EffortLevel } from "./claude-models";
 
 // --- Types ---
@@ -155,46 +155,14 @@ export interface RunningMark {
 export type NewBot = Partial<Bot> & Pick<Bot, "name">;
 
 // --- Storage ---
-// Two JSON files under ~/.gitbot. Small collections, read fully and written atomically.
+// Two JSON files under ~/.gitbot, read and written through json-store.ts.
 // All access goes through this module so the backing store can be swapped later.
 
-// ~/.grass is the pre-rename location: keep using it when it exists and the new
-// directory does not, so an upgrade doesn't orphan someone's bots and threads.
-function resolveDataDir(): string {
-  if (process.env.GITBOT_DATA_DIR) return process.env.GITBOT_DATA_DIR;
-  if (process.env.GRASS_DATA_DIR) return process.env.GRASS_DATA_DIR;
-  const current = join(homedir(), ".gitbot");
-  const legacy = join(homedir(), ".grass");
-  if (!existsSync(current) && existsSync(legacy)) return legacy;
-  return current;
-}
-
-const DATA_DIR = resolveDataDir();
-
-/** The resolved gitbot data directory, shared by other modules that persist state. */
-export function dataDir(): string {
-  return DATA_DIR;
-}
+const DATA_DIR = dataDir();
+// Re-exported: modules that persist state have always found it here.
+export { dataDir };
 const BOTS_FILE = join(DATA_DIR, "bots.json");
 const THREADS_FILE = join(DATA_DIR, "threads.json");
-
-function readCollection<T>(file: string): T[] {
-  if (!existsSync(file)) return [];
-  try {
-    const parsed = JSON.parse(readFileSync(file, "utf-8"));
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (err: any) {
-    console.error(`[bot-store] could not read ${file}: ${err.message}`);
-    return [];
-  }
-}
-
-function writeCollection<T>(file: string, items: T[]): void {
-  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(items, null, 2), "utf-8");
-  renameSync(tmp, file);
-}
 
 const now = () => new Date().toISOString();
 
