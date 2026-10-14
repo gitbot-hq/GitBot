@@ -73,6 +73,7 @@ import { flattenAnswers } from "../lib/ask-ui";
 import { parseMarketplaceListing, type MarketplaceListing } from "../lib/marketplace-publish";
 import { presentSetupText, readSetupNeedsInput } from "../lib/setup";
 import { parseReport, type Report } from "../lib/report";
+import { flushQueue, recoverConflict, serverTurnWithin, type ServerTurn } from "../lib/flush-queue";
 import { placeApprovals, type ApprovalRow } from "../lib/approvals";
 import { stripGitbotNotes } from "../lib/gitbot-note";
 import type { ThreadSessionStatus } from "../lib/use-thread-sessions";
@@ -707,6 +708,9 @@ export default function Chat({
   // here and flush when the turn ends. One slot — a newer send replaces it.
   const [queue, setQueue] = useState<string | null>(null);
   const queueRef = useRef<string | null>(null);
+  // maybeFlush is asking the server what runs before it sends: a send now
+  // goes behind the queued message, not ahead of it.
+  const flushingRef = useRef(false);
   // Steering disabled — kept for reference.
   // Steer: abort the running turn and send this text the moment it ends.
   // const pendingSteer = useRef<string | null>(null);
@@ -1125,6 +1129,7 @@ export default function Chat({
     liveIdRef.current = null;
     liveTextRef.current = "";
     turnActiveRef.current = false;
+    flushingRef.current = false;
     if (stopTimer.current) {
       window.clearTimeout(stopTimer.current);
       stopTimer.current = null;
@@ -1194,59 +1199,73 @@ export default function Chat({
    */
   function rejoin(tid: string, lookup: string, awaitStatus: boolean, fresh = false) {
     getSessionStatus(lookup)
-      .then(({ streaming, gitbotId, seq, sdkSessionId, pending }) => {
-        // The user may have started a turn of their own meanwhile: it wins.
-        if (threadRef.current !== tid || turnActiveRef.current) return;
-        const sid = gitbotId ?? lookup;
-        // With a session id the transcript is on disk and history shows the
-        // turn so far; without one, the replayed events are all there is.
-        const historyCovers = !!sdkSessionId && !fresh;
-        if (awaitStatus && (historyCovers || !streaming)) loadHistory(tid, true);
-        // Caught too late: the turn already ended, so history has all of it.
-        if (fresh && !streaming) {
-          loadHistory(tid, true, true);
-          onTurnDone();
-          return;
-        }
-        // The session's mode is the truth: a child Jarvis started runs in
-        // its own, not the bot's default. Not a scheduled turn's, though: a
-        // schedule always runs in auto-approve, which is not the thread's
-        // pick, so adopting it would overwrite the user's own choice.
-        const adoptMode = () =>
-          getSessionConfig(sid)
-            .then(({ permissionMode, mode, model, context, scheduled }) => {
-              if (threadRef.current !== tid) return;
-              if (!scheduled) rememberMode(tid, mode === "plan" ? "plan" : permissionMode);
-              if (model !== undefined) {
-                setContextInfo(prev => ({
-                  model: model ?? prev.model,
-                  context: context ?? prev.context,
-                }));
-              }
-            })
-            .catch(() => {});
-        if (!streaming) {
-          if (!permissionModesRef.current[tid]) adoptMode();
-          return;
-        }
-        pendingFilter.current = pending ?? [];
-        catchupRef.current = true;
-        replaySeqRef.current = seq ?? Number.MAX_SAFE_INTEGER;
-        historyCoversRef.current = historyCovers;
-        sessionRef.current = sid;
-        turnActiveRef.current = true;
-        // Seen from its start: it gets the end-of-turn card like the user's own.
-        if (fresh) turnStart.current = Date.now();
-        setStreaming(true);
-        setActivity("Thinking…");
-        if (awaitStatus && !historyCovers) setLoading(false);
-        openStream(sid);
-        adoptMode();
-      })
+      .then((status) => joinWith(tid, lookup, awaitStatus, fresh, status))
       .catch(() => {
         // No session (never run, or gone after a restart): history is all.
         if (awaitStatus && threadRef.current === tid) loadHistory(tid, true);
       });
+  }
+
+  /**
+   * rejoin, with the server's status answer already in hand. `afterTurnEnd`:
+   * the chat's own turn just ended and its history was read after this turn
+   * began, so what is on screen may already show the start of it (its
+   * prompt at least). History is read again, after this answer, and covers
+   * the replay, exactly as when a running thread is opened: nothing shows
+   * twice. The turn still counts as seen from its start.
+   */
+  function joinWith(tid: string, lookup: string, awaitStatus: boolean, fresh: boolean, status: ServerTurn, afterTurnEnd = false) {
+    const { streaming, gitbotId, seq, sdkSessionId, pending } = status;
+    // The user may have started a turn of their own meanwhile: it wins.
+    if (threadRef.current !== tid || turnActiveRef.current) return;
+    const sid = gitbotId ?? lookup;
+    // With a session id the transcript is on disk and history shows the
+    // turn so far; without one, the replayed events are all there is.
+    const historyCovers = !!sdkSessionId && (!fresh || afterTurnEnd);
+    if (awaitStatus && (historyCovers || !streaming)) loadHistory(tid, true);
+    // No forced scroll: a reader scrolled up stays put; one at the bottom
+    // stays stuck there as the history lands (useStickToBottom).
+    else if (afterTurnEnd && historyCovers && streaming) loadHistory(tid, false, true);
+    // Caught too late: the turn already ended, so history has all of it.
+    if (fresh && !streaming) {
+      loadHistory(tid, true, true);
+      onTurnDone();
+      return;
+    }
+    // The session's mode is the truth: a child Jarvis started runs in
+    // its own, not the bot's default. Not a scheduled turn's, though: a
+    // schedule always runs in auto-approve, which is not the thread's
+    // pick, so adopting it would overwrite the user's own choice.
+    const adoptMode = () =>
+      getSessionConfig(sid)
+        .then(({ permissionMode, mode, model, context, scheduled }) => {
+          if (threadRef.current !== tid) return;
+          if (!scheduled) rememberMode(tid, mode === "plan" ? "plan" : permissionMode);
+          if (model !== undefined) {
+            setContextInfo(prev => ({
+              model: model ?? prev.model,
+              context: context ?? prev.context,
+            }));
+          }
+        })
+        .catch(() => {});
+    if (!streaming) {
+      if (!permissionModesRef.current[tid]) adoptMode();
+      return;
+    }
+    pendingFilter.current = pending ?? [];
+    catchupRef.current = true;
+    replaySeqRef.current = seq ?? Number.MAX_SAFE_INTEGER;
+    historyCoversRef.current = historyCovers;
+    sessionRef.current = sid;
+    turnActiveRef.current = true;
+    // Seen from its start: it gets the end-of-turn card like the user's own.
+    if (fresh || afterTurnEnd) turnStart.current = Date.now();
+    setStreaming(true);
+    setActivity("Thinking…");
+    if (awaitStatus && !historyCovers) setLoading(false);
+    openStream(sid);
+    adoptMode();
   }
 
   // A turn gitbot starts on the open thread (a child's report waking Jarvis)
@@ -1452,34 +1471,49 @@ export default function Chat({
   }
 
   /** A turn just ended: start whatever is waiting in the queue as the next
-   *  turn on the same thread. */
+   *  turn on the same thread — unless gitbot has started one there itself
+   *  (a queued report, a schedule): then join that first, and the queued
+   *  message follows when it ends (lib/flush-queue.ts). The server is asked
+   *  on every turn end, queue or not: the status stream alone can miss a
+   *  turn that starts the moment this one ends (its "done" and "running"
+   *  can reach React in one render). */
   function maybeFlush(tid: string | null) {
     if (!tid || threadRef.current !== tid) return;
     turnActiveRef.current = false;
-    // Steering disabled — the queue is the only source of the next turn.
-    // const next = pendingSteer.current ?? queueRef.current;
-    // pendingSteer.current = null;
-    const next = queueRef.current;
-    if (queueRef.current) {
-      queueRef.current = null;
-      setQueue(null);
-    }
-    if (next && lockRef.current) {
-      // The turn that just ended started a child: the thread is locked, so
-      // the follow-up goes back to the draft for after the child.
-      restoreToDraft(next);
-    } else if (next) {
-      startTurn(next);
-      return;
-    }
-    // A turn gitbot started while this one was closing (a child's report):
-    // the chat was busy then, so join it now — or, if it has ended
-    // meanwhile, rejoin reads it from history.
+    flushingRef.current = true;
+    void flushQueue({
+      queued: () => (threadRef.current === tid ? queueRef.current : null),
+      take: () => {
+        queueRef.current = null;
+        setQueue(null);
+      },
+      // The turn that just ended may have started a child: the thread is
+      // locked, so the follow-up goes back to the draft for after the child.
+      locked: () => !!lockRef.current,
+      free: () => threadRef.current === tid && !turnActiveRef.current,
+      serverTurn: () => serverTurnWithin(() => getSessionStatus(tid)),
+      join: (turn) => joinServerTurn(tid, turn),
+      send: (text) => startTurn(text),
+      restore: restoreToDraft,
+    }).then((result) => {
+      flushingRef.current = false;
+      if (result !== "none" && result !== "restored") return;
+      // Nothing running now. A turn gitbot started and finished while this
+      // one was closing was never on screen: read it from history.
+      const seen = serverSeen.current;
+      if (seen.tid === tid && !seen.joined && threadRef.current === tid && !turnActiveRef.current) {
+        seen.joined = true;
+        loadHistory(tid, true, true);
+        onTurnDone();
+      }
+    });
+  }
+
+  /** Follows a turn gitbot started on this thread, from a status answer in hand. */
+  function joinServerTurn(tid: string, turn: ServerTurn) {
     const seen = serverSeen.current;
-    if (seen.tid === tid && !seen.joined) {
-      seen.joined = true;
-      rejoin(tid, tid, false, true);
-    }
+    if (seen.tid === tid) seen.joined = true;
+    joinWith(tid, tid, false, true, turn, true);
   }
 
   function finish(refetch: boolean, stopped = false) {
@@ -1720,6 +1754,10 @@ export default function Chat({
       enqueue(prompt.trim());
       return;
     }
+    if (flushingRef.current) {
+      enqueue(mergeQueued(queueRef.current, prompt.trim()));
+      return;
+    }
     // Locked, or a gitbot-started turn about to be joined: the draft waits.
     if (lockRef.current || serverBusyRef.current) return;
     startTurn(prompt);
@@ -1739,7 +1777,12 @@ export default function Chat({
   async function startTurn(prompt: string) {
     // No streaming check: callers own that (sendPrompt enqueues mid-turn,
     // maybeFlush only runs once the previous turn fully ended).
-    if ((!thread && !newThread) || !prompt.trim()) return;
+    // The thread now, not as this render saw it: maybeFlush calls in from a
+    // turn's stream, whose closure can predate a new thread's adoption, and
+    // a follow-up queued during a new thread's first turn must not start yet
+    // another new thread.
+    const current = threadRef.current;
+    if ((!current && !thread && !newThread) || !prompt.trim()) return;
     lastPrompt.current = prompt;
     catchupRef.current = false;
     pendingFilter.current = null;
@@ -1767,7 +1810,7 @@ export default function Chat({
     forceBottom();
     const epoch = viewEpoch.current;
     const startKey = viewRef.current;
-    let tid = thread?.id ?? null;
+    let tid = current ?? thread?.id ?? null;
     try {
       if (!tid) {
         // First send of a new thread: only now is it stored.
@@ -1823,10 +1866,47 @@ export default function Chat({
     } catch (e) {
       if (tid ? threadRef.current !== tid : viewEpoch.current !== epoch) return;
       if (e instanceof ApiError && e.status === 409) {
-        // Refused, never run (a locked Jarvis thread, or a turn already
-        // running): the words go back to the composer, not into thin air.
-        unsend(msgId, prompt);
-        setTurnError(errText(e));
+        // Refused, never run. A turn gitbot started that got in first: wait
+        // for it in the queue and follow it live. Anything else (a locked
+        // Jarvis thread): the words go back to the composer, not into thin air.
+        const conflictTid = tid;
+        // The view as the send was refused: leaving the thread and coming
+        // back is a new view, whose own rejoin may already follow the turn.
+        const conflictEpoch = viewEpoch.current;
+        void recoverConflict({
+          locked: () => !!lockRef.current,
+          here: () => threadRef.current === conflictTid && viewEpoch.current === conflictEpoch,
+          serverTurn: () => conflictTid ? serverTurnWithin(() => getSessionStatus(conflictTid)) : Promise.resolve(null),
+          requeue: () => {
+            const queued = queueRef.current;
+            takeBack(msgId);
+            const text = mergeQueued(prompt, queued ?? "");
+            queueRef.current = text;
+            setQueue(text);
+          },
+          join: (turn) => { if (conflictTid) joinServerTurn(conflictTid, turn); },
+          giveBack: () => {
+            unsend(msgId, prompt);
+            setTurnError(errText(e));
+          },
+        }).then((result) => {
+          // The user moved on while the server was asked: the words are kept,
+          // never lost. Back on this thread already (a new view): queued if
+          // that view follows a turn, else in the composer. Elsewhere: in
+          // this thread's draft, for when they return.
+          if (result !== "left" || !conflictTid) return;
+          if (threadRef.current === conflictTid) {
+            if (turnActiveRef.current) {
+              const text = mergeQueued(prompt, queueRef.current ?? "");
+              queueRef.current = text;
+              setQueue(text);
+            } else {
+              restoreToDraft(prompt);
+            }
+          } else {
+            drafts.current[conflictTid] = mergeQueued(prompt, drafts.current[conflictTid] ?? "");
+          }
+        });
         return;
       }
       turnActiveRef.current = false;
@@ -1836,9 +1916,8 @@ export default function Chat({
     }
   }
 
-  /** A send that never reached the server: take its bubble back and return
-   *  the text, plus anything queued behind it, to the composer. */
-  function unsend(msgId: string, prompt: string) {
+  /** A send the server refused: the chat is out of the turn, and its bubble goes. */
+  function takeBack(msgId: string) {
     if (stopTimer.current) {
       window.clearTimeout(stopTimer.current);
       stopTimer.current = null;
@@ -1848,6 +1927,12 @@ export default function Chat({
     setStreaming(false);
     setActivity(null);
     setMsgs((prev) => prev.filter((m) => m.id !== msgId));
+  }
+
+  /** A send that never reached the server: take its bubble back and return
+   *  the text, plus anything queued behind it, to the composer. */
+  function unsend(msgId: string, prompt: string) {
+    takeBack(msgId);
     const q = queueRef.current;
     queueRef.current = null;
     setQueue(null);

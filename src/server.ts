@@ -28,7 +28,8 @@ import { initAgent as initCodex, listSessions as listCodexSessions, loadTranscri
 import { handleBotRoutes } from "./bot-routes";
 import { startTurn } from "./turns";
 import { releaseToUser } from "./send-to-thread";
-import { watchChildReports } from "./reports";
+import { deliverQueuedReports, watchChildReports } from "./reports";
+import { watchDeferredTurns } from "./deferred-turns";
 import { noteChildStopped } from "./child-lock";
 import { answerChildApprovals, watchChildApprovals } from "./child-approvals";
 import { flattenAskAnswers, isAskUserQuestion, type AskAnswers } from "./ask-user-question";
@@ -651,6 +652,10 @@ export async function start(network: string = "local", portOverride?: number, ca
   // the same turn, to stay quiet about a child whose report Jarvis has
   // (test/push.test.ts pins this order).
   watchPush();
+  // Last of all turn-end listeners: work that found its thread mid-turn (a
+  // child's report queued behind Jarvis) starts once that turn has ended,
+  // after every listener above and the broadcast (test/push.test.ts pins this).
+  watchDeferredTurns(availableAgents);
 
   const { server, caffeinatePid } = await createHttpServer({
     portOverride,
@@ -658,6 +663,13 @@ export async function start(network: string = "local", portOverride?: number, ca
     network,
     label: "gitbot server",
   });
+
+  // Reports a restart left queued: each Jarvis thread takes its oldest now;
+  // any others follow turn by turn. Only once the port is ours: a second
+  // `gitbot start` that fails to bind exits before it touches the queue.
+  // Never throws, and starts nothing once shutdown has begun.
+  const delivered = deliverQueuedReports(availableAgents);
+  if (delivered) console.log(`  queued reports: ${delivered} delivered to Jarvis`);
 
   server.on("request", (req: http.IncomingMessage, res: http.ServerResponse) => {
     // UI files are answered by createHttpServer's listener

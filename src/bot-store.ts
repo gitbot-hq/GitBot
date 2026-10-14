@@ -62,6 +62,16 @@ export interface Bot {
 /** How a turn ended, for the thread list: the user stopped it, it failed, or it finished. */
 export type TurnOutcome = "done" | "failed" | "stopped";
 
+/** A child's report waiting for its Jarvis thread to finish the turn it is in. */
+export interface QueuedReport {
+  /** The child thread that reported. */
+  childThreadId: string;
+  /** The report turn's prompt, exactly as it would have started. */
+  prompt: string;
+  /** When it was queued. */
+  at: string;
+}
+
 export interface Thread {
   id: string;
   botId: string;
@@ -115,6 +125,13 @@ export interface Thread {
    * interrupted (restart-recovery.ts).
    */
   runningFor?: RunningMark;
+  /**
+   * Jarvis threads only: children's reports that arrived while Jarvis was
+   * mid-turn, oldest first. Each is delivered as its own report turn once
+   * the thread is free (deferred-turns.ts), one per turn end, and survives a
+   * restart (delivered at startup).
+   */
+  queuedReports?: QueuedReport[];
   /**
    * When a turn here last ended. Not updatedAt, which renames and other
    * edits bump too. Has news while it is past lastSeenAt: the thread list's
@@ -480,6 +497,23 @@ export function setThreadApprovals(id: string, edit: (rows: ChildApproval[]) => 
   if (after === before) return;
   thread.approvals = after;
   writeCollection(THREADS_FILE, threads);
+}
+
+/**
+ * Rewrites a Jarvis thread's queued reports. Like ownership, not activity:
+ * updatedAt stays. Returns the queue as written, or undefined when the thread
+ * is gone. An empty queue removes the field.
+ */
+export function setQueuedReports(id: string, edit: (queue: QueuedReport[]) => QueuedReport[]): QueuedReport[] | undefined {
+  const threads = readCollection<Thread>(THREADS_FILE);
+  const thread = threads.find((t) => t.id === id);
+  if (!thread) return undefined;
+  // Anything but a list (a hand-edited file) reads as empty.
+  const after = edit(Array.isArray(thread.queuedReports) ? thread.queuedReports : []);
+  if (after.length) thread.queuedReports = after;
+  else delete thread.queuedReports;
+  writeCollection(THREADS_FILE, threads);
+  return after;
 }
 
 /**

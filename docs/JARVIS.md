@@ -66,9 +66,18 @@ A thread reports to the Jarvis thread that last sent it a message, recorded on t
 
 ### Lock and wake
 
-Jarvis does not wait inside a tool call. `start_thread` returns at once and Jarvis's turn ends. The Jarvis thread then shows as **waiting on child**: its composer is locked and reads, for example, "PR Validator is working on Trophy · open thread". There is at most one running child per Jarvis thread, and the user cannot type into a locked thread, so neither user messages nor reports ever need a queue.
+Jarvis does not wait inside a tool call. `start_thread` returns at once; Jarvis may keep talking, but nothing in its turn waits on the child. Once its turn ends, the Jarvis thread shows as **waiting on child**: its composer is locked and reads, for example, "PR Validator is working on Trophy · open thread". There is at most one running child per Jarvis thread, and the user cannot type into a locked thread, so user messages never need a queue.
 
-When the child's turn ends — done, error, or aborted — gitbot takes the child's last top-level assistant message (the same extraction `recordSetupOutcomeFromEvents` does for setup runs), caps it at about 4,000 characters, and starts a Jarvis turn with it:
+Reports sometimes do. A child that finishes fast can end before the Jarvis turn that started it does. That report is **queued** on the Jarvis thread (`queuedReports`, logged as `[report] queued: …`) and starts as Jarvis's next turn as soon as the current one ends (`src/deferred-turns.ts`), after the UI has seen Jarvis go idle.
+
+- **Order.** Reports are delivered oldest first, one per turn end. A report never jumps ahead of one already queued, even if it finds Jarvis free. Several can be queued: one running child at a time does not stop Jarvis running child A, then child B, inside one long turn.
+- **The user first.** If the user's own message gets in first, the report waits for that turn to end. A message the user queued in the composer while Jarvis worked waits for the report turn instead: the chat follows the report turn live, then sends the message (`ui/app/lib/flush-queue.ts`).
+- **After a Stop or a failed turn**, the report is still delivered: it is new information, and the user can Stop again.
+- **Seen and pushes.** A queued report counts as delivered: the child gets no push of its own and no unread dot. The Jarvis turn that ends just before it gets no "finished" push: its report turn follows at once and is the one to hear about, so a sequence that goes well is one push. A failed Jarvis turn is always pushed as failed, even with a report queued behind it: the report turn may end fine and never mention the failure. If both fail, that is two "failed" pushes.
+- **Restarts.** Queued reports are stored on the thread, so they survive a restart and are delivered at startup. One whose Jarvis can't run then (Claude Code not found) stays queued for a later start.
+- **Dropped.** Deleting the Jarvis thread drops its queued reports, with a log line. A queued report refused at delivery for any other reason is dropped with a log line too, and its child gets its unread dot back, since Jarvis will never tell the user.
+
+When the child's turn ends — done or error; a Stop never wakes Jarvis — gitbot takes the child's last top-level assistant message (the same extraction `recordSetupOutcomeFromEvents` does for setup runs), caps it at about 4,000 characters, and starts a Jarvis turn with it:
 
 ```
 [PR Validator · Trophy · thread <id> · done]
@@ -93,7 +102,7 @@ A child asking a question is just a turn that ended with a question; there is no
 
 ### Restarts
 
-Sessions live in memory, so restarting gitbot kills a running child. On start, gitbot unlocks any Jarvis thread whose child was running, and the next message to it is prepended with `[PR Validator on Trophy was interrupted by a restart]`.
+Sessions live in memory, so restarting gitbot kills a running child. On start, gitbot unlocks any Jarvis thread whose child was running, and the next message to it is prepended with `[PR Validator on Trophy was interrupted by a restart]`. Then, once the port is bound, any report still queued on a Jarvis thread is delivered, once. A second `gitbot start` on the same data dir that fails to bind exits without touching the queue. One that binds another port (no `-p`) delivers too, and runs that report turn beside the first process's Jarvis: run one gitbot per data dir until the data-dir lock lands (scheduling slice 12).
 
 ## Permissions
 

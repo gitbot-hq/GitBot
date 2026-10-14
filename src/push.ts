@@ -577,8 +577,9 @@ export function worthSending(payload: PushPayload, now = presenceClock.now()): b
  * The notification for a turn that ended, or null when it is not news worth
  * interrupting for: a turn the user stopped, one our own shutdown killed, or
  * a child's turn whose report reached its Jarvis (the Jarvis turn the report
- * starts is the one to hear about; telling both would say it twice). A child
- * whose report was refused (its Jarvis mid-turn) is told here, or never.
+ * starts is the one to hear about; telling both would say it twice). A
+ * report queued behind Jarvis's own turn counts as delivered. A child whose
+ * report was refused (its Jarvis thread gone) is told here, or never.
  *
  * reportDelivered is set by the report watcher (reports.ts), a turn-end
  * listener of its own: it must be registered before watchPush, as server.ts
@@ -856,9 +857,19 @@ export async function notifyFromJarvis(jarvisThreadId: string, args: JarvisNotif
     : { ok: true, delivered: false, sent: 0, note: "every subscribed browser's push service refused it" };
 }
 
-/** True when this Jarvis turn already pushed a notification with its notify tool. */
-export function turnNotified(store: SessionStore): boolean {
-  return notifiedTurns.get(store) === store.turn;
+/**
+ * True when the Jarvis turn turnNumber of this session already pushed a
+ * notification with its notify tool. Pass the ended turn's snapshot
+ * (EndedTurn.turnNumber), never store.turn: a deferred report or the user
+ * may already have started the next turn on the same session.
+ */
+export function turnNotified(store: SessionStore, turnNumber: number): boolean {
+  return notifiedTurns.get(store) === turnNumber;
+}
+
+function hasQueuedReport(threadId: string): boolean {
+  const queue = getThread(threadId)?.queuedReports;
+  return Array.isArray(queue) && queue.length > 0;
 }
 
 function send(payload: PushPayload | null): void {
@@ -912,12 +923,21 @@ export function watchPush(): () => void {
     try {
       const payload = turnEndNotification(turn);
       if (!payload) return;
+      // A child's report waits on this Jarvis thread and starts right after
+      // this end (deferred-turns.ts): Jarvis is not done, and its report
+      // turn is the one to hear about. Only "finished" gives way: a failure
+      // is always told, since the report turn may well end fine and say
+      // nothing of it.
+      if (payload.kind === "done" && payload.threadId && hasQueuedReport(payload.threadId)) {
+        logPushSkipped(payload, "a queued child report starts on this Jarvis thread next");
+        return;
+      }
       if (listSubscriptions().length === 0) {
         logPushSkipped(payload, SKIP_NO_SUBSCRIPTIONS);
         return;
       }
       // Jarvis already told the user what mattered in this turn (its notify tool).
-      if (payload.kind === "done" && turnNotified(store)) {
+      if (payload.kind === "done" && turnNotified(store, turn.turnNumber)) {
         logPushSkipped(payload, "Jarvis sent its own notification this turn");
         return;
       }

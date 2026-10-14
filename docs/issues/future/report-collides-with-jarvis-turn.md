@@ -1,5 +1,7 @@
 # A child's report can arrive while Jarvis is still mid-turn
 
+> **Resolved** by scheduling slice 03 (queued child report): a report that finds Jarvis mid-turn is now queued on the Jarvis thread and delivered when Jarvis's turn ends, through the deferred-turn slot (`src/deferred-turns.ts`). It counts as delivered and seen, gives one push (from Jarvis's report turn), and survives a restart. See `docs/JARVIS.md` (Lock and wake). Kept below for the history.
+
 Found in: spike 02 review. Relevant once slice 07 (a finished child wakes Jarvis) exists.
 
 ## Problem

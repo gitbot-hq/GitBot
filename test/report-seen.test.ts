@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, realpathSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { createThread, getThread, JARVIS_BOT_ID, jarvisDir } from "../src/bot-store";
+import { createThread, deleteThread, getThread, JARVIS_BOT_ID, jarvisDir } from "../src/bot-store";
 import { watchThreadActivity } from "../src/attention";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
@@ -81,23 +81,51 @@ for (const order of ["server", "reversed"] as const) {
   });
 }
 
+for (const order of ["server", "reversed"] as const) {
+  test(`a queued report marks the child seen; it keeps no unread dot (${order} listener order)`, async () => {
+    const unwatch = watch(order);
+    try {
+      // The real flow: Jarvis starts the child mid-turn; the child ends before
+      // that turn does, so its report is queued behind it (deliverReport).
+      const folder = realpathSync(mkdtempSync(join(tmpdir(), "gitbot-seen-")));
+      const added = addProject(folder);
+      assert.ok(added.ok);
+      const jarvis = createThread(JARVIS_BOT_ID, jarvisDir(), undefined, "chat", "claude-code");
+      const jarvisTurn = startTurn({ threadId: jarvis.id, prompt: "start one" }, ALL_AGENTS);
+      assert.ok(jarvisTurn.ok, JSON.stringify(jarvisTurn));
+      const started = startChildThread(jarvis.id, { agent: "claude-code", project: added.project.id, message: "work" }, ALL_AGENTS);
+      assert.ok(started.ok, JSON.stringify(started));
+      const log = console.log;
+      console.log = () => {};
+      try {
+        await end(runs[runs.length - 1], "done");
+      } finally {
+        console.log = log;
+      }
+      assert.equal(reportsTo(jarvis.id).length, 1, "only Jarvis's own turn: the report waits");
+      assert.equal(getThread(jarvis.id)!.queuedReports?.length, 1, "queued");
+      const child = getThread(started.threadId)!;
+      assert.ok(child.lastActivityAt, "the turn's end is stamped");
+      assert.equal(hasNews(child), false, "seen: Jarvis is sure to hear it");
+    } finally {
+      unwatch();
+    }
+  });
+}
+
 test("a report Jarvis refused leaves the child unseen", async () => {
   const unwatch = watch("server");
+  const warn = console.warn;
+  console.warn = () => {};
   try {
-    // The real flow: Jarvis starts the child mid-turn; the child ends before
-    // that turn does, so Jarvis refuses its report (deliverReport).
-    const folder = realpathSync(mkdtempSync(join(tmpdir(), "gitbot-seen-")));
-    const added = addProject(folder);
-    assert.ok(added.ok);
-    const jarvis = createThread(JARVIS_BOT_ID, jarvisDir(), undefined, "chat", "claude-code");
-    const jarvisTurn = startTurn({ threadId: jarvis.id, prompt: "start one" }, ALL_AGENTS);
-    assert.ok(jarvisTurn.ok, JSON.stringify(jarvisTurn));
-    const started = startChildThread(jarvis.id, { agent: "claude-code", project: added.project.id, message: "work" }, ALL_AGENTS);
-    assert.ok(started.ok, JSON.stringify(started));
-    await end(runs[runs.length - 1], "done");
-    assert.equal(reportsTo(jarvis.id).length, 1, "only Jarvis's own turn: no report turn");
-    assert.equal(hasNews(getThread(started.threadId)!), true);
+    // Its Jarvis thread was deleted while the child ran: the report is refused (404) and dropped.
+    const { jarvis, childId, child } = jarvisWithChild();
+    deleteThread(jarvis.id);
+    await end(child, "done");
+    assert.equal(reportsTo(jarvis.id).length, 0, "no report turn");
+    assert.equal(hasNews(getThread(childId)!), true);
   } finally {
+    console.warn = warn;
     unwatch();
   }
 });

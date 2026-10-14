@@ -8,7 +8,7 @@ import { createThread, getThread, JARVIS_BOT_ID, jarvisDir, setRunningFor, updat
 import { runningChildOf } from "../src/child-lock";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
-import { watchChildReports } from "../src/reports";
+import { deliverQueuedReports, watchChildReports } from "../src/reports";
 import { pidAlive, recoverInterruptedChildren, watchRunningMarks } from "../src/restart-recovery";
 import {
   buildSessionsDump,
@@ -239,6 +239,60 @@ test("an interruption note is appended to a stop note already waiting", () => {
     getThread(jarvis.id)?.pendingNote,
     `[you stopped Codex on elsewhere]\n[Claude Code on ${basename(proj.folder)} was interrupted by a restart]`,
   );
+});
+
+test("queued reports are delivered after recoverInterruptedChildren", async (t) => {
+  t.mock.method(console, "log", () => {});
+  // Mid-turn, Jarvis starts child A, which reports while Jarvis still runs
+  // (queued), then child B, which is still running when gitbot restarts.
+  const proj = project();
+  const jarvis = jarvisThread();
+  assert.ok(startTurn({ threadId: jarvis.id, prompt: "start two" }, ALL_AGENTS).ok);
+  const a = startChildThread(jarvis.id, { agent: "claude-code", project: proj.id, message: "say hi" }, ALL_AGENTS);
+  assert.ok(a.ok, JSON.stringify(a));
+  await end(runs[runs.length - 1], "done", "hi");
+  assert.equal(getThread(jarvis.id)?.queuedReports?.length, 1);
+  const b = startChildThread(jarvis.id, { agent: "claude-code", project: proj.id, message: "sleep 60" }, ALL_AGENTS);
+  assert.ok(b.ok, JSON.stringify(b));
+
+  // The restart, in start()'s order: recovery first, then the queued reports.
+  assert.deepEqual(restart(), [b.threadId]);
+  const note = `[Claude Code on ${basename(proj.folder)} was interrupted by a restart]`;
+  assert.equal(getThread(jarvis.id)?.pendingNote, note);
+  const before = runs.length;
+  assert.equal(deliverQueuedReports(ALL_AGENTS), 1);
+  const report = runs.slice(before).filter((s) => s.threadId === jarvis.id);
+  assert.equal(report.length, 1);
+  // A report carries no note: it waits for the user's own next message.
+  assert.equal(userPrompt(report[0].gitbotId), `[Claude Code · ${basename(proj.folder)} · thread ${a.threadId} · done]\nhi`);
+  assert.equal(getThread(jarvis.id)?.queuedReports, undefined);
+  assert.equal(getThread(jarvis.id)?.pendingNote, note);
+  // A report turn is no child: it leaves no running mark to recover.
+  assert.equal(getThread(jarvis.id)?.runningFor, undefined);
+});
+
+test("a shutdown in progress delivers no queued report; the next start does", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const proj = project();
+  const jarvis = jarvisThread();
+  assert.ok(startTurn({ threadId: jarvis.id, prompt: "start one" }, ALL_AGENTS).ok);
+  const a = startChildThread(jarvis.id, { agent: "claude-code", project: proj.id, message: "say hi" }, ALL_AGENTS);
+  assert.ok(a.ok, JSON.stringify(a));
+  await end(runs[runs.length - 1], "done", "hi");
+  setShuttingDown(true);
+  // Jarvis's turn ends as the shutdown kills it: the drain starts nothing.
+  const jarvisTurn = runs.find((s) => s.threadId === jarvis.id)!;
+  jarvisTurn.status = "error";
+  notifyPermissionsChanged();
+  await turnEnd();
+  await turnEnd();
+  assert.equal(deliverQueuedReports(ALL_AGENTS), 0);
+  assert.equal(runs.filter((s) => s.threadId === jarvis.id).length, 1);
+  assert.equal(getThread(jarvis.id)?.queuedReports?.length, 1, "kept for the next start");
+  setShuttingDown(false);
+  restart();
+  assert.equal(deliverQueuedReports(ALL_AGENTS), 1);
+  assert.equal(getThread(jarvis.id)?.queuedReports, undefined);
 });
 
 const post = (url: string) => request("POST", url);

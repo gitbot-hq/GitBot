@@ -55,6 +55,21 @@ The client sends ordinary HTTP requests and receives a turn's output over a `GET
 - **Abort.** `POST /sessions/:id/abort` signals an `AbortController` (Claude Code, Codex) or calls the SDK's abort (OpenCode).
 - **Cleanup.** Idle-session cleanup is currently disabled; finished sessions stay in memory until gitbot stops.
 
+### When a turn ends
+
+Every agent ends a turn the same way: the store's status leaves `running` and `notifyPermissionsChanged()` runs. That snapshots the ended turn (`EndedTurn`: its status, events, flags and `turnNumber`, the store's `turn` at that moment) and, in a `setImmediate`, calls each `onTurnEnd` listener with it, then broadcasts the sessions update to the UI. Listeners read the snapshot, never the live store: a session is reused across turns, and the next turn may already have started on it.
+
+They run in the order `start()` registers them (`test/push.test.ts` pins it):
+
+1. **Running marks** (`restart-recovery.ts`): unmark the thread.
+2. **Reports** (`reports.ts`): a child Jarvis started reports to its Jarvis thread. If Jarvis is mid-turn, or older reports are queued there, the report is queued on the Jarvis thread instead. Either way it sets `reportDelivered` on the snapshot.
+3. **Attention** (`attention.ts`): stamp the thread's activity, and mark it seen when `reportDelivered` is set.
+4. **Scheduler** (`scheduler.ts`): a scheduled run's outcome.
+5. **Push** (`push.ts`): reads `reportDelivered`, and `turnNotified(store, turnNumber)` for Jarvis's `notify`.
+6. **Deferred turns** (`deferred-turns.ts`), last: only schedules a drain with `setImmediate`. The drain therefore runs after every listener and after the broadcast, and starts at most one waiting turn on the freed thread (a queued report). That turn's own end drains the next.
+
+The chat follows a turn gitbot starts on the open thread (a report, later a scheduled run) through its rejoin path. Every time its own turn ends, it asks the server whether a turn is running there (the status stream alone can miss one that starts the instant the chat's ends). If so, it joins it live, reading history again so that nothing it already shows is replayed twice, and any queued follow-up is sent when that turn ends (`ui/app/lib/flush-queue.ts`). A send made while that check is out goes behind the queued one. A send that still loses the race (409) is queued the same way, never bounced back to the composer.
+
 ## Agents
 
 At startup gitbot checks which agents are usable — the `claude` CLI, the `@opencode-ai/sdk` package, the `codex` CLI — and reports them at `GET /agents`.

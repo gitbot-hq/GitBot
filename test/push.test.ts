@@ -9,7 +9,8 @@ import { createECDH, randomBytes } from "crypto";
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { bindSession, createBot, createThread, dataDir, JARVIS_BOT_ID, jarvisDir } from "../src/bot-store";
+import { bindSession, createBot, createThread, dataDir, getThread, JARVIS_BOT_ID, jarvisDir } from "../src/bot-store";
+import { watchDeferredTurns } from "../src/deferred-turns";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
 import { clearPresence, MAX_PRESENCE_TABS, PRESENCE_LEASE_MS, presenceClock, presenceTimer, recordPresence, type PresenceUpdate } from "../src/presence";
@@ -63,6 +64,7 @@ let sent: Array<{ endpoint: string; payload: PushPayload; urgency?: string; subj
 let failWith: Record<string, number> = {};
 let unwatch: () => void = () => {};
 let unwatchReports: () => void = () => {};
+let unwatchDeferred: () => void = () => {};
 const realSchedule = pushTiming.schedule;
 const realNow = presenceClock.now;
 const realPresenceTimer = presenceTimer.schedule;
@@ -101,6 +103,8 @@ before(() => {
   // In server.ts's order: the report watcher first, so push sees reportDelivered.
   unwatchReports = watchChildReports(ALL_AGENTS);
   unwatch = watchPush();
+  // Last, as in start(): a report queued behind Jarvis starts after the others.
+  unwatchDeferred = watchDeferredTurns(ALL_AGENTS);
 });
 beforeEach(() => {
   // The whole file: invalid entries a test wrote would outlive removeSubscriptions(listSubscriptions()).
@@ -122,6 +126,7 @@ afterEach(() => {
 after(() => {
   unwatch();
   unwatchReports();
+  unwatchDeferred();
   pushSender.send = realSend;
   pushTiming.schedule = realSchedule;
   presenceTimer.schedule = realPresenceTimer;
@@ -789,6 +794,34 @@ test("server.ts starts the scheduler, and its turn-end listener, after reports a
   assert.ok(body.indexOf("watchScheduledTurns()") > 0 && body.indexOf("watchScheduledTurns()") < body.indexOf("\n}\n"), "registered inside startScheduler");
 });
 
+test("turn-end listeners run in order: running marks, reports, attention, scheduler, push, then deferred turns last", () => {
+  const source = readFileSync(join(__dirname, "../src/server.ts"), "utf-8");
+  const start = source.slice(source.indexOf("export async function start("));
+  const at = (call: string) => {
+    const i = start.indexOf(call);
+    assert.ok(i > 0, `${call} is called in start()`);
+    return i;
+  };
+  const order = [
+    "watchRunningMarks()",
+    "watchChildReports(availableAgents)",
+    "watchThreadActivity()",
+    "startScheduler(availableAgents)",
+    "watchPush()",
+    "watchDeferredTurns(availableAgents)",
+  ].map(at);
+  assert.deepEqual([...order].sort((a, b) => a - b), order, "registered in this order");
+  // Queued reports go out at startup: after restart recovery, once the
+  // deferred listener is there to drain the rest, and only once the port is
+  // bound (a start that fails to bind exits before touching the queue).
+  const deliver = at("deliverQueuedReports(availableAgents)");
+  assert.ok(at("recoverInterruptedChildren()") < deliver);
+  assert.ok(order[order.length - 1] < deliver);
+  assert.ok(at("await createHttpServer(") < deliver);
+  // Nothing in start() registers a turn-end listener of its own after the deferred one.
+  assert.equal(start.slice(order[order.length - 1]).indexOf("onTurnEnd("), -1);
+});
+
 /** A Jarvis thread with a child just started on it; the child's store is returned. */
 function jarvisWithChild() {
   const folder = realpathSync(mkdtempSync(join(tmpdir(), "gitbot-push-proj-")));
@@ -805,7 +838,7 @@ test("a child whose report never reached Jarvis is a push of its own", async (t)
   await subscribe("a");
   const { child } = jarvisWithChild();
   await tick();
-  // Its Jarvis thread can't take the report (here: it is gone; in life, mid-turn).
+  // Its Jarvis thread can't take the report: it is gone. (Mid-turn, it would be queued.)
   child.reportOwner = "00000000-0000-4000-8000-000000000000";
   emitEvent(child, "assistant", { content: "Tests pass." });
   child.status = "done";
@@ -1427,6 +1460,187 @@ test("notify: a failed Jarvis turn is still pushed after a notify", async () => 
   await settle();
   assert.equal(sent.length, 1);
   assert.equal(sent[0].payload.kind, "failed");
+});
+
+/** A Jarvis turn mid-way, a child it started, and that child's report queued behind it. */
+async function reportQueuedBehindJarvis(opts: { notify?: boolean } = {}) {
+  const jarvis = boundJarvisChat();
+  const jarvisTurn = await startJarvisTurn(jarvis.id, "start a child, then tell me a story");
+  if (opts.notify) assert.ok((await notifyFromJarvis(jarvis.id, { title: "Started", message: "on it" }) as any).delivered);
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "gitbot-push-proj-")));
+  const added = addProject(folder);
+  assert.ok(added.ok);
+  const started = startChildThread(jarvis.id, { agent: "claude-code", project: added.project.id, message: "say hi" }, ALL_AGENTS);
+  assert.ok(started.ok, JSON.stringify(started));
+  const child = runs[runs.length - 1];
+  await tick();
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await endTurn(child);
+  } finally {
+    console.log = log;
+  }
+  assert.equal(getThread(jarvis.id)!.queuedReports?.length, 1, "the report is queued");
+  return { jarvis, jarvisTurn, childId: started.threadId };
+}
+
+test("a queued report gives exactly one push, from Jarvis's report turn, and none from the child", async () => {
+  await subscribe("a");
+  const { jarvis, jarvisTurn, childId } = await reportQueuedBehindJarvis();
+  assert.equal(sent.length, 0, "the child's own end is not a push");
+
+  // Jarvis's story turn ends: the report starts next, on the same session.
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await endTurn(jarvisTurn);
+  } finally {
+    console.log = log;
+  }
+  assert.equal(sent.length, 0, "not 'Jarvis finished' yet: its report turn follows");
+  assert.equal(jarvisTurn.status, "running");
+  assert.equal(jarvisTurn.turn, 2);
+  assert.equal(getThread(jarvis.id)!.queuedReports, undefined);
+
+  await endTurn(jarvisTurn);
+  assert.equal(sent.length, 1, "exactly one push for the sequence");
+  assert.equal(sent[0].payload.threadId, jarvis.id);
+  assert.equal(sent[0].payload.kind, "done");
+  assert.ok(!sent.some((p) => p.payload.threadId === childId));
+});
+
+test("Jarvis used notify, then a deferred report starts on the same store: no duplicate done push", async () => {
+  await subscribe("a");
+  const { jarvisTurn } = await reportQueuedBehindJarvis({ notify: true });
+  assert.equal(sent.length, 1, "Jarvis's own notification");
+  assert.equal(sent[0].payload.kind, "notify");
+  sent = [];
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await endTurn(jarvisTurn);
+  } finally {
+    console.log = log;
+  }
+  assert.equal(jarvisTurn.turn, 2, "the report turn reused the store");
+  assert.equal(sent.length, 0, "no done push for the turn that used notify");
+  await endTurn(jarvisTurn);
+  assert.equal(sent.length, 1, "the report turn's own push");
+  assert.equal(sent[0].payload.kind, "done");
+});
+
+/** endTurn with the [report] log lines kept out of the test output. */
+async function quietly(fn: () => Promise<void>) {
+  const log = console.log;
+  console.log = () => {};
+  try {
+    await fn();
+  } finally {
+    console.log = log;
+  }
+}
+
+test("Stop on Jarvis with a report queued: no push for the stopped turn, the report starts, and its turn pushes once", async () => {
+  await subscribe("a");
+  const { jarvis, jarvisTurn } = await reportQueuedBehindJarvis();
+  await quietly(async () => {
+    jarvisTurn.abortRequested = true;
+    emitEvent(jarvisTurn, "aborted", { message: "Aborted by user" });
+    jarvisTurn.status = "error";
+    notifyPermissionsChanged();
+    await settle();
+  });
+  assert.equal(sent.length, 0, "a stopped turn is never a push");
+  assert.equal(jarvisTurn.status, "running", "the report is new information: it starts after a Stop too");
+  assert.equal(jarvisTurn.turn, 2);
+  assert.equal(getThread(jarvis.id)!.queuedReports, undefined);
+  await endTurn(jarvisTurn);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.kind, "done");
+});
+
+test("a failed Jarvis turn with a report queued is still pushed as failed; the report turn then pushes its own", async () => {
+  await subscribe("a");
+  for (const reportEnds of ["done", "error"] as const) {
+    sent = [];
+    const { jarvis, jarvisTurn } = await reportQueuedBehindJarvis();
+    await quietly(async () => {
+      emitEvent(jarvisTurn, "error", { message: "API overloaded" });
+      jarvisTurn.status = "error";
+      notifyPermissionsChanged();
+      await settle();
+    });
+    // The report turn may well end fine and never mention it: the failure is told now.
+    assert.equal(sent.length, 1, "the failure is never hidden behind the report");
+    assert.equal(sent[0].payload.kind, "failed");
+    assert.equal(sent[0].payload.threadId, jarvis.id);
+    assert.equal(jarvisTurn.status, "running", "the report still starts");
+    await quietly(async () => {
+      if (reportEnds === "error") emitEvent(jarvisTurn, "error", { message: "API overloaded" });
+      jarvisTurn.status = reportEnds;
+      notifyPermissionsChanged();
+      await settle();
+    });
+    assert.equal(sent.length, 2, `${reportEnds}: the report turn's own push`);
+    assert.equal(sent[1].payload.kind, reportEnds === "error" ? "failed" : "done");
+  }
+});
+
+test("a failed Jarvis turn with no report queued is still pushed as failed", async () => {
+  await subscribe("a");
+  const jarvis = boundJarvisChat();
+  const store = await startJarvisTurn(jarvis.id, "do it");
+  emitEvent(store, "error", { message: "API overloaded" });
+  store.status = "error";
+  notifyPermissionsChanged();
+  await settle();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.kind, "failed");
+});
+
+test("the user got in before the queued report: one push for it all, from the report turn", async () => {
+  await subscribe("a");
+  const { jarvis, jarvisTurn } = await reportQueuedBehindJarvis();
+  await quietly(async () => {
+    emitEvent(jarvisTurn, "assistant", { content: "The story." });
+    jarvisTurn.status = "done";
+    notifyPermissionsChanged();
+    // The user's message starts before the drain runs.
+    const typed = startTurn({ threadId: jarvis.id, prompt: "and one more thing" }, ALL_AGENTS);
+    assert.ok(typed.ok, JSON.stringify(typed));
+    await settle();
+  });
+  assert.equal(sent.length, 0, "Jarvis's turn: its report is still to come");
+  assert.equal(getThread(jarvis.id)!.queuedReports?.length, 1, "still queued behind the user's turn");
+  await quietly(() => endTurn(jarvisTurn));
+  assert.equal(sent.length, 0, "the user's turn: the report still follows");
+  assert.equal(jarvisTurn.turn, 3, "the report turn started");
+  assert.equal(getThread(jarvis.id)!.queuedReports, undefined);
+  await endTurn(jarvisTurn);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.kind, "done");
+});
+
+test("notify: a turn that used notify gets no done push, even if the next turn starts on its store before push reads the end", async () => {
+  await subscribe("a");
+  const jarvis = boundJarvisChat();
+  const store = await startJarvisTurn(jarvis.id, "notify me");
+  assert.ok((await notifyFromJarvis(jarvis.id, { title: "x", message: "y" }) as any).delivered);
+  sent = [];
+  emitEvent(store, "assistant", { content: "Done." });
+  store.status = "done";
+  notifyPermissionsChanged();
+  // The next turn starts on the same store before the turn-end listeners run.
+  const next = startTurn({ threadId: jarvis.id, prompt: "and now?" }, ALL_AGENTS);
+  assert.ok(next.ok, JSON.stringify(next));
+  assert.equal(sessions.get(next.sessionId), store);
+  assert.equal(store.turn, 2);
+  await settle();
+  assert.equal(sent.length, 0, "turn 1 used notify: no duplicate done push");
+  await endTurn(store);
+  assert.equal(sent.length, 1, "turn 2 gets its own");
+  assert.equal(sent[0].payload.kind, "done");
 });
 
 // --- Logging ---

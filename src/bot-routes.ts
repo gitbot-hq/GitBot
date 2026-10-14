@@ -246,6 +246,10 @@ export async function handleBotRoutes(
     if (method === "DELETE") {
       const thread = getThread(threadId);
       if (!deleteThread(threadId)) { jsonError(res, 404, "Thread not found"); return true; }
+      // Reports queued on a Jarvis thread go with it: nothing is left to deliver them to.
+      for (const q of Array.isArray(thread?.queuedReports) ? thread.queuedReports : []) {
+        console.warn(`[report] dropped: thread ${q.childThreadId}'s queued report, its Jarvis thread ${threadId} was deleted`);
+      }
       // Deleting the setup thread leaves the bot pointing at nothing; unbind so
       // the next run can make a fresh one.
       if (thread && thread.kind === "setup") updateBot(thread.botId, { setupThreadId: undefined });

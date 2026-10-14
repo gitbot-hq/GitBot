@@ -419,8 +419,17 @@ export interface EndedTurn {
   /** The schedule that started this turn, if one did. */
   scheduled?: ScheduledTurn;
   /**
+   * store.turn as this turn ended. Sessions are reused across turns, and a
+   * deferred turn (deferred-turns.ts) or the user may start the next one on
+   * the same store before a listener reads it: anything keyed by turn number
+   * (push's turnNotified) compares against this, never the live store.
+   */
+  turnNumber: number;
+  /**
    * Set by the report watcher once this turn's report has started on its
-   * Jarvis thread: Jarvis has been told, so the thread counts as seen.
+   * Jarvis thread, or has been queued there to start when Jarvis's own turn
+   * ends: Jarvis has been (or is sure to be) told, so the thread counts as
+   * seen and makes no push of its own.
    * Turn-end listeners share the one object; read by the activity stamp.
    */
   reportDelivered?: boolean;
@@ -450,6 +459,7 @@ export function notifyPermissionsChanged(): void {
       reportable: !!store.reportable,
       reportOwner: store.reportOwner,
       ...(store.scheduled ? { scheduled: store.scheduled } : {}),
+      turnNumber: store.turn,
     }]);
   }
   const broadcast = () => permissionsEmitter.emit("update", buildPermissionsDump(), buildSessionsDump());
