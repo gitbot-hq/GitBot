@@ -2,11 +2,15 @@ import { randomUUID } from "crypto";
 import { join } from "path";
 import { dataDir, quarantineCorrupt, readCollection, writeCollection } from "./json-store";
 import { getThread, type Bot, type TurnOutcome } from "./bot-store";
+import { countOccurrences, isIsoInstant, isUsableWhen, nextOccurrence, parseWhen, upcomingRuns, type When } from "./schedule-time";
 
-// Schedules: a prompt gitbot sends itself at a given time, as a real turn on
-// a thread. Stored in <dataDir>/schedules.json, read fully and written
-// atomically (json-store.ts). The scheduler (scheduler.ts) fires them; this
-// module is their types, validation, limits and storage only.
+// Schedules: a prompt gitbot sends itself at a given time, or again and
+// again (cron, interval), as a real turn on a thread. Stored in
+// <dataDir>/schedules.json, read fully and written atomically
+// (json-store.ts). The scheduler (scheduler.ts) fires them; this module is
+// their types, validation, limits, storage, and the rules for what a due
+// time does to a schedule (runs counted, runs missed, the next time, the
+// end). The time maths is schedule-time.ts.
 
 // --- Types ---
 
@@ -16,10 +20,8 @@ export interface Schedule {
   name: string;
   /** The message the turn sends. ≤ 4000 chars, text only. */
   prompt: string;
-  when:
-    | { kind: "once"; at: string }
-    | { kind: "cron"; expr: string; tz: string }
-    | { kind: "interval"; everyMinutes: number; anchor: string };
+  /** A cron's `tz` is an IANA zone; an interval runs at anchor + N, + 2N, … minutes. */
+  when: When;
   target:
     | { kind: "thread"; threadId: string }
     | { kind: "new-thread"; botId: string; projectId: string; permissionMode?: Bot["permissionMode"] };
@@ -32,9 +34,15 @@ export interface Schedule {
   overlap: "queue" | "skip";
   /** Which of its turns' ends push. Stored; not read yet. */
   notify: "always" | "on-failure" | "never";
+  /** It ends once runCount reaches this. */
   maxRuns?: number;
+  /** No run at or after this time; it ends instead. */
   endsAt?: string;
-  /** Fires claimed so far, however each turned out. */
+  /**
+   * Runs used up so far: every fire claimed, however it turned out, and
+   * every run missed (while gitbot was down, or while a fire waited). A
+   * fire's "run N" is this count when it was claimed.
+   */
   runCount: number;
   consecutiveFailures: number;
   /** When it next fires; null once it never will. */
@@ -65,6 +73,7 @@ export const PROMPT_MAX = 4000;
 export const SCHEDULES_MAX = 100;
 export const SCHEDULES_PER_THREAD_MAX = 20;
 export const HISTORY_MAX = 20;
+export const MAX_RUNS_MAX = 100_000;
 
 // --- Storage ---
 
@@ -94,9 +103,13 @@ export function getSchedule(id: string): Schedule | undefined {
   return listSchedules().find((s) => s.id === id);
 }
 
-/** True for the kinds this build can fire: a `once` on a thread. */
+/**
+ * True for what this build can fire: a once, cron or interval (whose times
+ * it can work out) on a thread. Not a new-thread target yet, nor a `when`
+ * it can't read (a bad pattern written by hand).
+ */
 export function isRunnable(s: Pick<Schedule, "when" | "target">): boolean {
-  return s.when?.kind === "once" && s.target?.kind === "thread" && typeof s.target.threadId === "string";
+  return isUsableWhen(s.when) && s.target?.kind === "thread" && typeof s.target.threadId === "string";
 }
 
 /** A schedule that may still fire. A fired or missed once is kept for its history, but is done. */
@@ -134,27 +147,118 @@ export function deleteSchedule(id: string): boolean {
   return true;
 }
 
+// --- What a due time does to a schedule ---
+
+const iso = (ms: number) => new Date(ms).toISOString();
+
+/** Done: kept, with its history, but never fires again. */
+function endSchedule(s: Schedule): void {
+  s.enabled = false;
+  s.nextRunAt = null;
+}
+
+/** Runs it may still use: Infinity without a maxRuns. */
+function runsLeft(s: Schedule): number {
+  return s.maxRuns ? Math.max(0, s.maxRuns - s.runCount) : Infinity;
+}
+
+export interface SettledDue {
+  /** The fire's run number, when it fires; absent when it must not. */
+  run?: number;
+  /** One entry for every run that came due and will never fire. */
+  missed?: ScheduleRun;
+  /** True when the missed count was estimated (a very long gap). */
+  estimated?: boolean;
+}
+
+/**
+ * The schedule's due time (`nextRunAt`, at or before `now`) has come; mutates
+ * `s` for it. With `fire`, the scheduler is about to start that run: it is
+ * counted, unless the schedule may no longer run (`endsAt` has passed, or
+ * maxRuns is used up), in which case nothing fires. Without `fire` (startup
+ * after gitbot was down; a retry of that; or a fire found far too late, the
+ * process having been suspended), the run is missed.
+ *
+ * Runs that came due between then and now and will not fire (gitbot was
+ * down or suspended, or the fire waited for the rate cap) become one
+ * `missed` entry with their count. They never fire late (decision 3), and
+ * count toward maxRuns. Runs at or after `endsAt`, or past maxRuns, would
+ * never have happened, so they are not counted.
+ *
+ * Then the schedule moves to its next run strictly after both its due time
+ * and now, or ends: a once after its time, a recurring one when maxRuns is
+ * used up or its next run would be at or after `endsAt`.
+ */
+export function settleDue(s: Schedule, now: number, fire: boolean): SettledDue {
+  const out: SettledDue = {};
+  const due = Date.parse(s.nextRunAt!);
+  const endsAt = s.endsAt ? Date.parse(s.endsAt) : Infinity;
+  const lastCountable = Math.min(now, endsAt - 1);
+
+  let missedFrom: number | null = due;
+  if (fire && due < endsAt && now < endsAt && runsLeft(s) > 0) {
+    s.runCount += 1;
+    out.run = s.runCount;
+    s.lastRunAt = iso(now);
+    missedFrom = s.when.kind === "once" ? null : nextOccurrence(s.when, due);
+  }
+  if (missedFrom != null && missedFrom <= lastCountable) {
+    const { count, estimated } = countOccurrences(s.when, missedFrom, lastCountable, runsLeft(s));
+    if (count > 0) {
+      s.runCount += count;
+      out.missed = { at: iso(missedFrom), outcome: "missed", missedCount: count };
+      if (estimated) out.estimated = true;
+    }
+  }
+
+  moveToNextRun(s, Math.max(now, due), endsAt);
+  return out;
+}
+
+/**
+ * Sets the next run strictly after `from`, or ends the schedule. The next
+ * run never goes back or stays put: if it would, the schedule ends rather
+ * than risk firing again and again (schedule-time.ts already steps croner
+ * past DST changes, so this is a last guard).
+ */
+function moveToNextRun(s: Schedule, from: number, endsAt: number): void {
+  if (s.when.kind === "once" || runsLeft(s) <= 0) return endSchedule(s);
+  const next = nextOccurrence(s.when, from);
+  if (next == null || next >= endsAt) return endSchedule(s);
+  if (!(next > from)) {
+    console.error(`[schedules] ${s.id}: the next run (${iso(next)}) is not after ${iso(from)}; ending the schedule rather than fire it again`);
+    return endSchedule(s);
+  }
+  s.nextRunAt = iso(next);
+}
+
+/**
+ * A run now (POST /schedules/:id/run) when nothing is due: it counts as a
+ * run and leaves the next due time be, unless that run used up maxRuns.
+ * Returns the run's number.
+ */
+export function claimManualRun(s: Schedule, now: number): number {
+  s.runCount += 1;
+  s.lastRunAt = iso(now);
+  if (s.enabled && runsLeft(s) <= 0) endSchedule(s);
+  return s.runCount;
+}
+
+/**
+ * The schedule's next `n` run times (ISO), as they stand: from `nextRunAt`,
+ * before `endsAt`, and no more than maxRuns allows. Empty once it has ended.
+ */
+export function nextRunsOf(s: Schedule, n = 3): string[] {
+  if (!s.enabled || !s.nextRunAt || !isUsableWhen(s.when)) return [];
+  return upcomingRuns(s.when, Date.parse(s.nextRunAt), n, {
+    endsAt: s.endsAt ? Date.parse(s.endsAt) : undefined,
+    runsLeft: runsLeft(s),
+  }).map(iso);
+}
+
 // --- Validation and creation ---
 
 export type NewScheduleResult = { ok: true; schedule: Schedule } | { ok: false; error: string };
-
-/**
- * An ISO instant whose fields are all real: no 30 February, no hour 24.
- * (Date.parse rolls impossible dates over to the next month, so the regex
- * alone would store a "2026-02-30" that fires on 2 March.)
- */
-function isIsoInstant(at: string): boolean {
-  const m = ISO_INSTANT_FIELDS.exec(at);
-  if (!m || Number.isNaN(Date.parse(at))) return false;
-  const [, y, mo, d, h, mi, sec, oh, om] = m.map((x) => (x === undefined ? undefined : Number(x)));
-  const daysInMonth = new Date(Date.UTC(y!, mo!, 0)).getUTCDate();
-  if (mo! < 1 || mo! > 12 || d! < 1 || d! > daysInMonth) return false;
-  if (h! > 23 || mi! > 59 || (sec ?? 0) > 59) return false;
-  if ((oh ?? 0) > 23 || (om ?? 0) > 59) return false;
-  return true;
-}
-/** "at" as an ISO instant: a date, a time, and an explicit zone (Z or ±hh:mm). */
-const ISO_INSTANT_FIELDS = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(?:Z|[+-](\d{2}):(\d{2}))$/;
 
 /** Why a name can't be used, or null. It rides in the agent's tag, so no quotes or <>. */
 export function nameError(name: unknown): string | null {
@@ -175,8 +279,8 @@ export function promptError(prompt: unknown): string | null {
 
 /**
  * Checks a new schedule from a request body and stores it. Only what this
- * build runs is accepted: a `once` on an existing thread. Anything else is
- * refused, not stored half-understood.
+ * build runs is accepted: a once, cron or interval on an existing thread.
+ * Anything else is refused, not stored half-understood.
  */
 export function createSchedule(
   body: any,
@@ -192,12 +296,23 @@ export function createSchedule(
   if (badPrompt) return { ok: false, error: badPrompt };
   if (body.attachments !== undefined) return { ok: false, error: "a schedule's prompt is text only: attachments are not supported" };
 
-  if (!when || typeof when !== "object") return { ok: false, error: "when is required" };
-  if (when.kind !== "once") return { ok: false, error: `when.kind "${String(when.kind)}" is not supported yet: use "once"` };
-  if (typeof when.at !== "string" || !isIsoInstant(when.at)) {
-    return { ok: false, error: "when.at must be an ISO 8601 time with a zone, e.g. 2026-10-14T17:00:00Z" };
+  const parsed = parseWhen(when, at);
+  if (!parsed.ok) return parsed;
+  const first = nextOccurrence(parsed.when, at);
+  if (first == null) return { ok: false, error: "when never comes due" };
+
+  // How it ends: for a cron or interval only (a once ends after its run).
+  const { maxRuns, endsAt } = body;
+  if (parsed.when.kind === "once" && (maxRuns !== undefined || endsAt !== undefined)) {
+    return { ok: false, error: "maxRuns and endsAt are for cron and interval schedules: a once runs one time" };
   }
-  if (Date.parse(when.at) <= at) return { ok: false, error: "when.at must be in the future" };
+  if (maxRuns !== undefined && (!Number.isInteger(maxRuns) || maxRuns < 1 || maxRuns > MAX_RUNS_MAX)) {
+    return { ok: false, error: `maxRuns must be a whole number from 1 to ${MAX_RUNS_MAX}` };
+  }
+  if (endsAt !== undefined) {
+    if (!isIsoInstant(endsAt)) return { ok: false, error: "endsAt must be an ISO 8601 time with a zone, e.g. 2026-10-14T17:00:00Z" };
+    if (Date.parse(endsAt) <= first) return { ok: false, error: `endsAt must be after the first run (${iso(first)})` };
+  }
 
   if (!target || typeof target !== "object") return { ok: false, error: "target is required" };
   if (target.kind !== "thread") return { ok: false, error: `target.kind "${String(target.kind)}" is not supported yet: use "thread"` };
@@ -220,15 +335,18 @@ export function createSchedule(
     id: randomUUID(),
     name: name.trim(),
     prompt,
-    when: { kind: "once", at: when.at },
+    when: parsed.when,
     target: { kind: "thread", threadId: thread.id },
     createdBy,
     enabled: true,
     overlap: "queue",
     notify: "always",
+    ...(maxRuns !== undefined ? { maxRuns } : {}),
+    ...(endsAt !== undefined ? { endsAt } : {}),
     runCount: 0,
     consecutiveFailures: 0,
-    nextRunAt: when.at,
+    // A once keeps `at` exactly as sent; a cron or interval its first run.
+    nextRunAt: parsed.when.kind === "once" ? parsed.when.at : iso(first),
     history: [],
     createdAt: stamp,
     updatedAt: stamp,

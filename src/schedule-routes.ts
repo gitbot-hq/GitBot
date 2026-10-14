@@ -1,5 +1,5 @@
 import { jsonError, jsonOk, parseQuery, readBody, type IRequest, type IResponse } from "./server-common";
-import { createSchedule, deleteSchedule, getSchedule, listSchedules } from "./schedules";
+import { createSchedule, deleteSchedule, getSchedule, listSchedules, nextRunsOf } from "./schedules";
 import { rearmScheduler, runScheduleNow, schedulerClock } from "./scheduler";
 
 // /schedules: list, create, delete and run now. No access guard yet (anyone
@@ -62,7 +62,8 @@ export async function handleScheduleRoutes(
     if (!created.ok) { jsonError(res, 400, created.error); return true; }
     logWrite("create", created.schedule.id, req);
     rearmScheduler();
-    jsonOk(res, created.schedule);
+    // The next 3 run times, to check the maths against.
+    jsonOk(res, { ...created.schedule, nextRuns: nextRunsOf(created.schedule, 3) });
     return true;
   }
 
@@ -82,10 +83,10 @@ export async function handleScheduleRoutes(
   // POST /schedules/:id/run
   if (method === "POST" && action === "run") {
     if (!getSchedule(id)) { jsonError(res, 404, "Schedule not found"); return true; }
-    logWrite("run", id, req);
     const fired = runScheduleNow(id, availableAgents);
     if (!fired) { jsonError(res, 404, "Schedule not found"); return true; }
-    if ("refused" in fired) { jsonError(res, 400, fired.refused); return true; }
+    if ("refused" in fired) { logWrite("run-refused", id, req); jsonError(res, 400, fired.refused); return true; }
+    logWrite("run", id, req);
     jsonOk(res, fired);
     return true;
   }
