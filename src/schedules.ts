@@ -29,6 +29,10 @@ export interface Schedule {
   notesTo?: string;
   createdBy: { kind: "jarvis"; threadId: string } | { kind: "user"; remote?: string };
   enabled: boolean;
+  /**
+   * Why it is paused: PAUSED_BY_USER, its failures, or a start that can never
+   * work (scheduler.ts). Absent while it runs, and on one that has ended.
+   */
   pausedReason?: string;
   /**
    * What a fire does when its target is busy. `queue` (the default): it waits
@@ -44,12 +48,14 @@ export interface Schedule {
   endsAt?: string;
   /**
    * Runs used up so far: every fire claimed, however it turned out, every
-   * queued fire given up (replaced by a newer one, or found at startup), and
+   * queued fire given up (replaced by a newer one, or found at startup; not
+   * one a pause or a new `when` dropped, which never ran), and
    * every run missed (while gitbot was down, or while a fire waited). A
    * fire's "run N" is this count when it was claimed. A pending fire is not
    * counted until it starts, but it holds its run: see runsLeft.
    */
   runCount: number;
+  /** Failed runs in a row; it pauses at PAUSE_AFTER_FAILURES (scheduler.ts). */
   consecutiveFailures: number;
   /** When it next fires; null once it never will. */
   nextRunAt: string | null;
@@ -61,9 +67,11 @@ export interface Schedule {
    * deferred-turn drain starts it when the thread's turn ends
    * (deferred-turns.ts), and it is claimed then; a restart records it missed.
    * It may outlive the schedule's end: a once, or a last run, still waits.
+   * `manual`: a run now the user asked for, not one of its times; a new
+   * `when` keeps it (a due fire of the old times is dropped).
    */
-  pending?: { dueAt: string };
-  /** The last HISTORY_MAX runs, oldest first. */
+  pending?: { dueAt: string; manual?: true };
+  /** The last HISTORY_MAX runs, oldest first (see trimHistory). */
   history: ScheduleRun[];
   createdAt: string;
   updatedAt: string;
@@ -150,10 +158,27 @@ export function updateSchedule(id: string, edit: (s: Schedule) => void | false):
   const s = all.find((x) => x.id === id);
   if (!s) return undefined;
   if (edit(s) === false) return s;
-  if (s.history.length > HISTORY_MAX) s.history = s.history.slice(-HISTORY_MAX);
+  s.history = trimHistory(s.history);
   s.updatedAt = now();
   writeCollection(file(), all);
   return s;
+}
+
+/**
+ * The last HISTORY_MAX entries, but never the newest `started` one still
+ * waiting for its turn's outcome: its turn may be running yet (a 1-minute
+ * schedule whose own turn runs long logs a `skipped-busy` every minute), and
+ * its outcome is still to be written to it. Kept in place of the oldest.
+ */
+function trimHistory(history: ScheduleRun[]): ScheduleRun[] {
+  if (history.length <= HISTORY_MAX) return history;
+  const kept = history.slice(-HISTORY_MAX);
+  let open: ScheduleRun | undefined;
+  for (let i = history.length - 1; i >= 0 && !open; i--) {
+    if (history[i].outcome === "started" && !history[i].turnOutcome) open = history[i];
+  }
+  if (!open || kept.includes(open)) return kept;
+  return [open, ...history.slice(-(HISTORY_MAX - 1))];
 }
 
 export function deleteSchedule(id: string): boolean {
@@ -280,7 +305,7 @@ export function claimManualRun(s: Schedule, now: number): number {
  * it leaves the next due time be, unless it holds the last run.
  */
 export function queueManualRun(s: Schedule, now: number): void {
-  s.pending = { dueAt: iso(now) };
+  s.pending = { dueAt: iso(now), manual: true };
   if (s.enabled && runsLeft(s) <= 0) endSchedule(s);
 }
 
@@ -300,6 +325,186 @@ export function dropPending(s: Schedule, now: number, outcome: "skipped-busy" | 
     : { at: iso(now), outcome, dueAt, ...(threadId ? { threadId } : {}) };
   s.history.push(entry);
   return entry;
+}
+
+// --- Pausing, resuming and editing ---
+
+/** After this many failed runs in a row, a schedule pauses itself. */
+export const PAUSE_AFTER_FAILURES = 3;
+
+/** The pausedReason of a schedule the user paused. */
+export const PAUSED_BY_USER = "paused by the user";
+
+/**
+ * Pauses the schedule: it fires no more until it is resumed. Its pending
+ * fire, if any, is dropped: it never started, so it is not counted (and no
+ * longer holds a run). Returns that fire's dueAt.
+ */
+export function pauseSchedule(s: Schedule, reason: string): string | undefined {
+  s.enabled = false;
+  s.nextRunAt = null;
+  s.pausedReason = reason;
+  const dropped = s.pending?.dueAt;
+  delete s.pending;
+  return dropped;
+}
+
+/**
+ * True when the schedule can never fire again from `now`, paused or not: a
+ * once whose time has passed (so one that has fired or been missed), a
+ * used-up maxRuns, or no run left before endsAt. Resuming it is refused.
+ * A once goes by its time alone: runCount spans the schedule's whole life
+ * (runs of an earlier `when`, a run now before its time), and none of those
+ * use up the once.
+ */
+export function hasEnded(s: Schedule, now: number): boolean {
+  if (s.when.kind === "once") return Date.parse(s.when.at) <= now;
+  if (runsLeft(s) <= 0) return true;
+  const next = nextOccurrence(s.when, now);
+  return next == null || (!!s.endsAt && next >= Date.parse(s.endsAt));
+}
+
+/** What PATCH /schedules/:id may change. */
+export const EDITABLE_FIELDS = ["enabled", "name", "prompt", "when", "overlap", "maxRuns", "endsAt"] as const;
+
+export type EditScheduleResult =
+  | {
+      ok: true;
+      schedule: Schedule;
+      /** "pause" or "resume" when `enabled` changed it, else "update". */
+      verb: "pause" | "resume" | "update";
+      /** The pending fire the edit dropped: its dueAt. */
+      droppedPending?: string;
+    }
+  | { ok: false; status: 400 | 404; error: string };
+
+/**
+ * Changes a schedule from a PATCH body: `enabled` to pause or resume it, and
+ * `name`, `prompt`, `when`, `overlap`, `maxRuns`, `endsAt` (null clears the
+ * last two), checked as createSchedule checks them. A refused edit changes
+ * nothing.
+ *
+ * Pausing drops the pending fire. Resuming clears pausedReason, resets
+ * consecutiveFailures and sets nextRunAt to the next run after now: runs
+ * that came due while it was paused never fire (decision 3), and are not
+ * counted. A schedule that has ended (hasEnded) is not resumed. A new `when`
+ * drops the pending fire (it was a fire of the old times) and, on a schedule
+ * that is enabled, moves nextRunAt to its first run after now.
+ */
+export function editSchedule(id: string, body: any, at: number = Date.now()): EditScheduleResult {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, status: 400, error: "body must be a JSON object" };
+  const keys = Object.keys(body);
+  const editable: readonly string[] = EDITABLE_FIELDS;
+  const fields = `${EDITABLE_FIELDS.join(", ")}`;
+  const unknown = keys.find((k) => !editable.includes(k));
+  if (unknown) return { ok: false, status: 400, error: `${unknown} cannot be changed: a schedule's PATCH takes ${fields}` };
+  if (!keys.length) return { ok: false, status: 400, error: `nothing to change: a schedule's PATCH takes ${fields}` };
+
+  const { enabled, name, prompt, overlap, maxRuns, endsAt } = body;
+  if (enabled !== undefined && typeof enabled !== "boolean") return { ok: false, status: 400, error: "enabled must be true or false" };
+  if (name !== undefined) {
+    const bad = nameError(name);
+    if (bad) return { ok: false, status: 400, error: bad };
+  }
+  if (prompt !== undefined) {
+    const bad = promptError(prompt);
+    if (bad) return { ok: false, status: 400, error: bad };
+  }
+  let when: When | undefined;
+  if (body.when !== undefined) {
+    const parsed = parseWhen(body.when, at);
+    if (!parsed.ok) return { ok: false, status: 400, error: parsed.error };
+    if (nextOccurrence(parsed.when, at) == null) return { ok: false, status: 400, error: "when never comes due" };
+    when = parsed.when;
+  }
+  if (overlap !== undefined && overlap !== "queue" && overlap !== "skip") {
+    return { ok: false, status: 400, error: `overlap must be "queue" or "skip"` };
+  }
+  if (maxRuns != null && (!Number.isInteger(maxRuns) || maxRuns < 1 || maxRuns > MAX_RUNS_MAX)) {
+    return { ok: false, status: 400, error: `maxRuns must be a whole number from 1 to ${MAX_RUNS_MAX}` };
+  }
+  if (endsAt != null && !isIsoInstant(endsAt)) {
+    return { ok: false, status: 400, error: "endsAt must be an ISO 8601 time with a zone, e.g. 2026-10-14T17:00:00Z" };
+  }
+
+  let error: { status: 400; error: string } | undefined;
+  let verb: "pause" | "resume" | "update" = "update";
+  let droppedPending: string | undefined;
+  const refuse = (message: string): false => {
+    error = { status: 400, error: message };
+    return false;
+  };
+  // Edits the freshly read schedule; a refusal returns false, so nothing is saved.
+  const updated = updateSchedule(id, (s) => {
+    const resuming = enabled === true && !s.enabled;
+    const pausing = enabled === false && (s.enabled || !!s.pending);
+    // Ended already: disabled, not by a pause.
+    const wasEnded = !s.enabled && !s.pausedReason;
+    if ((when || resuming) && !isRunnable({ when: when ?? s.when, target: s.target })) {
+      return refuse(`this schedule (${(when ?? s.when)?.kind} on ${s.target?.kind}) is not supported by this build`);
+    }
+
+    if (name !== undefined) s.name = name.trim();
+    if (prompt !== undefined) s.prompt = prompt;
+    if (overlap !== undefined) s.overlap = overlap;
+    if (when) {
+      s.when = when;
+      // A once runs one time: whatever ending the old times had goes.
+      if (when.kind === "once") {
+        delete s.maxRuns;
+        delete s.endsAt;
+      }
+      // A due fire still waiting was one of the old times: it goes. A run
+      // now the user queued is not, and still runs when the thread is free.
+      if (s.pending && !s.pending.manual) {
+        droppedPending = s.pending.dueAt;
+        delete s.pending;
+      }
+    }
+    if (s.when.kind === "once" && (maxRuns != null || endsAt != null)) {
+      return refuse("maxRuns and endsAt are for cron and interval schedules: a once runs one time");
+    }
+    if (maxRuns === null) delete s.maxRuns;
+    else if (maxRuns !== undefined) s.maxRuns = maxRuns;
+    if (endsAt === null) delete s.endsAt;
+    else if (endsAt !== undefined) s.endsAt = endsAt;
+
+    if (pausing) {
+      droppedPending = pauseSchedule(s, s.pausedReason ?? PAUSED_BY_USER) ?? droppedPending;
+      // One that had ended and only held a fire (a once, or its last run, on
+      // a busy thread) loses that fire and stays ended: no reason, since
+      // there is nothing to resume. Paused only if dropping the fire freed a
+      // run it can still use (a maxRuns).
+      if (wasEnded && hasEnded(s, at)) delete s.pausedReason;
+      verb = "pause";
+      return;
+    }
+    if (resuming) {
+      if (hasEnded(s, at)) return refuse("this schedule has ended");
+      s.enabled = true;
+      delete s.pausedReason;
+      s.consecutiveFailures = 0;
+      verb = "resume";
+    }
+    if (!s.enabled) return;
+
+    // Enabled: its next run, from the new times (or after a resume, from now).
+    if (when || resuming) {
+      const next = nextOccurrence(s.when, at);
+      if (next == null) return refuse("when never comes due");
+      // A once keeps `at` exactly as sent, as on create.
+      s.nextRunAt = s.when.kind === "once" ? s.when.at : iso(next);
+    }
+    if (s.nextRunAt && s.endsAt && Date.parse(s.endsAt) <= Date.parse(s.nextRunAt)) {
+      return refuse(`endsAt must be after the next run (${s.nextRunAt})`);
+    }
+    if (s.maxRuns && runsLeft(s) <= 0) {
+      return refuse(`maxRuns must be more than the runs used so far (${s.runCount}${s.pending ? ", and one waiting" : ""})`);
+    }
+  });
+  if (!updated) return { ok: false, status: 404, error: "Schedule not found" };
+  if (error) return { ok: false, ...error };
+  return { ok: true, schedule: updated, verb, ...(droppedPending ? { droppedPending } : {}) };
 }
 
 /**

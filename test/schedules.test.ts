@@ -6,11 +6,13 @@ import { EventEmitter } from "events";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { bindSession, createBot, createThread, dataDir, getThread, JARVIS_BOT_ID, jarvisDir, updateThread } from "../src/bot-store";
+import { bindSession, createBot, createThread, dataDir, deleteThread, getThread, JARVIS_BOT_ID, jarvisDir, updateThread } from "../src/bot-store";
 import { runningChildOf } from "../src/child-lock";
 import { watchDeferredTurns } from "../src/deferred-turns";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
+import { addSubscription, pushSender, pushTiming, watchPush, type PushPayload } from "../src/push";
+import { createECDH, randomBytes } from "crypto";
 import { watchChildReports } from "../src/reports";
 import { Cron } from "croner";
 import { ERROR_BACKOFF_MS, LATE_GRACE_MS, MIN_REARM_MS, RATE_CAP_STARTS, RATE_RETRY_MS, RATE_WINDOW_MS, schedulerClock, startScheduler, stopScheduler, TIMER_CAP_MS } from "../src/scheduler";
@@ -22,6 +24,7 @@ import {
   notifyPermissionsChanged,
   permissionsEmitter,
   sessions,
+  setShuttingDown,
   type IRequest,
   type IResponse,
   type SessionStore,
@@ -483,12 +486,12 @@ test("several fires during one busy turn merge into one pending", async (t) => {
     assert.equal(fired.status, 200, JSON.stringify(fired.body));
     assert.equal(fired.body.queued, true);
     assert.equal(fired.body.run, undefined);
-    assert.deepEqual(fired.body.schedule.pending, { dueAt: atIso(now) });
+    assert.deepEqual(fired.body.schedule.pending, { dueAt: atIso(now), manual: true });
     dues.push(atIso(now));
   }
   assert.equal(runs.length, 1);
   let got = getSchedule(s.id)!;
-  assert.deepEqual(got.pending, { dueAt: dues[2] }, "one pending: the newest");
+  assert.deepEqual(got.pending, { dueAt: dues[2], manual: true }, "one pending: the newest");
   // The merged fires leave a trace: skipped-busy, with when each came due.
   assert.deepEqual(got.history.map((h) => [h.outcome, h.dueAt]), [["skipped-busy", dues[0]], ["skipped-busy", dues[1]]]);
   assert.equal(got.runCount, 2, "each given-up fire is a run used up");
@@ -2145,4 +2148,549 @@ test("a missed record that keeps failing to save is logged again once a minute",
   } finally {
     unblockWrites();
   }
+});
+
+// --- Failure pausing ---
+
+/** A turn that ends on a result error: its status is done, its outcome failed. */
+async function endWithResultError(store: SessionStore): Promise<void> {
+  emitEvent(store, "result", { subtype: "error_max_turns" });
+  store.status = "done";
+  notifyPermissionsChanged();
+  await settle();
+}
+
+/** Ends a running turn as the user's Stop does. */
+async function stopTurn(store: SessionStore): Promise<void> {
+  store.abortRequested = true;
+  emitEvent(store, "aborted", { message: "Aborted by user" });
+  store.status = "done";
+  notifyPermissionsChanged();
+  await settle();
+}
+
+/** Runs the schedule now through the route; the turn it started. */
+async function runNow(id: string): Promise<SessionStore> {
+  const before = runs.length;
+  const fired = await serve("POST", `/schedules/${id}/run`);
+  assert.equal(fired.status, 200, JSON.stringify(fired.body));
+  assert.equal(runs.length, before + 1, "a turn started");
+  return runs.at(-1)!;
+}
+
+const pushLines = (logs: { mock: { calls: Array<{ arguments: unknown[] }> } }) =>
+  logs.mock.calls.map((c) => String(c.arguments[0])).filter((l) => l.startsWith("[push]"));
+
+test("a run that starts and then ends in error counts toward the pause", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const thread = plainThread("Demo");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  assert.equal(s.consecutiveFailures, 0);
+
+  await endTurn(await runNow(s.id), "error");
+  let got = getSchedule(s.id)!;
+  assert.equal(got.consecutiveFailures, 1);
+  assert.equal(got.history.at(-1)!.turnOutcome, "failed");
+  assert.equal(got.enabled, true);
+
+  // A result error fails the turn too, though its status says done.
+  await endWithResultError(await runNow(s.id));
+  got = getSchedule(s.id)!;
+  assert.equal(got.consecutiveFailures, 2);
+  assert.equal(got.history.at(-1)!.turnOutcome, "failed");
+  assert.equal(got.enabled, true, "not yet");
+  assert.equal(got.pausedReason, undefined);
+});
+
+test("three consecutive failures pause the schedule and push failed", async (t) => {
+  const logs = t.mock.method(console, "log", () => {});
+  const thread = plainThread("Demo");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 1 });
+  let at = Date.parse(s.nextRunAt!);
+  for (let i = 1; i <= 3; i++) {
+    advanceTo(at);
+    assert.equal(runs.length, i);
+    await endTurn(runs[i - 1], "error");
+    at += MIN;
+  }
+  const got = getSchedule(s.id)!;
+  assert.equal(got.enabled, false);
+  assert.equal(got.nextRunAt, null);
+  assert.equal(got.consecutiveFailures, 3);
+  assert.equal(got.pausedReason, "paused after 3 failed runs: it broke");
+  assert.deepEqual(got.history.map((h) => h.turnOutcome), ["failed", "failed", "failed"]);
+
+  // One push for the pause (no browser is subscribed here, so it is logged as skipped).
+  const pauses = pushLines(logs).filter((l) => l.includes(`failed "Tick" (thread ${thread.id})`));
+  assert.equal(pauses.length, 1, pushLines(logs).join("\n"));
+  assert.ok(logs.mock.calls.some((c) => c.arguments[0] === `[schedules] ${s.id} paused: paused after 3 failed runs: it broke`));
+
+  // It never fires again on its own.
+  advanceTo(at + 10 * MIN);
+  assert.equal(runs.length, 3);
+  assert.equal(timer, null, "nothing armed");
+});
+
+test("the pause push stands in for the failing turn's own failed push", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const sent: PushPayload[] = [];
+  const realSend = pushSender.send;
+  const realSchedule = pushTiming.schedule;
+  pushSender.send = async (_sub, payload) => { sent.push(JSON.parse(payload)); };
+  // Held finished/failed pushes go out at once.
+  pushTiming.schedule = (fn) => { fn(); return () => {}; };
+  const ecdh = createECDH("prime256v1");
+  addSubscription({
+    endpoint: "https://fcm.googleapis.com/fcm/send/sched-pause",
+    keys: { p256dh: ecdh.generateKeys().toString("base64url"), auth: randomBytes(16).toString("base64url") },
+  });
+  // Registered after the scheduler's listener (beforeEach), as server.ts does.
+  const unwatch = watchPush();
+  t.after(() => {
+    unwatch();
+    pushSender.send = realSend;
+    pushTiming.schedule = realSchedule;
+    rmSync(join(dataDir(), "push-subscriptions.json"), { force: true });
+  });
+
+  const thread = plainThread("Demo");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  await endTurn(await runNow(s.id), "error");
+  await endTurn(await runNow(s.id), "error");
+  await settle();
+  assert.deepEqual(sent.map((p) => p.kind), ["failed", "failed"], "the first two fail as any turn does");
+  await endTurn(await runNow(s.id), "error");
+  await settle();
+  assert.equal(sent.length, 3, "one push for the third failure, not two");
+  const pause = sent[2];
+  assert.equal(pause.kind, "failed");
+  assert.equal(pause.title, "Tick");
+  assert.equal(pause.body, "⏰ Tick paused after 3 failed runs");
+  assert.equal(pause.tag, `thread-${thread.id}`);
+  assert.equal(pause.threadId, thread.id);
+  assert.match(pause.url, new RegExp(`thread=${thread.id}`));
+});
+
+test("done resets the failure count", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const thread = plainThread("Demo");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  await endTurn(await runNow(s.id), "error");
+  await endTurn(await runNow(s.id), "error");
+  assert.equal(getSchedule(s.id)!.consecutiveFailures, 2);
+  await endTurn(await runNow(s.id), "done");
+  let got = getSchedule(s.id)!;
+  assert.equal(got.consecutiveFailures, 0);
+  assert.equal(got.enabled, true);
+  // Two more failures are two, not four: still running.
+  await endTurn(await runNow(s.id), "error");
+  await endTurn(await runNow(s.id), "error");
+  got = getSchedule(s.id)!;
+  assert.equal(got.consecutiveFailures, 2);
+  assert.equal(got.enabled, true);
+});
+
+test("a user stop does not count as a failure", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const thread = plainThread("Demo");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  await endTurn(await runNow(s.id), "error");
+  await endTurn(await runNow(s.id), "error");
+  // Stopped with an error status too (the agent's abort can end that way): still stopped.
+  const store = await runNow(s.id);
+  store.abortRequested = true;
+  emitEvent(store, "aborted", { message: "Aborted by user" });
+  store.status = "error";
+  notifyPermissionsChanged();
+  await settle();
+  await stopTurn(await runNow(s.id));
+  const got = getSchedule(s.id)!;
+  assert.deepEqual(got.history.map((h) => h.turnOutcome), ["failed", "failed", "stopped", "stopped"]);
+  assert.equal(got.consecutiveFailures, 2, "unchanged");
+  assert.equal(got.enabled, true);
+  assert.equal(got.pausedReason, undefined);
+  assert.ok(got.nextRunAt);
+});
+
+test("a turn our own shutdown killed counts for nothing", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const thread = plainThread("Demo");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  const store = await runNow(s.id);
+  setShuttingDown(true);
+  try {
+    await endTurn(store, "error");
+  } finally {
+    setShuttingDown(false);
+  }
+  const got = getSchedule(s.id)!;
+  assert.equal(got.consecutiveFailures, 0);
+  assert.equal(got.enabled, true);
+});
+
+test("failed-to-start counts, a busy skip does not", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const thread = plainThread("Demo");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 1 }, { overlap: "skip" });
+  let at = Date.parse(s.nextRunAt!);
+
+  // Claude Code is gone: the fire is refused.
+  stopScheduler();
+  startScheduler(["codex"]);
+  advanceTo(at);
+  let got = getSchedule(s.id)!;
+  assert.equal(got.history.at(-1)!.outcome, "failed-to-start");
+  assert.match(got.history.at(-1)!.error ?? "", /claude-code/i);
+  assert.equal(got.consecutiveFailures, 1);
+
+  // Back again, with a user's turn running: skipped-busy, not counted.
+  stopScheduler();
+  startScheduler(ALL_AGENTS);
+  assert.ok(startTurn({ threadId: thread.id, prompt: "work" }, ALL_AGENTS).ok);
+  at += MIN;
+  advanceTo(at);
+  got = getSchedule(s.id)!;
+  assert.equal(got.history.at(-1)!.outcome, "skipped-busy");
+  assert.equal(got.consecutiveFailures, 1);
+
+  // Queued behind it (overlap queue), not counted either.
+  assert.equal((await serve("PATCH", `/schedules/${s.id}`, { overlap: "queue" })).status, 200);
+  at += MIN;
+  advanceTo(at);
+  got = getSchedule(s.id)!;
+  assert.ok(got.pending);
+  assert.equal(got.consecutiveFailures, 1);
+
+  // Two more refusals pause it, with the start error as the reason.
+  await endTurn(runs[0]);
+  // The drain started the pending fire: let it end well, which resets the count.
+  assert.equal(runs.length, 2);
+  await endTurn(runs[1]);
+  assert.equal(getSchedule(s.id)!.consecutiveFailures, 0);
+  stopScheduler();
+  startScheduler(["codex"]);
+  for (let i = 0; i < 3; i++) {
+    at += MIN;
+    advanceTo(at);
+  }
+  got = getSchedule(s.id)!;
+  assert.equal(got.consecutiveFailures, 3);
+  assert.equal(got.enabled, false);
+  assert.match(got.pausedReason ?? "", /^paused after 3 failed runs: .*claude-code/i);
+  assert.equal(got.nextRunAt, null);
+});
+
+test("a missing thread or bot pauses the schedule at once", async (t) => {
+  const logs = t.mock.method(console, "log", () => {});
+  // The thread is deleted.
+  const thread = plainThread("Doomed");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 1 });
+  assert.ok(deleteThread(thread.id));
+  advanceTo(Date.parse(s.nextRunAt!));
+  let got = getSchedule(s.id)!;
+  assert.equal(got.history.at(-1)!.outcome, "failed-to-start");
+  assert.equal(got.history.at(-1)!.error, "thread not found");
+  assert.equal(got.consecutiveFailures, 1);
+  assert.equal(got.enabled, false);
+  assert.equal(got.nextRunAt, null);
+  assert.equal(got.pausedReason, "its thread was deleted");
+  assert.equal(pushLines(logs).filter((l) => l.includes(`failed "Tick" (thread ${thread.id})`)).length, 1);
+
+  // The thread is there, its bot is not.
+  const bot = createBot({ name: "Gone Bot" });
+  const orphan = createThread(bot.id, folder(), "Orphan", "chat", "claude-code");
+  const o = await scheduleRecurring(orphan.id, { kind: "interval", everyMinutes: 60 });
+  const botsFile = join(dataDir(), "bots.json");
+  const bots = JSON.parse(readFileSync(botsFile, "utf-8"));
+  writeFileSync(botsFile, JSON.stringify(Array.isArray(bots) ? bots.filter((b: any) => b.id !== bot.id) : { ...bots, bots: bots.bots.filter((b: any) => b.id !== bot.id) }));
+  assert.ok(getThread(orphan.id));
+  const fired = await serve("POST", `/schedules/${o.id}/run`);
+  assert.equal(fired.status, 200);
+  assert.equal(fired.body.run.outcome, "failed-to-start");
+  got = getSchedule(o.id)!;
+  assert.equal(got.enabled, false);
+  assert.equal(got.pausedReason, "its thread's bot was deleted");
+  assert.equal(runs.length, 0);
+});
+
+test("PATCH pauses and resumes; resume recomputes the next run and fires nothing missed", async (t) => {
+  const logs = t.mock.method(console, "log", () => {});
+  const thread = plainThread("Demo");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 1 });
+  const anchor = s.when.kind === "interval" ? Date.parse(s.when.anchor) : NaN;
+
+  const paused = await serve("PATCH", `/schedules/${s.id}`, { enabled: false }, "127.0.0.1");
+  assert.equal(paused.status, 200, JSON.stringify(paused.body));
+  assert.equal(paused.body.enabled, false);
+  assert.equal(paused.body.nextRunAt, null);
+  assert.equal(paused.body.pausedReason, "paused by the user");
+  assert.deepEqual(paused.body.nextRuns, []);
+  assert.ok(logs.mock.calls.some((c) => c.arguments[0] === `[schedules] pause ${s.id} from 127.0.0.1`));
+
+  // Nothing fires while it is paused.
+  advanceTo(now + 5 * MIN + 30_000);
+  assert.equal(runs.length, 0);
+
+  updateSchedule(s.id, (x) => { x.consecutiveFailures = 2; });
+  const resumed = await serve("PATCH", `/schedules/${s.id}`, { enabled: true });
+  assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
+  const got: Schedule = resumed.body;
+  assert.equal(got.enabled, true);
+  assert.equal(got.pausedReason, undefined);
+  assert.equal(got.consecutiveFailures, 0);
+  // The next slot on its anchor after now: the five it was paused through are not fired, nor recorded.
+  const next = anchor + Math.ceil((now - anchor) / MIN) * MIN;
+  assert.equal(got.nextRunAt, atIso(next));
+  assert.ok(Date.parse(got.nextRunAt!) > now);
+  assert.equal(getSchedule(s.id)!.history.length, 0);
+  assert.ok(logs.mock.calls.some((c) => String(c.arguments[0]).startsWith(`[schedules] resume ${s.id} from`)));
+  advanceTo(now);
+  assert.equal(runs.length, 0, "no catch-up run");
+  advanceTo(next);
+  assert.equal(runs.length, 1, "runs on from its next time");
+  await endTurn(runs[0]);
+
+  // Resuming one that is running is a no-op, and keeps its count.
+  updateSchedule(s.id, (x) => { x.consecutiveFailures = 1; });
+  const again = await serve("PATCH", `/schedules/${s.id}`, { enabled: true });
+  assert.equal(again.status, 200);
+  assert.equal(again.body.consecutiveFailures, 1);
+  assert.equal(again.body.nextRunAt, atIso(next + MIN));
+});
+
+test("PATCH pausing or a new when drops the pending fire and re-arms", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const thread = plainThread("Busy");
+  assert.ok(startTurn({ threadId: thread.id, prompt: "work" }, ALL_AGENTS).ok);
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 1 });
+  advanceTo(Date.parse(s.nextRunAt!));
+  assert.ok(getSchedule(s.id)!.pending);
+
+  // A new `when`: the old fire goes, and the timer follows the new times.
+  const edited = await serve("PATCH", `/schedules/${s.id}`, { when: { kind: "interval", everyMinutes: 30 } });
+  assert.equal(edited.status, 200, JSON.stringify(edited.body));
+  assert.equal(edited.body.pending, undefined);
+  assert.equal(edited.body.nextRunAt, atIso(now + 30 * MIN));
+  assert.equal(edited.body.runCount, 0, "a dropped fire never ran: not counted");
+  assert.equal(armed()?.ms, TIMER_CAP_MS);
+
+  // Queue another (run now), then pause: dropped too.
+  assert.equal((await serve("POST", `/schedules/${s.id}/run`)).body.queued, true);
+  assert.ok(getSchedule(s.id)!.pending);
+  const paused = await serve("PATCH", `/schedules/${s.id}`, { enabled: false });
+  assert.equal(paused.body.pending, undefined);
+  assert.ok(!armed() || armed()!.cancelled, "nothing left to arm");
+  await endTurn(runs[0]);
+  assert.equal(runs.length, 1, "nothing ran after the user's turn");
+});
+
+test("PATCH validates like POST and refuses to resume an ended schedule", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const thread = plainThread("Demo");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  const before = getSchedule(s.id)!;
+  const refused = async (body: unknown, pattern: RegExp, id = s.id, status = 400) => {
+    const r = await serve("PATCH", `/schedules/${id}`, body);
+    assert.equal(r.status, status, JSON.stringify(body));
+    assert.match(r.body.error, pattern);
+  };
+  await refused({ when: { kind: "interval", everyMinutes: 0.5 } }, /everyMinutes/);
+  await refused({ when: { kind: "cron", expr: "* * * * * *" } }, /5-field/);
+  await refused({ when: { kind: "once", at: atIso(now - 1000) } }, /future/);
+  await refused({ when: { kind: "weekly" } }, /when.kind must be/);
+  await refused({ name: 'Bad "name"' }, /quotes/);
+  await refused({ name: "" }, /name is required/);
+  await refused({ prompt: "x".repeat(4001) }, /4000/);
+  await refused({ overlap: "pile-up" }, /overlap/);
+  await refused({ maxRuns: 0 }, /maxRuns/);
+  await refused({ endsAt: "tomorrow" }, /endsAt/);
+  await refused({ endsAt: atIso(now + MIN) }, /endsAt must be after the next run/);
+  await refused({ enabled: "yes" }, /enabled/);
+  await refused({ target: { kind: "thread", threadId: plainThread().id } }, /target cannot be changed/);
+  await refused({}, /nothing to change/);
+  await refused({ enabled: false }, /not found/i, "no-such-schedule", 404);
+  // A refusal with a good field alongside changes nothing either.
+  await refused({ name: "Renamed", when: { kind: "interval", everyMinutes: 0 } }, /everyMinutes/);
+  assert.deepEqual(getSchedule(s.id), before, "unchanged");
+
+  // A good edit: name, prompt, when, overlap and an ending, as POST takes them.
+  const ok = await serve("PATCH", `/schedules/${s.id}`, {
+    name: "Renamed", prompt: "Say hi", when: { kind: "cron", expr: "0 9 * * *", tz: "UTC" }, overlap: "skip", maxRuns: 5,
+  });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.name, "Renamed");
+  assert.equal(ok.body.prompt, "Say hi");
+  assert.deepEqual(ok.body.when, { kind: "cron", expr: "0 9 * * *", tz: "UTC" });
+  assert.equal(ok.body.overlap, "skip");
+  assert.equal(ok.body.maxRuns, 5);
+  assert.equal(ok.body.nextRuns.length, 3);
+  assert.equal(ok.body.nextRunAt, ok.body.nextRuns[0]);
+  // A once takes no ending; switching to one drops it.
+  await refused({ when: { kind: "once", at: atIso(now + MIN) }, maxRuns: 2 }, /a once runs one time/);
+  const once = await serve("PATCH", `/schedules/${s.id}`, { when: { kind: "once", at: atIso(now + MIN) } });
+  assert.equal(once.status, 200);
+  assert.equal(once.body.maxRuns, undefined);
+  assert.equal(once.body.nextRunAt, atIso(now + MIN));
+
+  // A once that has fired has ended: it can't be resumed.
+  advanceTo(now + MIN);
+  assert.equal(runs.length, 1);
+  await endTurn(runs[0]);
+  assert.equal(getSchedule(s.id)!.enabled, false);
+  await refused({ enabled: true }, /this schedule has ended/);
+
+  // So has one whose maxRuns is used up, until maxRuns is raised.
+  const capped = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 }, { maxRuns: 1 });
+  await endTurn(await runNow(capped.id));
+  assert.equal(getSchedule(capped.id)!.enabled, false);
+  await refused({ enabled: true }, /this schedule has ended/, capped.id);
+  const raised = await serve("PATCH", `/schedules/${capped.id}`, { enabled: true, maxRuns: 3 });
+  assert.equal(raised.status, 200, JSON.stringify(raised.body));
+  assert.equal(raised.body.enabled, true);
+  assert.ok(raised.body.nextRunAt);
+});
+
+test("a run's outcome is recorded and counted even after 20 newer skipped-busy entries", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const thread = plainThread("Slow");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 1 }, { overlap: "skip" });
+  let at = Date.parse(s.nextRunAt!);
+  advanceTo(at);
+  assert.equal(runs.length, 1);
+  // Its own turn runs on for 25 minutes: a skipped-busy every minute.
+  for (let i = 0; i < 25; i++) {
+    at += MIN;
+    advanceTo(at);
+  }
+  let got = getSchedule(s.id)!;
+  assert.equal(got.history.length, 20);
+  assert.equal(got.history.filter((h) => h.outcome === "skipped-busy").length, 19);
+  assert.equal(got.history[0].outcome, "started", "the running turn's entry is kept");
+  await endTurn(runs[0], "error");
+  got = getSchedule(s.id)!;
+  assert.equal(got.history[0].turnOutcome, "failed");
+  assert.equal(got.consecutiveFailures, 1);
+  // Once it has its outcome, it ages out like the rest.
+  at += MIN;
+  advanceTo(at);
+  assert.equal(runs.length, 2);
+  for (let i = 0; i < 20; i++) {
+    at += MIN;
+    advanceTo(at);
+  }
+  got = getSchedule(s.id)!;
+  assert.equal(got.history.length, 20);
+  assert.equal(got.history[0].outcome, "started");
+  assert.equal(got.history[0].turnOutcome, undefined, "the newest open one is kept, the old one went");
+});
+
+// --- Review fixes (05) ---
+
+test("a once goes by its time alone: earlier runs never stop it resuming", async (t) => {
+  t.mock.method(console, "log", () => {});
+  // A recurring schedule with runs behind it, paused, switched to a once.
+  const thread = plainThread("Demo");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  await endTurn(await runNow(s.id));
+  await endTurn(await runNow(s.id));
+  assert.equal(getSchedule(s.id)!.runCount, 2);
+  assert.equal((await serve("PATCH", `/schedules/${s.id}`, { enabled: false })).status, 200);
+  const at = atIso(now + 10 * MIN);
+  assert.equal((await serve("PATCH", `/schedules/${s.id}`, { when: { kind: "once", at } })).status, 200);
+  const resumed = await serve("PATCH", `/schedules/${s.id}`, { enabled: true });
+  assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
+  assert.equal(resumed.body.nextRunAt, at);
+
+  // Both in one PATCH, from paused.
+  assert.equal((await serve("PATCH", `/schedules/${s.id}`, { enabled: false })).status, 200);
+  const both = await serve("PATCH", `/schedules/${s.id}`, { enabled: true, when: { kind: "once", at: atIso(now + 60 * MIN) } });
+  assert.equal(both.status, 200, JSON.stringify(both.body));
+  assert.equal(both.body.enabled, true);
+
+  // A once run now before its time, paused, then resumed before its time: it still fires at its time.
+  const other = plainThread("Other");
+  const once = await scheduleOnce(other.id, 30 * MIN);
+  await endTurn(await runNow(once.id));
+  assert.equal(getSchedule(once.id)!.runCount, 1);
+  assert.equal((await serve("PATCH", `/schedules/${once.id}`, { enabled: false })).status, 200);
+  const back = await serve("PATCH", `/schedules/${once.id}`, { enabled: true });
+  assert.equal(back.status, 200, JSON.stringify(back.body));
+  assert.equal(back.body.nextRunAt, once.nextRunAt);
+  const before = runs.length;
+  advanceTo(Date.parse(once.nextRunAt!));
+  assert.equal(runs.length, before + 1, "it fires at its own time");
+  assert.deepEqual(runs.at(-1)!.scheduled, { id: once.id, name: "Ping", run: 2 });
+
+  // Once its time has passed, it has ended.
+  await endTurn(runs.at(-1)!);
+  await serve("PATCH", `/schedules/${once.id}`, { enabled: false });
+  const ended = await serve("PATCH", `/schedules/${once.id}`, { enabled: true });
+  assert.equal(ended.status, 400);
+  assert.match(ended.body.error, /this schedule has ended/);
+});
+
+test("a new when keeps a queued run now; it runs when the thread is free", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const thread = plainThread("Busy");
+  assert.ok(startTurn({ threadId: thread.id, prompt: "work" }, ALL_AGENTS).ok);
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  const queued = await serve("POST", `/schedules/${s.id}/run`);
+  assert.equal(queued.body.queued, true);
+  const dueAt = atIso(now);
+
+  const edited = await serve("PATCH", `/schedules/${s.id}`, { when: { kind: "interval", everyMinutes: 30 } });
+  assert.equal(edited.status, 200, JSON.stringify(edited.body));
+  assert.deepEqual(edited.body.pending, { dueAt, manual: true }, "kept");
+
+  // A due fire of the old times, by contrast, is dropped (the earlier test); this one runs.
+  await endTurn(runs[0]);
+  assert.equal(runs.length, 2);
+  assert.deepEqual(runs[1].scheduled, { id: s.id, name: "Tick", run: 1 });
+  assert.equal(getSchedule(s.id)!.pending, undefined);
+
+  // A run now handed back by a 409 at the drain stays a run now.
+  await endTurn(runs[1]);
+  assert.ok(startTurn({ threadId: thread.id, prompt: "more work" }, ALL_AGENTS).ok);
+  assert.equal((await serve("POST", `/schedules/${s.id}/run`)).body.queued, true);
+  assert.equal(getSchedule(s.id)!.pending?.manual, true);
+});
+
+test("pausing an ended schedule that holds a fire drops it and leaves it ended, not paused", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const thread = plainThread("Busy");
+  assert.ok(startTurn({ threadId: thread.id, prompt: "work" }, ALL_AGENTS).ok);
+  // A once comes due on a busy thread: pending, and ended.
+  const once = await scheduleOnce(thread.id, 30_000);
+  advanceTo(now + 30_000);
+  let got = getSchedule(once.id)!;
+  assert.ok(got.pending);
+  assert.equal(got.enabled, false);
+  const paused = await serve("PATCH", `/schedules/${once.id}`, { enabled: false });
+  assert.equal(paused.status, 200, JSON.stringify(paused.body));
+  assert.equal(paused.body.pending, undefined, "the fire is dropped");
+  assert.equal(paused.body.pausedReason, undefined, "ended, not paused");
+  assert.equal(paused.body.enabled, false);
+  const resumed = await serve("PATCH", `/schedules/${once.id}`, { enabled: true });
+  assert.equal(resumed.status, 400);
+  assert.match(resumed.body.error, /this schedule has ended/);
+
+  // Its last maxRuns run pending: dropping it frees that run, so it is paused, and resumes.
+  const capped = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 1 }, { maxRuns: 1 });
+  advanceTo(Date.parse(capped.nextRunAt!));
+  got = getSchedule(capped.id)!;
+  assert.ok(got.pending);
+  assert.equal(got.enabled, false);
+  const p2 = await serve("PATCH", `/schedules/${capped.id}`, { enabled: false });
+  assert.equal(p2.body.pending, undefined);
+  assert.equal(p2.body.pausedReason, "paused by the user");
+  const r2 = await serve("PATCH", `/schedules/${capped.id}`, { enabled: true });
+  assert.equal(r2.status, 200, JSON.stringify(r2.body));
+  assert.equal(r2.body.enabled, true);
+
+  await endTurn(runs[0]);
+  assert.equal(runs.length, 1, "neither dropped fire ran");
 });

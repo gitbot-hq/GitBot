@@ -433,6 +433,13 @@ export interface EndedTurn {
    * Turn-end listeners share the one object; read by the activity stamp.
    */
   reportDelivered?: boolean;
+  /**
+   * Set by the scheduler's turn-end listener when this scheduled turn's
+   * failure paused its schedule: the pause push (push.ts,
+   * sendSchedulePausedPush) has gone out in place of this turn's own
+   * "failed" push. Registered before watchPush, as server.ts does.
+   */
+  schedulePaused?: boolean;
 }
 
 type TurnEndListener = (store: SessionStore, turn: EndedTurn) => void;

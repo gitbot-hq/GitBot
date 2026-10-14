@@ -1,6 +1,7 @@
 import { getThread, type Thread } from "./bot-store";
 import { runningChildOf } from "./child-lock";
-import { turnOutcome } from "./attention";
+import { errorLine, latestLine, turnOutcome } from "./attention";
+import { sendSchedulePausedPush } from "./push";
 import { isShuttingDown, onTurnEnd, type EndedTurn } from "./server-common";
 import {
   claimManualRun,
@@ -8,6 +9,8 @@ import {
   getSchedule,
   isRunnable,
   listSchedules,
+  pauseSchedule,
+  PAUSE_AFTER_FAILURES,
   queueManualRun,
   settleDue,
   targetThreadId,
@@ -41,6 +44,15 @@ import { startTurn } from "./turns";
 // replaces a waiting one, which is recorded `skipped-busy`: one pending at
 // most, so a 1-minute schedule on a slow thread runs back to back, never
 // piling up. A restart records a pending fire missed: never fired late.
+//
+// A schedule that keeps failing pauses itself (H4). A run that fails counts
+// toward it: a turn that started and ended `failed` (counted at its turn end,
+// from the ended turn's own snapshot), or a `failed-to-start`. A `done` turn
+// resets the count; a turn the user stopped, a busy skip, a queued fire or a
+// missed run change nothing. At PAUSE_AFTER_FAILURES in a row it is paused
+// (`pausedReason`), and one `failed` push says so. A start that can never
+// work (its thread or bot is gone) pauses it at once. Only the user resumes
+// it (PATCH /schedules/:id).
 
 /**
  * Time and timers, as the scheduler sees them. A seam: tests set `now` and
@@ -226,6 +238,16 @@ export function rearmScheduler(minDelay = 0): void {
 }
 
 /**
+ * A schedule was edited or deleted (PATCH, DELETE): a rate-cap hold on its
+ * old due time is forgotten, so a later fire is never taken for a held one,
+ * and the timer is re-armed for its new times.
+ */
+export function scheduleChanged(id: string): void {
+  heldByCap.delete(id);
+  rearmScheduler();
+}
+
+/**
  * The timer went off: fire everything due, earliest first, then re-arm,
  * never at 0. A due fire the rate cap has no room for is left unclaimed
  * (its runCount and nextRunAt untouched) and tried again when the cap has
@@ -377,7 +399,7 @@ export function fireSchedule(
     const pendingAt = dueAt ?? at;
     const back = updateSchedule(id, (s) => {
       unclaim(s, lastRunBefore);
-      s.pending = { dueAt: pendingAt };
+      s.pending = kind === "manual" ? { dueAt: pendingAt, manual: true } : { dueAt: pendingAt };
       if (missed) s.history.push(missed);
     }) ?? claimed;
     console.log(`[schedules] fire ${id}: thread ${run.threadId} is busy (409); queued (due ${pendingAt})`);
@@ -386,15 +408,18 @@ export function fireSchedule(
   if (delayedMs !== undefined && delayedMs > 0) run = { ...run, delayedMs };
   // The rate cap counts starts only.
   if (run.outcome === "started") recentStarts.push(nowMs);
+  let paused: Paused | undefined;
   const schedule = updateSchedule(id, (s) => {
     s.history.push(run);
     if (missed) s.history.push(missed);
+    paused = countStartFailure(s, run);
   }) ?? claimed;
   const where = run.threadId ? ` on thread ${run.threadId}` : "";
   const why = run.error ? ` (${run.error})` : "";
   const late = run.delayedMs ? ` ${Math.round(run.delayedMs / 1000)}s late (rate cap)` : "";
-  const end = schedule.enabled ? "" : "; the schedule has ended";
+  const end = schedule.enabled || paused ? "" : "; the schedule has ended";
   console.log(`[schedules] fire ${id} run ${runNumber}: ${run.outcome}${where}${late}${why}${end}`);
+  if (paused) announcePause(schedule, paused);
   return { schedule, run };
 }
 
@@ -448,11 +473,13 @@ export function deliverPendingSchedule(threadId: string, availableAgents: readon
     const at = iso(nowMs);
     let runNumber: number | undefined;
     let dueAt = at;
+    let manual = false;
     let lastRunBefore: string | undefined;
     // Claimed, and off the queue, before the start: never both pending and started.
     const claimed = updateSchedule(id, (s) => {
       if (!s.pending) return false;
       dueAt = s.pending.dueAt;
+      manual = !!s.pending.manual;
       lastRunBefore = s.lastRunAt;
       delete s.pending;
       s.runCount += 1;
@@ -465,7 +492,7 @@ export function deliverPendingSchedule(threadId: string, availableAgents: readon
       const pendingAt = dueAt;
       updateSchedule(id, (s) => {
         unclaim(s, lastRunBefore);
-        s.pending = { dueAt: pendingAt };
+        s.pending = manual ? { dueAt: pendingAt, manual: true } : { dueAt: pendingAt };
       });
       console.log(`[schedules] ${id}: thread ${threadId} is busy again; still queued (due ${pendingAt})`);
       return false;
@@ -473,14 +500,28 @@ export function deliverPendingSchedule(threadId: string, availableAgents: readon
     const waited = nowMs - Date.parse(dueAt);
     if (waited > 0) run = { ...run, delayedMs: waited };
     if (run.outcome === "started") recentStarts.push(nowMs);
-    updateSchedule(id, (s) => {
+    let paused: Paused | undefined;
+    const after = updateSchedule(id, (s) => {
       s.history.push(run);
+      paused = countStartFailure(s, run);
     });
     const why = run.error ? ` (${run.error})` : "";
     console.log(`[schedules] fire ${id} run ${runNumber}: ${run.outcome} on thread ${threadId}, queued since ${dueAt}${why}`);
+    if (paused && after) announcePause(after, paused);
     if (run.outcome === "started") return true;
   }
 }
+
+/**
+ * Start errors that no retry can fix: what is gone stays gone. The schedule
+ * pauses at once, with the reason. (A new-thread target's project or bot
+ * joins these with that target.) Keyed by the run's `error`.
+ */
+const GONE: Record<string, string> = {
+  "thread not found": "its thread was deleted",
+  "Thread not found": "its thread was deleted",
+  "Bot not found": "its thread's bot was deleted",
+};
 
 /** Starts a claimed fire's turn, or says why not. */
 function startScheduledTurn(s: Schedule, run: number, availableAgents: readonly string[], at: string): ScheduleRun {
@@ -510,6 +551,7 @@ function startScheduledTurn(s: Schedule, run: number, availableAgents: readonly 
     // Only a turn in the way is busy. A 409 for setup (the bot still needs
     // to set up this machine) is a start that cannot happen: say why.
     if (started.status === 409 && !started.extra?.setupRequired) return { at, outcome: "skipped-busy", threadId };
+    // A 404 is the thread or its bot gone (GONE). Kept as startTurn words it.
     return { at, outcome: "failed-to-start", threadId, error: started.message };
   } catch (err: any) {
     return { at, outcome: "failed-to-start", threadId, error: err?.message ?? "failed to start" };
@@ -626,20 +668,83 @@ function recordMissed(now: number): void {
   }
 }
 
+/** Why a schedule just paused itself: the reason stored, and the push's words. */
+interface Paused {
+  reason: string;
+  body: string;
+}
+
 /**
- * How a scheduled turn ended, onto the run it began: the newest "started"
- * entry for its thread still without an outcome. Never throws into the
- * turn-end loop.
+ * Counts a run's result toward the pause, on the schedule being saved:
+ * `done` resets the count, `failed` adds one. Pauses it at
+ * PAUSE_AFTER_FAILURES in a row, or at once for a start that can never work
+ * (`gone`). Only a schedule still enabled pauses: one paused, or ended (its
+ * last run), keeps the count and stays as it is. Returns the pause, if this
+ * made one.
+ */
+function countResult(s: Schedule, result: "done" | "failed", error: string, gone?: string): Paused | undefined {
+  if (result === "done") {
+    s.consecutiveFailures = 0;
+    return undefined;
+  }
+  s.consecutiveFailures = (s.consecutiveFailures ?? 0) + 1;
+  if (!s.enabled) return undefined;
+  let paused: Paused;
+  if (gone) {
+    paused = { reason: gone, body: `⏰ ${s.name} paused: ${gone}` };
+  } else if (s.consecutiveFailures >= PAUSE_AFTER_FAILURES) {
+    const runs = `paused after ${PAUSE_AFTER_FAILURES} failed runs`;
+    const line = latestLine(error);
+    paused = { reason: line ? `${runs}: ${line}` : runs, body: `⏰ ${s.name} ${runs}` };
+  } else {
+    return undefined;
+  }
+  pauseSchedule(s, paused.reason);
+  return paused;
+}
+
+/** A run that failed to start counts as a failure; a busy skip does not. */
+function countStartFailure(s: Schedule, run: ScheduleRun): Paused | undefined {
+  if (run.outcome !== "failed-to-start") return undefined;
+  return countResult(s, "failed", run.error ?? "", run.error ? GONE[run.error] : undefined);
+}
+
+/** Logs a pause and sends its one push. Never throws. */
+function announcePause(s: Schedule, paused: Paused): void {
+  try {
+    console.log(`[schedules] ${s.id} paused: ${paused.reason}`);
+    sendSchedulePausedPush({ id: s.id, name: s.name, threadId: targetThreadId(s), body: paused.body });
+  } catch (err: any) {
+    console.error(`[scheduler] schedule ${s.id}: could not announce the pause: ${err?.message ?? err}`);
+  }
+}
+
+/**
+ * How a scheduled turn ended: onto the run it began (the newest "started"
+ * entry for its thread still without an outcome; the history trim keeps that
+ * one), and toward the pause. Read from the ended turn's snapshot, never the
+ * live store, which may be on its next turn already. The count does not need
+ * the entry: a run whose entry is gone (written by hand, or by an older
+ * build) still counts. A turn our own shutdown killed counts for nothing.
+ * When this turn paused the schedule, the turn is marked so (`schedulePaused`)
+ * and the pause push stands in for its own failed push. Never throws into
+ * the turn-end loop.
  */
 export function noteScheduledTurnEnd(turn: EndedTurn): void {
   const scheduled = turn.scheduled;
   if (!scheduled || isShuttingDown()) return;
   const outcome = turnOutcome(turn);
-  updateSchedule(scheduled.id, (s) => {
+  let paused: Paused | undefined;
+  const after = updateSchedule(scheduled.id, (s) => {
     const entry = [...s.history].reverse().find((h) => h.outcome === "started" && h.threadId === turn.threadId && !h.turnOutcome);
-    if (!entry) return false;
-    entry.turnOutcome = outcome;
+    if (entry) entry.turnOutcome = outcome;
+    if (outcome === "stopped") return entry ? undefined : false;
+    paused = countResult(s, outcome, errorLine(turn));
   });
+  if (paused && after) {
+    turn.schedulePaused = true;
+    announcePause(after, paused);
+  }
 }
 
 function watchScheduledTurns(): () => void {

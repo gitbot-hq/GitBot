@@ -878,6 +878,44 @@ function send(payload: PushPayload | null): void {
 }
 
 /**
+ * Drops a finished/failed push watchPush is holding, by tag. Set while
+ * watchPush runs; a no-op before.
+ */
+let cancelHeldPush: (tag: string) => void = () => {};
+
+/**
+ * The push for a schedule that paused itself (scheduler.ts): kind "failed",
+ * titled with the schedule's name, opening its thread. Its tag is the
+ * thread's (`thread-<id>`), so it replaces any finished/failed push of that
+ * thread, and the scheduled turn whose failure paused it sends no "failed"
+ * push of its own (EndedTurn.schedulePaused): one notification for the turn,
+ * not two. Sent at once, without the presence hold: a pause is something the
+ * thread itself does not show. Logged like any push, or why it was not sent.
+ */
+export function sendSchedulePausedPush(pause: { id: string; name: string; threadId?: string; body: string }): void {
+  const thread = pause.threadId ? getThread(pause.threadId) : undefined;
+  const payload: PushPayload = {
+    title: pause.name,
+    body: pause.body,
+    tag: pause.threadId ? `thread-${pause.threadId}` : `schedule-${pause.id}`,
+    url: threadUrl(thread?.id, thread?.botId),
+    kind: "failed",
+    ...(pause.threadId ? { threadId: pause.threadId } : {}),
+    ...(thread ? { botId: thread.botId } : {}),
+  };
+  if (!pushEnabled()) {
+    logPushSkipped(payload, SKIP_PUSH_OFF);
+    return;
+  }
+  if (listSubscriptions().length === 0) {
+    logPushSkipped(payload, SKIP_NO_SUBSCRIPTIONS);
+    return;
+  }
+  cancelHeldPush(payload.tag);
+  send(payload);
+}
+
+/**
  * Sends a notification on each turn end worth one, and on each approval or
  * question that appears, whichever agent asked. Call once at start, after
  * watchChildReports (see turnEndNotification). With push off it does nothing
@@ -896,6 +934,7 @@ export function watchPush(): () => void {
     held.get(tag)?.cancel();
     held.delete(tag);
   };
+  cancelHeldPush = cancelHeld;
   const hold = (payload: PushPayload) => {
     cancelHeld(payload.tag);
     // Checked now and again after the hold: watched at either moment, it's not sent.
@@ -923,6 +962,11 @@ export function watchPush(): () => void {
     try {
       const payload = turnEndNotification(turn);
       if (!payload) return;
+      // This failure paused its schedule: that push, sent already, says it.
+      if (turn.schedulePaused) {
+        logPushSkipped(payload, "the schedule's pause push stands in for it");
+        return;
+      }
       // A child's report waits on this Jarvis thread and starts right after
       // this end (deferred-turns.ts): Jarvis is not done, and its report
       // turn is the one to hear about. Only "finished" gives way: a failure
@@ -1055,6 +1099,7 @@ export function watchPush(): () => void {
     muted.clear();
     for (const entry of held.values()) entry.cancel();
     held.clear();
+    if (cancelHeldPush === cancelHeld) cancelHeldPush = () => {};
   };
 }
 
