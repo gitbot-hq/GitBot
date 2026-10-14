@@ -1,7 +1,7 @@
 // The chat's "up next" slot, once the chat's own turn is over. gitbot can
 // start a turn on the open thread by itself the moment the chat's turn ends:
-// a child's report that waited for Jarvis (src/deferred-turns.ts), and later a
-// scheduled run. Sending the queued message then would only get a 409 ("Session
+// a child's report that waited for Jarvis, or a schedule's fire that waited
+// for the thread (src/deferred-turns.ts). Sending the queued message then would only get a 409 ("Session
 // is already running"). So the server is asked first: a turn running there is
 // joined, live, and the message stays queued until that turn ends, when the
 // chat's next turn end comes back here. Kept free of React so it can be tested.

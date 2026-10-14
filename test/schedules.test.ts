@@ -1,6 +1,6 @@
 // First: points the data directory at a throwaway one before bot-store loads.
 import "./temp-data-dir";
-import { test, after, afterEach, beforeEach } from "node:test";
+import { test, after, afterEach, beforeEach, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "events";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
@@ -8,6 +8,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { bindSession, createBot, createThread, dataDir, getThread, JARVIS_BOT_ID, jarvisDir, updateThread } from "../src/bot-store";
 import { runningChildOf } from "../src/child-lock";
+import { watchDeferredTurns } from "../src/deferred-turns";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
 import { watchChildReports } from "../src/reports";
@@ -19,10 +20,12 @@ import {
   buildSessionsDump,
   emitEvent,
   notifyPermissionsChanged,
+  permissionsEmitter,
   sessions,
   type IRequest,
   type IResponse,
   type SessionStore,
+  type SessionSummaryItem,
 } from "../src/server-common";
 import { handleRequest } from "../src/server";
 import { claudeQuery, runAgent } from "../src/start-claude-code";
@@ -389,31 +392,417 @@ test("a store reused by a later turn never carries the last turn's schedule", as
 
 // --- When it can't start ---
 
-test("a busy target records skipped-busy and starts nothing", async () => {
+// --- A busy target: queue or skip ---
+
+/** As start() wires them: the report watcher, then the deferred-turn drain last. */
+function watchDrain(t: TestContext): void {
+  const unwatch = [watchChildReports(ALL_AGENTS), watchDeferredTurns(ALL_AGENTS)];
+  t.after(() => { for (const u of unwatch) u(); });
+}
+
+const onThread = (threadId: string) => runs.filter((r) => r.threadId === threadId);
+const lastOn = (threadId: string) => onThread(threadId).at(-1)!;
+
+/** A Jarvis thread whose own turn is running, bound to its agent session (its next turn reuses the store). */
+function busyJarvis() {
+  const jarvis = jarvisThread();
+  assert.ok(startTurn({ threadId: jarvis.id, prompt: "make two files" }, ALL_AGENTS).ok);
+  return { jarvis, jarvisTurn: lastOn(jarvis.id) };
+}
+
+/** A child Jarvis started, still running: the Jarvis thread is locked on it. */
+function startChild(jarvisId: string) {
+  const started = startChildThread(jarvisId, { agent: "claude-code", project: project().id, message: "run the tests" }, ALL_AGENTS);
+  assert.ok(started.ok, JSON.stringify(started));
+  return { childId: started.threadId, child: lastOn(started.threadId) };
+}
+
+test("a fire on a busy thread is queued and delivered after the turn ends and after the broadcast", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const thread = plainThread("Busy");
+  assert.ok(startTurn({ threadId: thread.id, prompt: "write an essay about tides" }, ALL_AGENTS).ok);
+  const userTurn = runs[0];
+  const s = await scheduleOnce(thread.id);
+  advanceTo(now + 90_000);
+  const dueAt = atIso(now);
+  assert.equal(runs.length, 1, "only the user's turn: the schedule never gets in its way");
+  let got = getSchedule(s.id)!;
+  assert.deepEqual(got.pending, { dueAt });
+  assert.equal(got.runCount, 0, "claimed when it starts, not before");
+  assert.deepEqual(got.history, []);
+  assert.equal(got.nextRunAt, null, "its time has passed all the same");
+  assert.equal(got.enabled, false);
+  const listed = await serve("GET", `/schedules?threadId=${thread.id}`);
+  assert.deepEqual(listed.body.schedules[0].pending, { dueAt }, "visible through GET /schedules");
+
+  // The user's turn ends. Record the order: the broadcast for that end, then
+  // the scheduled turn's own start and broadcast.
+  const order: string[] = [];
+  const onUpdate = (_p: unknown, dump: SessionSummaryItem[]) => {
+    const live = dump.some((d) => d.threadId === thread.id && d.status === "running");
+    order.push(`broadcast (${live ? "running" : "idle"})`);
+  };
+  permissionsEmitter.on("update", onUpdate);
+  t.after(() => { permissionsEmitter.off("update", onUpdate); });
+  onRun = (store) => order.push(store.scheduled ? "scheduled turn runs" : "user turn runs");
+  now += 45_000;
+  emitEvent(userTurn, "result", { subtype: "success", result: "ok" });
+  userTurn.status = "done";
+  notifyPermissionsChanged();
+  assert.equal(runs.length, 1, "not inside the listener pass");
+  await settle();
+  assert.equal(runs.length, 2, "started once");
+  const scheduled = runs[1];
+  assert.deepEqual(scheduled.scheduled, { id: s.id, name: "Ping", run: 1 });
+  assert.deepEqual(userPrompt(scheduled).scheduled, { id: s.id, name: "Ping", run: 1 }, "the chip");
+  assert.equal(scheduled.permissionMode, "yolo");
+  assert.deepEqual(order, ["broadcast (idle)", "broadcast (running)", "scheduled turn runs"]);
+  got = getSchedule(s.id)!;
+  assert.equal(got.pending, undefined, "off the queue");
+  assert.equal(got.runCount, 1);
+  assert.equal(got.lastRunAt, atIso(now));
+  assert.deepEqual(got.history, [{ at: atIso(now), outcome: "started", threadId: thread.id, delayedMs: 45_000 }]);
+
+  // Its own end starts nothing more.
+  await endTurn(scheduled);
+  assert.equal(runs.length, 2);
+  assert.equal(getSchedule(s.id)!.history[0].turnOutcome, "done");
+});
+
+test("several fires during one busy turn merge into one pending", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const thread = plainThread("Busy");
+  assert.ok(startTurn({ threadId: thread.id, prompt: "a long story" }, ALL_AGENTS).ok);
+  const s = await scheduleOnce(thread.id, 3_600_000, { name: "Later" });
+  const dues: string[] = [];
+  for (let k = 0; k < 3; k++) {
+    now += 10_000;
+    const fired = await serve("POST", `/schedules/${s.id}/run`);
+    assert.equal(fired.status, 200, JSON.stringify(fired.body));
+    assert.equal(fired.body.queued, true);
+    assert.equal(fired.body.run, undefined);
+    assert.deepEqual(fired.body.schedule.pending, { dueAt: atIso(now) });
+    dues.push(atIso(now));
+  }
+  assert.equal(runs.length, 1);
+  let got = getSchedule(s.id)!;
+  assert.deepEqual(got.pending, { dueAt: dues[2] }, "one pending: the newest");
+  // The merged fires leave a trace: skipped-busy, with when each came due.
+  assert.deepEqual(got.history.map((h) => [h.outcome, h.dueAt]), [["skipped-busy", dues[0]], ["skipped-busy", dues[1]]]);
+  assert.equal(got.runCount, 2, "each given-up fire is a run used up");
+  assert.equal(got.nextRunAt, s.nextRunAt, "a run now moves nothing");
+
+  await endTurn(runs[0]);
+  assert.equal(runs.length, 2, "one scheduled turn, not three");
+  assert.deepEqual(runs[1].scheduled, { id: s.id, name: "Later", run: 3 });
+  got = getSchedule(s.id)!;
+  assert.equal(got.pending, undefined);
+  assert.equal(got.history.at(-1)!.outcome, "started");
+  await endTurn(runs[1]);
+  assert.equal(runs.length, 2);
+});
+
+test("the next occurrence drops a still-pending fire as skipped-busy", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const thread = plainThread("Slow");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 1 });
+  const first = Date.parse(s.nextRunAt!);
+  // A 1-minute schedule on a slow thread: its first run is still going when the next comes.
+  advanceTo(first);
+  assert.equal(runs.length, 1);
+  assert.ok(runs[0].scheduled);
+  advanceTo(first + MIN);
+  let got = getSchedule(s.id)!;
+  assert.deepEqual(got.pending, { dueAt: atIso(first + MIN) });
+  assert.equal(got.nextRunAt, atIso(first + 2 * MIN), "nextRunAt moves on at fire time");
+  advanceTo(first + 2 * MIN);
+  got = getSchedule(s.id)!;
+  assert.deepEqual(got.pending, { dueAt: atIso(first + 2 * MIN) }, "replaced by the newer one");
+  assert.deepEqual(
+    got.history.map((h) => [h.outcome, h.dueAt ?? null]),
+    [["started", null], ["skipped-busy", atIso(first + MIN)]],
+  );
+  assert.equal(got.runCount, 2);
+  assert.equal(runs.length, 1, "never two scheduled turns at once");
+
+  // The slow run ends: the pending one runs straight after, back to back.
+  now = first + 2 * MIN + 20_000;
+  await endTurn(runs[0]);
+  assert.equal(runs.length, 2);
+  assert.deepEqual(runs[1].scheduled, { id: s.id, name: "Tick", run: 3 });
+  got = getSchedule(s.id)!;
+  assert.equal(got.pending, undefined);
+  assert.equal(got.history.at(-1)!.delayedMs, 20_000);
+  assert.ok(listSchedules().every((x) => !x.pending || x.id === s.id));
+});
+
+test("a pending fire holds its run: maxRuns ends the schedule, and the pending one still runs", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const thread = plainThread("Slow");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 1 }, { maxRuns: 2 });
+  const first = Date.parse(s.nextRunAt!);
+  advanceTo(first);
+  advanceTo(first + MIN);
+  let got = getSchedule(s.id)!;
+  assert.equal(got.runCount, 1);
+  assert.ok(got.pending, "run 2 waits");
+  assert.equal(got.enabled, false, "and it was the last: nothing more comes due");
+  assert.equal(got.nextRunAt, null);
+  await endTurn(runs[0]);
+  assert.equal(runs.length, 2);
+  assert.deepEqual(runs[1].scheduled, { id: s.id, name: "Tick", run: 2 });
+  got = getSchedule(s.id)!;
+  assert.equal(got.runCount, 2);
+  assert.equal(got.pending, undefined);
+});
+
+test("overlap skip records skipped-busy and queues nothing", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const bad = await serve("POST", "/schedules", {
+    name: "Ping", prompt: "pong", when: { kind: "once", at: atIso(now + 90_000) }, target: { kind: "thread", threadId: plainThread().id }, overlap: "later",
+  });
+  assert.equal(bad.status, 400);
+  assert.equal(bad.body.error, `overlap must be "queue" or "skip"`);
+
   // A thread with a turn of its own running.
   const thread = plainThread("Busy");
   assert.ok(startTurn({ threadId: thread.id, prompt: "count slowly to 40" }, ALL_AGENTS).ok);
-  const s = await scheduleOnce(thread.id);
+  const s = await scheduleOnce(thread.id, 90_000, { overlap: "skip" });
+  assert.equal(s.overlap, "skip");
   advanceTo(now + 90_000);
   assert.equal(runs.length, 1, "only the user's turn");
   let got = getSchedule(s.id)!;
+  assert.equal(got.pending, undefined);
   assert.equal(got.history.length, 1);
   assert.equal(got.history[0].outcome, "skipped-busy");
   assert.equal(got.history[0].threadId, thread.id);
+  assert.equal(got.runCount, 1, "a skipped fire is a run used up");
   assert.equal(got.enabled, false, "a once is done either way");
   assert.equal(runs[0].status, "running", "the user's turn is unaffected");
   assert.equal(runs[0].scheduled, undefined);
+  await endTurn(runs[0]);
+  assert.equal(runs.length, 1, "nothing runs afterwards");
 
   // A Jarvis thread waiting on its child.
   const jarvis = jarvisThread();
-  const started = startChildThread(jarvis.id, { agent: "claude-code", project: project().id, message: "run the tests" }, ALL_AGENTS);
-  assert.ok(started.ok, JSON.stringify(started));
+  startChild(jarvis.id);
   assert.ok(runningChildOf(jarvis.id));
-  const onJarvis = await scheduleOnce(jarvis.id, 120_000);
+  const onJarvis = await scheduleOnce(jarvis.id, 120_000, { overlap: "skip" });
   advanceTo(now + 120_000);
-  assert.equal(runs.length, 2, "nothing started on Jarvis");
+  assert.equal(onThread(jarvis.id).length, 0, "nothing started on Jarvis");
   got = getSchedule(onJarvis.id)!;
   assert.equal(got.history[0].outcome, "skipped-busy");
+  assert.equal(got.pending, undefined);
+});
+
+test("a Jarvis target locked on a child waits, then runs after the child's report", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const jarvis = jarvisThread();
+  const { childId, child } = startChild(jarvis.id);
+  assert.equal(runningChildOf(jarvis.id)?.threadId, childId);
+  const s = await scheduleOnce(jarvis.id, 90_000, { name: "Reminder", prompt: "Say: reminder" });
+  advanceTo(now + 90_000);
+  assert.equal(onThread(jarvis.id).length, 0, "it waits");
+  assert.ok(getSchedule(s.id)!.pending);
+
+  // The child ends: its report goes to Jarvis first.
+  emitEvent(child, "assistant", { content: "All tests pass." });
+  await endTurn(child);
+  const report = lastOn(jarvis.id);
+  assert.equal(onThread(jarvis.id).length, 1);
+  assert.equal(report.scheduled, undefined);
+  assert.match(userPrompt(report).prompt, /^\[Claude Code · .* · thread .* · done\]\nAll tests pass\.$/);
+  assert.ok(getSchedule(s.id)!.pending, "still waiting: the report goes first");
+
+  // Jarvis answers it; then the schedule runs.
+  await endTurn(report);
+  assert.equal(onThread(jarvis.id).length, 2);
+  const scheduled = lastOn(jarvis.id);
+  assert.deepEqual(scheduled.scheduled, { id: s.id, name: "Reminder", run: 1 });
+  assert.equal(getSchedule(s.id)!.pending, undefined);
+  assert.equal(runningChildOf(jarvis.id), undefined, "the composer is not locked by it");
+  await endTurn(scheduled);
+  assert.equal(onThread(jarvis.id).length, 2);
+});
+
+test("a thread target while Jarvis has another child running: no second child, Jarvis not locked", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const jarvis = jarvisThread();
+  const { childId, child } = startChild(jarvis.id);
+  // Another thread Jarvis owns, idle.
+  const other = plainThread("Other");
+  updateThread(other.id, { reportTo: jarvis.id });
+  const s = await scheduleOnce(other.id);
+  advanceTo(now + 90_000);
+  const scheduled = lastOn(other.id);
+  assert.deepEqual(scheduled.scheduled, { id: s.id, name: "Ping", run: 1 }, "it runs: its own thread is free");
+  assert.equal(scheduled.reportable, false);
+  assert.equal(runningChildOf(jarvis.id)?.threadId, childId, "the lock still names only the original child");
+
+  // The child ends and reports; Jarvis answers. The scheduled run still going locks nothing.
+  await endTurn(child);
+  const report = lastOn(jarvis.id);
+  await endTurn(report);
+  assert.equal(scheduled.status, "running");
+  assert.equal(runningChildOf(jarvis.id), undefined, "the Jarvis composer is unlocked");
+  assert.ok(startTurn({ threadId: jarvis.id, prompt: "what next?" }, ALL_AGENTS).ok, "Jarvis takes the user's message");
+
+  // Its end reports to no one.
+  const jarvisTurns = onThread(jarvis.id).length;
+  await endTurn(scheduled);
+  assert.equal(onThread(jarvis.id).length, jarvisTurns);
+  assert.equal(getThread(jarvis.id)!.queuedReports, undefined);
+});
+
+test("a Jarvis self-target never reports Jarvis to itself", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const { jarvis, jarvisTurn } = busyJarvis();
+  const s = await scheduleOnce(jarvis.id);
+  advanceTo(now + 90_000);
+  assert.ok(getSchedule(s.id)!.pending, "Jarvis's own turn is running: it waits");
+  assert.equal(onThread(jarvis.id).length, 1);
+
+  await endTurn(jarvisTurn);
+  assert.equal(onThread(jarvis.id).length, 2);
+  const scheduled = lastOn(jarvis.id);
+  assert.deepEqual(scheduled.scheduled, { id: s.id, name: "Ping", run: 1 });
+  assert.equal(scheduled.reportable, false);
+  assert.equal(scheduled.reportOwner, undefined);
+  assert.equal(runningChildOf(jarvis.id), undefined);
+  await endTurn(scheduled);
+  assert.equal(onThread(jarvis.id).length, 2, "no report turn");
+  assert.equal(getThread(jarvis.id)!.queuedReports, undefined);
+  assert.equal(getThread(jarvis.id)!.reportTo, undefined);
+});
+
+test("thread ownership (reportTo) is unchanged after a scheduled run", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const jarvis = jarvisThread();
+  const { childId, child } = startChild(jarvis.id);
+  assert.equal(getThread(childId)!.reportTo, jarvis.id);
+  // A schedule on the child, while Jarvis's run of it is going: it waits.
+  const s = await scheduleOnce(childId);
+  advanceTo(now + 90_000);
+  assert.ok(getSchedule(s.id)!.pending);
+
+  // The child ends: its report goes to Jarvis, and the schedule runs on the child.
+  await endTurn(child);
+  assert.equal(onThread(jarvis.id).length, 1, "the report");
+  const scheduled = lastOn(childId);
+  assert.deepEqual(scheduled.scheduled, { id: s.id, name: "Ping", run: 1 });
+  assert.equal(scheduled.reportable, false);
+  assert.equal(getThread(childId)!.reportTo, jarvis.id, "still Jarvis's");
+  assert.equal(runningChildOf(jarvis.id), undefined, "and Jarvis is not locked on it");
+
+  await endTurn(lastOn(jarvis.id));
+  await endTurn(scheduled);
+  assert.equal(onThread(jarvis.id).length, 1, "the scheduled run reports to no one");
+  assert.equal(getThread(childId)!.reportTo, jarvis.id);
+});
+
+test("a stale pending at startup is recorded missed", async (t) => {
+  const logs = t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const thread = plainThread("Demo");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  const dueAt = atIso(now - 5 * MIN);
+  updateSchedule(s.id, (x) => { x.pending = { dueAt }; });
+  stopScheduler();
+  startScheduler(ALL_AGENTS);
+  const got = getSchedule(s.id)!;
+  assert.equal(got.pending, undefined, "cleared");
+  assert.deepEqual(got.history, [{ at: dueAt, outcome: "missed", missedCount: 1 }]);
+  assert.equal(got.runCount, 1, "a missed run counts");
+  assert.equal(got.nextRunAt, s.nextRunAt, "its next run is untouched");
+  assert.ok(logs.mock.calls.some((c) => c.arguments[0] === `[schedules] missed ${s.id}: the fire queued since ${dueAt} was still waiting when gitbot stopped`));
+
+  // Never fired late: a turn end on the thread drains nothing.
+  assert.ok(startTurn({ threadId: thread.id, prompt: "hi" }, ALL_AGENTS).ok);
+  await endTurn(runs[0]);
+  assert.equal(runs.length, 1);
+});
+
+test("a report and a schedule competing for the same Jarvis: the report goes first", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const { jarvis, jarvisTurn } = busyJarvis();
+  const { child } = startChild(jarvis.id);
+  // The schedule comes due first, while Jarvis's own turn runs.
+  const s = await scheduleOnce(jarvis.id);
+  advanceTo(now + 90_000);
+  assert.ok(getSchedule(s.id)!.pending);
+  // Then the child ends: its report finds Jarvis mid-turn and is queued behind.
+  now += 1000;
+  emitEvent(child, "assistant", { content: "Done." });
+  await endTurn(child);
+  assert.equal(getThread(jarvis.id)!.queuedReports?.length, 1);
+  assert.equal(onThread(jarvis.id).length, 1);
+
+  // Jarvis's turn ends: the report starts, though the schedule waited longer.
+  await endTurn(jarvisTurn);
+  assert.equal(onThread(jarvis.id).length, 2);
+  const report = lastOn(jarvis.id);
+  assert.equal(report.scheduled, undefined);
+  assert.match(userPrompt(report).prompt, /· done\]\nDone\.$/);
+  assert.ok(getSchedule(s.id)!.pending, "the schedule still waits");
+  assert.equal(getThread(jarvis.id)!.queuedReports, undefined);
+
+  // The report turn's end: now the schedule.
+  await endTurn(report);
+  assert.equal(onThread(jarvis.id).length, 3);
+  assert.deepEqual(lastOn(jarvis.id).scheduled, { id: s.id, name: "Ping", run: 1 });
+  assert.equal(getSchedule(s.id)!.pending, undefined);
+});
+
+test("the user's /chat while a fire is pending runs first; the fire follows", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const thread = plainThread("Demo");
+  const s = await scheduleOnce(thread.id, 3_600_000);
+  // Nothing running: the user's message starts at once, and the schedule's fire then waits.
+  const first = await serve("POST", "/chat", { threadId: thread.id, prompt: "write an essay" });
+  assert.equal(first.status, 200);
+  assert.equal((await serve("POST", `/schedules/${s.id}/run`)).body.queued, true);
+
+  // The user's turn ends, and the user's next message gets in before the drain (scenario C).
+  const userTurn = runs[0];
+  emitEvent(userTurn, "result", { subtype: "success", result: "ok" });
+  userTurn.status = "done";
+  notifyPermissionsChanged();
+  assert.ok(startTurn({ threadId: thread.id, prompt: "and one more" }, ALL_AGENTS).ok, "the user is never refused");
+  await settle();
+  assert.equal(runs.length, 2, "the drain found the thread busy and left the fire waiting");
+  assert.equal(runs[1].scheduled, undefined);
+  assert.ok(getSchedule(s.id)!.pending);
+  assert.equal(getSchedule(s.id)!.runCount, 0, "not claimed");
+
+  // The user's turn ends: the fire follows.
+  await endTurn(runs[1]);
+  assert.equal(runs.length, 3);
+  assert.deepEqual(runs[2].scheduled, { id: s.id, name: "Ping", run: 1 });
+  assert.equal(getSchedule(s.id)!.pending, undefined);
+});
+
+test("deleting a schedule drops its pending fire", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const thread = plainThread("Busy");
+  assert.ok(startTurn({ threadId: thread.id, prompt: "work" }, ALL_AGENTS).ok);
+  const s = await scheduleOnce(thread.id);
+  advanceTo(now + 90_000);
+  assert.ok(getSchedule(s.id)!.pending);
+  assert.equal((await serve("DELETE", `/schedules/${s.id}`)).status, 200);
+  await endTurn(runs[0]);
+  assert.equal(runs.length, 1, "nothing runs afterwards");
 });
 
 test("a start refusal records failed-to-start with the error", async (t) => {
@@ -1346,9 +1735,9 @@ test("a sixth start in a minute is delayed, unclaimed, then fires with delayedMs
   for (const s of made) if (s.id !== sixth.id) assert.equal(getSchedule(s.id)!.history[0].delayedMs, undefined, "only the held one");
 });
 
-test("the rate cap counts starts, not fires that were skipped or failed", async (t) => {
+test("the rate cap counts starts, not fires that were skipped, queued or failed", async (t) => {
   t.mock.method(console, "log", () => {});
-  // Five busy targets skip; a sixth, idle, still starts at once.
+  // Five busy targets: two skip, three queue. A sixth, idle, still starts at once.
   const busy = Array.from({ length: 5 }, (_, k) => plainThread(`Busy${k}`));
   for (const th of busy) {
     const r = await serve("POST", "/chat", { threadId: th.id, prompt: "work" });
@@ -1356,12 +1745,13 @@ test("the rate cap counts starts, not fires that were skipped or failed", async 
   }
   const userTurns = runs.length;
   const idle = plainThread("Idle");
-  for (const th of busy) await scheduleOnce(th.id, 30_000);
+  for (const [k, th] of busy.entries()) await scheduleOnce(th.id, 30_000, k < 2 ? { overlap: "skip" } : {});
   const last = await scheduleOnce(idle.id, 30_000);
   advanceTo(now + 30_000);
   assert.equal(runs.length, userTurns + 1);
   assert.equal(getSchedule(last.id)!.history[0].outcome, "started");
-  assert.equal(listSchedules().filter((s) => s.history[0]?.outcome === "skipped-busy").length, 5);
+  assert.equal(listSchedules().filter((s) => s.history[0]?.outcome === "skipped-busy").length, 2);
+  assert.equal(listSchedules().filter((s) => s.pending).length, 3);
 });
 
 test("an over-cap fire caught by a restart is recorded missed", async (t) => {
@@ -1512,10 +1902,11 @@ test("a fire held by the rate cap fires however late, with the runs it waited pa
   assert.equal(rest[0].outcome, "missed", "the run it waited past comes after the started entry");
   assert.equal(rest[0].at, atIso(at + 1000 + MIN), "after the run that started, in due order");
   assert.equal(rest[0].missedCount, 1);
-  // And the run due at +121 s found room, but its thread still busy with the late run.
-  assert.equal(rest[1].outcome, "skipped-busy");
-  assert.equal(rest[1].delayedMs, undefined);
-  assert.equal(iv.runCount, 3, "2 runs + 1 missed");
+  // And the run due at +121 s found room, but its thread still busy with the
+  // late run: it waits as the pending fire, uncounted until it starts.
+  assert.equal(rest.length, 1);
+  assert.deepEqual(iv.pending, { dueAt: atIso(at + 1000 + 2 * MIN) });
+  assert.equal(iv.runCount, 2, "1 run + 1 missed; the pending one counts when it starts");
   assert.ok(Date.parse(iv.nextRunAt!) > now);
 });
 

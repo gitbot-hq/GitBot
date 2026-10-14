@@ -30,7 +30,11 @@ export interface Schedule {
   createdBy: { kind: "jarvis"; threadId: string } | { kind: "user"; remote?: string };
   enabled: boolean;
   pausedReason?: string;
-  /** What a fire does when its target is busy. Stored; not read yet (always skipped). */
+  /**
+   * What a fire does when its target is busy. `queue` (the default): it waits
+   * as `pending`, and starts once the thread is free. `skip`: it is recorded
+   * `skipped-busy`, and nothing starts.
+   */
   overlap: "queue" | "skip";
   /** Which of its turns' ends push. Stored; not read yet. */
   notify: "always" | "on-failure" | "never";
@@ -39,15 +43,25 @@ export interface Schedule {
   /** No run at or after this time; it ends instead. */
   endsAt?: string;
   /**
-   * Runs used up so far: every fire claimed, however it turned out, and
+   * Runs used up so far: every fire claimed, however it turned out, every
+   * queued fire given up (replaced by a newer one, or found at startup), and
    * every run missed (while gitbot was down, or while a fire waited). A
-   * fire's "run N" is this count when it was claimed.
+   * fire's "run N" is this count when it was claimed. A pending fire is not
+   * counted until it starts, but it holds its run: see runsLeft.
    */
   runCount: number;
   consecutiveFailures: number;
   /** When it next fires; null once it never will. */
   nextRunAt: string | null;
   lastRunAt?: string;
+  /**
+   * A fire that found its thread busy (`overlap: "queue"`) and waits for it to
+   * be free: at most one per schedule, `dueAt` being when that fire came due.
+   * A newer fire replaces it (the old one is recorded `skipped-busy`). The
+   * deferred-turn drain starts it when the thread's turn ends
+   * (deferred-turns.ts), and it is claimed then; a restart records it missed.
+   * It may outlive the schedule's end: a once, or a last run, still waits.
+   */
   pending?: { dueAt: string };
   /** The last HISTORY_MAX runs, oldest first. */
   history: ScheduleRun[];
@@ -59,7 +73,10 @@ export interface ScheduleRun {
   at: string;
   outcome: "started" | "skipped-busy" | "missed" | "failed-to-start";
   missedCount?: number;
+  /** How late it started: held by the rate cap, or queued behind a busy thread. */
   delayedMs?: number;
+  /** A queued fire a newer one replaced (`skipped-busy`): when it came due. */
+  dueAt?: string;
   threadId?: string;
   /** How the turn a "started" run began ended, once it has. */
   turnOutcome?: TurnOutcome;
@@ -157,14 +174,20 @@ function endSchedule(s: Schedule): void {
   s.nextRunAt = null;
 }
 
-/** Runs it may still use: Infinity without a maxRuns. */
+/**
+ * Runs it may still use: Infinity without a maxRuns. A pending fire holds
+ * one: it is counted only when it starts (or is given up), but no later fire
+ * may take its place, so a schedule whose pending fire is its last has ended.
+ */
 function runsLeft(s: Schedule): number {
-  return s.maxRuns ? Math.max(0, s.maxRuns - s.runCount) : Infinity;
+  return s.maxRuns ? Math.max(0, s.maxRuns - s.runCount - (s.pending ? 1 : 0)) : Infinity;
 }
 
 export interface SettledDue {
   /** The fire's run number, when it fires; absent when it must not. */
   run?: number;
+  /** True when the fire was queued as `pending` instead (`fire: "queue"`). */
+  queued?: boolean;
   /** One entry for every run that came due and will never fire. */
   missed?: ScheduleRun;
   /** True when the missed count was estimated (a very long gap). */
@@ -175,7 +198,9 @@ export interface SettledDue {
  * The schedule's due time (`nextRunAt`, at or before `now`) has come; mutates
  * `s` for it. With `fire`, the scheduler is about to start that run: it is
  * counted, unless the schedule may no longer run (`endsAt` has passed, or
- * maxRuns is used up), in which case nothing fires. Without `fire` (startup
+ * maxRuns is used up), in which case nothing fires. With `fire: "queue"` the
+ * thread is busy: the run becomes `pending` instead, uncounted until it
+ * starts (the caller has already given up any older pending fire). Without `fire` (startup
  * after gitbot was down; a retry of that; or a fire found far too late, the
  * process having been suspended), the run is missed.
  *
@@ -189,7 +214,7 @@ export interface SettledDue {
  * and now, or ends: a once after its time, a recurring one when maxRuns is
  * used up or its next run would be at or after `endsAt`.
  */
-export function settleDue(s: Schedule, now: number, fire: boolean): SettledDue {
+export function settleDue(s: Schedule, now: number, fire: boolean | "queue"): SettledDue {
   const out: SettledDue = {};
   const due = Date.parse(s.nextRunAt!);
   const endsAt = s.endsAt ? Date.parse(s.endsAt) : Infinity;
@@ -197,9 +222,14 @@ export function settleDue(s: Schedule, now: number, fire: boolean): SettledDue {
 
   let missedFrom: number | null = due;
   if (fire && due < endsAt && now < endsAt && runsLeft(s) > 0) {
-    s.runCount += 1;
-    out.run = s.runCount;
-    s.lastRunAt = iso(now);
+    if (fire === "queue") {
+      s.pending = { dueAt: s.nextRunAt! };
+      out.queued = true;
+    } else {
+      s.runCount += 1;
+      out.run = s.runCount;
+      s.lastRunAt = iso(now);
+    }
     missedFrom = s.when.kind === "once" ? null : nextOccurrence(s.when, due);
   }
   if (missedFrom != null && missedFrom <= lastCountable) {
@@ -242,6 +272,34 @@ export function claimManualRun(s: Schedule, now: number): number {
   s.lastRunAt = iso(now);
   if (s.enabled && runsLeft(s) <= 0) endSchedule(s);
   return s.runCount;
+}
+
+/**
+ * A run now that found the thread busy (`overlap: "queue"`): it waits as
+ * `pending` like a due fire, and counts once it starts. Like claimManualRun,
+ * it leaves the next due time be, unless it holds the last run.
+ */
+export function queueManualRun(s: Schedule, now: number): void {
+  s.pending = { dueAt: iso(now) };
+  if (s.enabled && runsLeft(s) <= 0) endSchedule(s);
+}
+
+/**
+ * Gives up the schedule's pending fire, if it has one: it counts as a run
+ * used up, and leaves an entry (`skipped-busy` when a newer fire replaced it,
+ * `missed` when a restart found it). Returns that entry.
+ */
+export function dropPending(s: Schedule, now: number, outcome: "skipped-busy" | "missed"): ScheduleRun | undefined {
+  if (!s.pending) return undefined;
+  const dueAt = s.pending.dueAt;
+  delete s.pending;
+  s.runCount += 1;
+  const threadId = targetThreadId(s);
+  const entry: ScheduleRun = outcome === "missed"
+    ? { at: dueAt, outcome, missedCount: 1 }
+    : { at: iso(now), outcome, dueAt, ...(threadId ? { threadId } : {}) };
+  s.history.push(entry);
+  return entry;
 }
 
 /**
@@ -314,6 +372,11 @@ export function createSchedule(
     if (Date.parse(endsAt) <= first) return { ok: false, error: `endsAt must be after the first run (${iso(first)})` };
   }
 
+  const { overlap } = body;
+  if (overlap !== undefined && overlap !== "queue" && overlap !== "skip") {
+    return { ok: false, error: `overlap must be "queue" or "skip"` };
+  }
+
   if (!target || typeof target !== "object") return { ok: false, error: "target is required" };
   if (target.kind !== "thread") return { ok: false, error: `target.kind "${String(target.kind)}" is not supported yet: use "thread"` };
   if (typeof target.threadId !== "string" || !target.threadId) return { ok: false, error: "target.threadId is required" };
@@ -339,7 +402,7 @@ export function createSchedule(
     target: { kind: "thread", threadId: thread.id },
     createdBy,
     enabled: true,
-    overlap: "queue",
+    overlap: overlap ?? "queue",
     notify: "always",
     ...(maxRuns !== undefined ? { maxRuns } : {}),
     ...(endsAt !== undefined ? { endsAt } : {}),

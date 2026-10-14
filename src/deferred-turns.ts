@@ -1,9 +1,13 @@
+import { getThread } from "./bot-store";
 import { deliverQueuedReport, jarvisIsMidTurn } from "./reports";
+import { deliverPendingSchedule } from "./scheduler";
 import { isShuttingDown, onTurnEnd } from "./server-common";
 
-// The deferred-turn slot. Work that found its thread mid-turn waits on the
-// thread and starts when that turn ends: today, a child's report that found
-// its Jarvis busy (reports.ts, Thread.queuedReports).
+// The deferred-turn slot. Work that found its thread busy waits on the
+// thread and starts when that turn ends: a child's report that found its
+// Jarvis mid-turn (reports.ts, Thread.queuedReports, a list, oldest first),
+// and a schedule's fire that found its thread busy (scheduler.ts, each
+// schedule's one `pending` fire, in schedules.json).
 //
 // The drain never runs inside the turn-end listener pass. Its listener only
 // schedules it (setImmediate), so it runs after every other listener and
@@ -13,11 +17,17 @@ import { isShuttingDown, onTurnEnd } from "./server-common";
 
 /**
  * Starts at most one deferred turn on a thread that is free: a queued report
- * first. That turn's own end drains the next. True when one started.
+ * first, then the oldest pending schedule fire. That turn's own end drains
+ * the next. True when one started.
  */
 export function drainThread(threadId: string, availableAgents: readonly string[]): boolean {
   if (isShuttingDown()) return false;
-  return deliverQueuedReport(threadId, availableAgents);
+  if (deliverQueuedReport(threadId, availableAgents)) return true;
+  // Reports first: one still waiting (its Jarvis busy again, or its agent
+  // missing for now) keeps every schedule fire behind it.
+  const reports = getThread(threadId)?.queuedReports;
+  if (Array.isArray(reports) && reports.length) return false;
+  return deliverPendingSchedule(threadId, availableAgents);
 }
 
 /**

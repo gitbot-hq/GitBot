@@ -1268,8 +1268,8 @@ export default function Chat({
     adoptMode();
   }
 
-  // A turn gitbot starts on the open thread (a child's report waking Jarvis)
-  // is picked up live: join it when it starts, and read history if it ended
+  // A turn gitbot starts on the open thread (a child's report waking Jarvis,
+  // a schedule's fire) is picked up live: join it when it starts, and read history if it ended
   // before the chat could join. The chat's own turns are left alone.
   // `joined`: the chat already follows this run (its own turn, or a rejoin),
   // so the run's end is the stream's to handle. Read by maybeFlush too.

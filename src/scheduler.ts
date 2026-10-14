@@ -1,12 +1,14 @@
-import { getThread } from "./bot-store";
+import { getThread, type Thread } from "./bot-store";
 import { runningChildOf } from "./child-lock";
 import { turnOutcome } from "./attention";
-import { isShuttingDown, onTurnEnd, sessions, type EndedTurn } from "./server-common";
+import { isShuttingDown, onTurnEnd, type EndedTurn } from "./server-common";
 import {
   claimManualRun,
+  dropPending,
   getSchedule,
   isRunnable,
   listSchedules,
+  queueManualRun,
   settleDue,
   targetThreadId,
   updateSchedule,
@@ -14,6 +16,7 @@ import {
   type ScheduleRun,
   type SettledDue,
 } from "./schedules";
+import { threadIsRunning } from "./send-to-thread";
 import { startTurn } from "./turns";
 
 // The scheduler: one timer, set to the earliest due schedule, that fires it
@@ -23,6 +26,21 @@ import { startTurn } from "./turns";
 // before its turn starts: a crash in between loses at most that run, and
 // never fires twice. At most RATE_CAP_STARTS scheduled turns start in any
 // rolling minute; a fire over the cap waits, unclaimed, and is never dropped.
+//
+// A fire whose thread is busy (its own turn running, or a Jarvis thread
+// waiting on its child) never gets in the user's way. With `overlap: "queue"`
+// it waits as the schedule's one `pending` fire, and the deferred-turn drain
+// (deferred-turns.ts) starts it once the thread's turn has ended, after any
+// queued report; with `overlap: "skip"` it is recorded `skipped-busy`.
+//
+// When does a queued fire count as claimed? When it starts (or is given up):
+// its runCount and its "run N" are taken then, as for any start. Its time
+// still passes at fire time, as usual: nextRunAt moves on (or the schedule
+// ends) when it comes due, and the pending fire holds its run meanwhile
+// (schedules.ts, runsLeft), so maxRuns is never overrun. A newer fire always
+// replaces a waiting one, which is recorded `skipped-busy`: one pending at
+// most, so a 1-minute schedule on a slow thread runs back to back, never
+// piling up. A restart records a pending fire missed: never fired late.
 
 /**
  * Time and timers, as the scheduler sees them. A seam: tests set `now` and
@@ -95,6 +113,13 @@ const warnedUnrunnable = new Set<string>();
  */
 const missedUnsaved = new Map<string, number>();
 
+/**
+ * Queued fires a restart found, whose missed record could not be saved: their
+ * `dueAt`. Their schedules are in missedUnsaved too, so nothing fires or
+ * drains them until the record saves (retryUnsavedMissed).
+ */
+const stalePendingUnsaved = new Map<string, string>();
+
 /** How often a missed record that still can't be saved is logged again. */
 const UNSAVED_LOG_MS = 60_000;
 
@@ -141,6 +166,7 @@ export function startScheduler(availableAgents: readonly string[]): () => void {
   heldByCap.clear();
   // The missed pass below works these out afresh.
   missedUnsaved.clear();
+  stalePendingUnsaved.clear();
   recentStarts = recentStartsFromHistory(schedulerClock.now());
   // Running first: whatever the startup pass below hits, schedules created
   // from here on still arm the timer and fire.
@@ -151,6 +177,7 @@ export function startScheduler(availableAgents: readonly string[]): () => void {
     console.error(`[scheduler] could not watch turn ends: ${err?.message ?? err}`);
   }
   try {
+    recordStalePending(schedulerClock.now());
     recordMissed(schedulerClock.now());
   } catch (err: any) {
     console.error(`[scheduler] missed-run check failed: ${err?.message ?? err}`);
@@ -247,12 +274,13 @@ function tick(): void {
  * Fires a schedule now, from POST /schedules/:id/run. It counts as a run and
  * leaves the next due time be — unless that time has already come, in which
  * case this is that fire, so the timer does not fire it a second time. Never
- * held by the rate cap: the user asked for it.
+ * held by the rate cap: the user asked for it. A busy thread queues it, like
+ * any fire (`queued`, and the schedule's `pending` says since when).
  */
 export function runScheduleNow(
   id: string,
   availableAgents: readonly string[],
-): { schedule: Schedule; run: ScheduleRun } | { refused: string } | undefined {
+): { schedule: Schedule; run?: ScheduleRun; queued?: true } | { refused: string } | undefined {
   const s = getSchedule(id);
   if (!s) return undefined;
   if (!isRunnable(s)) return { refused: `this schedule (${s.when?.kind} on ${s.target?.kind}) is not supported by this build` };
@@ -260,8 +288,9 @@ export function runScheduleNow(
   let fired = due ? fireSchedule(id, availableAgents, "due") : undefined;
   // A due fire that may no longer run (past endsAt) ended the schedule
   // instead; the user still asked for a run.
-  if (!fired?.run) fired = fireSchedule(id, availableAgents, "manual");
+  if (!fired?.run && !fired?.queued) fired = fireSchedule(id, availableAgents, "manual");
   rearmScheduler();
+  if (fired?.queued) return { schedule: fired.schedule, queued: true };
   return fired?.run ? { schedule: fired.schedule, run: fired.run } : undefined;
 }
 
@@ -270,13 +299,15 @@ export function runScheduleNow(
  * advances the schedule to its next run (or ends it), and records the runs
  * that passed meanwhile as missed; it starts nothing when the schedule may no
  * longer run (past endsAt), and `run` is then absent. `manual`: a run now,
- * which counts as a run and moves nothing.
+ * which counts as a run and moves nothing. Either one, on a busy thread with
+ * `overlap: "queue"`, becomes the schedule's pending fire instead (`queued`),
+ * replacing any older one; it is claimed when the drain starts it.
  */
 export function fireSchedule(
   id: string,
   availableAgents: readonly string[],
   kind: "due" | "manual",
-): { schedule: Schedule; run?: ScheduleRun } | undefined {
+): { schedule: Schedule; run?: ScheduleRun; queued?: true } | undefined {
   const nowMs = schedulerClock.now();
   const at = iso(nowMs);
   const wasHeld = heldByCap.delete(id);
@@ -287,30 +318,51 @@ export function fireSchedule(
   let delayedMs: number | undefined;
   let dueAt: string | null = null;
   let tooLate = false;
+  let queuedSince: string | undefined;
+  let replaced: ScheduleRun | undefined;
+  let lastRunBefore: string | undefined;
   const claimed = updateSchedule(id, (s) => {
+    // No longer due (changed since the tick read it): nothing to do.
+    if (kind === "due" && (!s.enabled || !s.nextRunAt || Date.parse(s.nextRunAt) > nowMs)) return false;
+    // Busy now: read in the same synchronous step as the start below, so
+    // nothing can change in between. (startTurn's own 409 is handled too.)
+    const queue = s.overlap !== "skip" && targetIsBusy(s);
+    // A newer fire always replaces a waiting one: it is given up, as
+    // skipped-busy. One pending at most, and never two runs from one fire.
+    replaced = dropPending(s, nowMs, "skipped-busy");
+    lastRunBefore = s.lastRunAt;
     if (kind === "manual") {
-      runNumber = claimManualRun(s, nowMs);
+      if (queue) {
+        queueManualRun(s, nowMs);
+        queuedSince = s.pending?.dueAt;
+      } else {
+        runNumber = claimManualRun(s, nowMs);
+      }
       return;
     }
-    // No longer due (changed since the tick read it): nothing to do.
-    if (!s.enabled || !s.nextRunAt || Date.parse(s.nextRunAt) > nowMs) return false;
     dueAt = s.nextRunAt;
-    const lateBy = nowMs - Date.parse(s.nextRunAt);
+    const lateBy = nowMs - Date.parse(s.nextRunAt!);
     if (wasHeld) delayedMs = lateBy;
     // Far later than any timer sleeps, and not because the rate cap held it:
     // the process was suspended or the clock jumped. Missed, as if down.
     tooLate = !wasHeld && lateBy > LATE_GRACE_MS;
-    settled = settleDue(s, nowMs, !tooLate);
+    settled = settleDue(s, nowMs, tooLate ? false : queue ? "queue" : true);
     runNumber = settled.run;
+    if (settled.queued) queuedSince = s.pending?.dueAt;
     // A run that fires gets its "started" entry first, then the missed ones
     // after it (they came due after it): pushed with it, below.
     if (settled.missed && runNumber === undefined) s.history.push(settled.missed);
   });
   if (!claimed) return undefined;
+  if (replaced) console.log(`[schedules] ${id}: the fire queued since ${replaced.dueAt} is replaced by a newer one (skipped-busy)`);
   if (settled.missed) {
     const about = settled.estimated ? "about " : "";
     const why = tooLate ? "came due while gitbot was suspended or the clock jumped" : "passed while it waited";
     console.log(`[schedules] missed ${id}: ${about}${settled.missed.missedCount} run(s) from ${settled.missed.at} ${why}`);
+  }
+  if (queuedSince) {
+    console.log(`[schedules] fire ${id}: thread ${targetThreadId(claimed)} is busy; queued (due ${queuedSince})`);
+    return { schedule: claimed, queued: true };
   }
   if (runNumber === undefined) {
     if (dueAt) console.log(`[schedules] ${id} due ${dueAt} did not fire: ${tooLate ? "too late" : claimed.enabled ? "it may not run now" : "it has ended"}`);
@@ -318,10 +370,22 @@ export function fireSchedule(
   }
 
   let run = startScheduledTurn(claimed, runNumber, availableAgents, at);
+  const missed = settled.missed;
+  if (run.outcome === "skipped-busy" && claimed.overlap !== "skip") {
+    // startTurn found a turn in the way the busy check did not (a 409): the
+    // run is handed back and waits as the pending fire, like any busy fire.
+    const pendingAt = dueAt ?? at;
+    const back = updateSchedule(id, (s) => {
+      unclaim(s, lastRunBefore);
+      s.pending = { dueAt: pendingAt };
+      if (missed) s.history.push(missed);
+    }) ?? claimed;
+    console.log(`[schedules] fire ${id}: thread ${run.threadId} is busy (409); queued (due ${pendingAt})`);
+    return { schedule: back, queued: true };
+  }
   if (delayedMs !== undefined && delayedMs > 0) run = { ...run, delayedMs };
   // The rate cap counts starts only.
   if (run.outcome === "started") recentStarts.push(nowMs);
-  const missed = settled.missed;
   const schedule = updateSchedule(id, (s) => {
     s.history.push(run);
     if (missed) s.history.push(missed);
@@ -334,10 +398,88 @@ export function fireSchedule(
   return { schedule, run };
 }
 
-/** True while the thread has a running turn: the same scan as send-to-thread's. */
-function threadIsRunning(threadId: string, sdkSessionId: string | null): boolean {
-  if (sdkSessionId && sessions.get(sdkSessionId)?.status === "running") return true;
-  return [...sessions.values()].some((s) => s.threadId === threadId && s.status === "running");
+/**
+ * Busy: a turn of the thread's own running (the scan send_to_thread makes),
+ * or a Jarvis thread waiting on its child. A scheduled run is never
+ * reportable, so it is never that child itself.
+ */
+function threadBusy(thread: Thread): boolean {
+  return threadIsRunning(thread) || !!runningChildOf(thread.id);
+}
+
+/** The schedule's target thread is busy. A thread that is gone is not: its start says why. */
+function targetIsBusy(s: Schedule): boolean {
+  const threadId = targetThreadId(s);
+  const thread = threadId ? getThread(threadId) : undefined;
+  return !!thread && threadBusy(thread);
+}
+
+/** Hands a claimed run back (its start found the thread busy after all). */
+function unclaim(s: Schedule, lastRunBefore: string | undefined): void {
+  s.runCount -= 1;
+  if (lastRunBefore) s.lastRunAt = lastRunBefore;
+  else delete s.lastRunAt;
+}
+
+/**
+ * Starts the oldest pending fire on a thread, if the thread is free. The
+ * deferred-turn drain calls it once no queued report is waiting there
+ * (reports go first). The fire is claimed now, and its `started` entry has
+ * `delayedMs`, how long it waited. A start that finds the thread busy after
+ * all (the user's message got in first) hands the claim back and leaves the
+ * fire pending, for that turn's end. A fire that fails to start is used up,
+ * and the next one is tried. Not held by the rate cap (one per turn end on
+ * its thread is load enough), though it counts toward it. True when a turn
+ * started.
+ */
+export function deliverPendingSchedule(threadId: string, availableAgents: readonly string[]): boolean {
+  for (;;) {
+    if (isShuttingDown()) return false;
+    const thread = getThread(threadId);
+    if (!thread) return false;
+    const waiting = listSchedules({ threadId })
+      .filter((s) => s.pending && isRunnable(s) && !missedUnsaved.has(s.id))
+      .sort((a, b) => Date.parse(a.pending!.dueAt) - Date.parse(b.pending!.dueAt));
+    if (!waiting.length) return false;
+    // Right before the start: never a second turn on the thread.
+    if (threadBusy(thread)) return false;
+    const id = waiting[0].id;
+    const nowMs = schedulerClock.now();
+    const at = iso(nowMs);
+    let runNumber: number | undefined;
+    let dueAt = at;
+    let lastRunBefore: string | undefined;
+    // Claimed, and off the queue, before the start: never both pending and started.
+    const claimed = updateSchedule(id, (s) => {
+      if (!s.pending) return false;
+      dueAt = s.pending.dueAt;
+      lastRunBefore = s.lastRunAt;
+      delete s.pending;
+      s.runCount += 1;
+      runNumber = s.runCount;
+      s.lastRunAt = at;
+    });
+    if (!claimed || runNumber === undefined) continue;
+    let run = startScheduledTurn(claimed, runNumber, availableAgents, at);
+    if (run.outcome === "skipped-busy") {
+      const pendingAt = dueAt;
+      updateSchedule(id, (s) => {
+        unclaim(s, lastRunBefore);
+        s.pending = { dueAt: pendingAt };
+      });
+      console.log(`[schedules] ${id}: thread ${threadId} is busy again; still queued (due ${pendingAt})`);
+      return false;
+    }
+    const waited = nowMs - Date.parse(dueAt);
+    if (waited > 0) run = { ...run, delayedMs: waited };
+    if (run.outcome === "started") recentStarts.push(nowMs);
+    updateSchedule(id, (s) => {
+      s.history.push(run);
+    });
+    const why = run.error ? ` (${run.error})` : "";
+    console.log(`[schedules] fire ${id} run ${runNumber}: ${run.outcome} on thread ${threadId}, queued since ${dueAt}${why}`);
+    if (run.outcome === "started") return true;
+  }
 }
 
 /** Starts a claimed fire's turn, or says why not. */
@@ -346,11 +488,9 @@ function startScheduledTurn(s: Schedule, run: number, availableAgents: readonly 
   if (!threadId) return { at, outcome: "failed-to-start", error: `target "${s.target.kind}" is not supported yet` };
   const thread = getThread(threadId);
   if (!thread) return { at, outcome: "failed-to-start", threadId, error: "thread not found" };
-  // Busy: a turn of the thread's own running, or a Jarvis thread waiting on
-  // its child. Skipped for now, whatever `overlap` says.
-  if (threadIsRunning(thread.id, thread.sdkSessionId) || runningChildOf(thread.id)) {
-    return { at, outcome: "skipped-busy", threadId };
-  }
+  // Busy (with `overlap: "skip"`, or the drain racing a new turn): nothing
+  // starts. The callers queue it, or record it.
+  if (threadBusy(thread)) return { at, outcome: "skipped-busy", threadId };
   try {
     const started = startTurn(
       {
@@ -406,12 +546,18 @@ function retryUnsavedMissed(now: number): void {
   for (const [id, loggedAt] of [...missedUnsaved]) {
     try {
       let settled: SettledDue = {};
+      const staleDueAt = stalePendingUnsaved.get(id);
       const after = updateSchedule(id, (x) => {
-        if (!x.enabled || !x.nextRunAt || Date.parse(x.nextRunAt) > now) return false;
+        const stale = !!staleDueAt && x.pending?.dueAt === staleDueAt && !!dropPending(x, now, "missed");
+        if (!x.enabled || !x.nextRunAt || Date.parse(x.nextRunAt) > now) return stale ? undefined : false;
         settled = settleDue(x, now, false);
         if (settled.missed) x.history.push(settled.missed);
       });
       missedUnsaved.delete(id);
+      if (staleDueAt) {
+        stalePendingUnsaved.delete(id);
+        console.log(`[schedules] missed ${id}: the fire queued since ${staleDueAt}, saved on retry`);
+      }
       if (settled.missed) {
         const next = after?.nextRunAt ? `next run ${after.nextRunAt}` : "it has ended";
         console.log(`[schedules] missed ${id}: ${settled.estimated ? "about " : ""}${settled.missed.missedCount} run(s) from ${settled.missed.at}, saved on retry; ${next}`);
@@ -423,6 +569,29 @@ function retryUnsavedMissed(now: number): void {
         missedUnsaved.set(id, now);
         console.error(`[scheduler] still can't record ${id} as missed (it will not fire until it can): ${err?.message ?? err}`);
       }
+    }
+  }
+}
+
+/**
+ * At startup: a fire still queued when gitbot stopped is missed, never fired
+ * late (decision 3): one `missed` entry at its due time, and `pending` is
+ * cleared. Its run counts, as any missed run does. A record that can't be
+ * saved keeps the schedule from firing or draining until it is.
+ */
+function recordStalePending(now: number): void {
+  for (const s of listSchedules()) {
+    if (!s.pending) continue;
+    const dueAt = s.pending.dueAt;
+    try {
+      updateSchedule(s.id, (x) => {
+        if (!dropPending(x, now, "missed")) return false;
+      });
+      console.log(`[schedules] missed ${s.id}: the fire queued since ${dueAt} was still waiting when gitbot stopped`);
+    } catch (err: any) {
+      missedUnsaved.set(s.id, now);
+      stalePendingUnsaved.set(s.id, dueAt);
+      console.error(`[scheduler] could not record ${s.id}'s queued fire as missed (it will not fire): ${err?.message ?? err}`);
     }
   }
 }

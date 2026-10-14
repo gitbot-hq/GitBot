@@ -9,8 +9,12 @@ import { oneChildAtATime, runningChildOf } from "./child-lock";
 // reports to the Jarvis thread that last sent it a message (reportTo); when
 // the user types in it themselves, ownership passes to them and reports stop.
 
-/** True while any session of this thread is mid-turn. */
-function threadIsRunning(thread: Thread): boolean {
+/**
+ * True while any session of this thread is mid-turn: the one the thread's
+ * next turn resumes, or any other bound to it (a first turn's, keyed by a
+ * random id). The scheduler's busy check uses it too.
+ */
+export function threadIsRunning(thread: Pick<Thread, "id" | "sdkSessionId">): boolean {
   if (thread.sdkSessionId && sessions.get(thread.sdkSessionId)?.status === "running") return true;
   return [...sessions.values()].some((s) => s.threadId === thread.id && s.status === "running");
 }
