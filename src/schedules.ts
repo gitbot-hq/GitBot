@@ -2,7 +2,18 @@ import { randomUUID } from "crypto";
 import { join } from "path";
 import { dataDir, quarantineCorrupt, readCollection, writeCollection } from "./json-store";
 import { getThread, type Bot, type TurnOutcome } from "./bot-store";
-import { countOccurrences, isIsoInstant, isUsableWhen, minGapMinutes, nextOccurrence, parseWhen, upcomingRuns, type When } from "./schedule-time";
+import {
+  countOccurrences,
+  describeWhen,
+  isIsoInstant,
+  isUsableWhen,
+  localHuman,
+  minGapMinutes,
+  nextOccurrence,
+  parseWhen,
+  upcomingRuns,
+  type When,
+} from "./schedule-time";
 
 // Schedules: a prompt gitbot sends itself at a given time, or again and
 // again (cron, interval), as a real turn on a thread. Stored in
@@ -28,6 +39,14 @@ export interface Schedule {
   /** The Jarvis thread that gets the schedule note (its creator). */
   notesTo?: string;
   createdBy: { kind: "jarvis"; threadId: string } | { kind: "user"; remote?: string };
+  /**
+   * Set for good once anyone but the Jarvis thread that made it (a route,
+   * another Jarvis thread) changed its words or re-armed it: its prompt,
+   * name, times, a resume, maxRuns, endsAt, or a run now (markChangedBy).
+   * Such a schedule is no longer that Jarvis's own words: its turns never
+   * carry by="you" (scheduler.ts, madeByThisJarvis).
+   */
+  changedByOther?: true;
   enabled: boolean;
   /**
    * Why it is paused: PAUSED_BY_USER, its failures, or a start that can never
@@ -373,6 +392,26 @@ export function hasEnded(s: Schedule, now: number): boolean {
   return next == null || (!!s.endsAt && next >= Date.parse(s.endsAt));
 }
 
+/** True when `by` is the Jarvis thread that made the schedule. */
+function isCreator(s: Pick<Schedule, "createdBy">, by: Schedule["createdBy"]): boolean {
+  return by.kind === "jarvis" && s.createdBy?.kind === "jarvis" && s.createdBy.threadId === by.threadId;
+}
+
+/**
+ * The edits that change a schedule's words or re-arm it: a resume
+ * (`enabled: true`; pausing is not one), new times, prompt, name, or more
+ * runs. notify and overlap change neither.
+ */
+const REARMING_FIELDS = ["enabled", "name", "prompt", "when", "maxRuns", "endsAt"] as const;
+
+/**
+ * Someone changed the schedule's words or re-armed it: unless that is the
+ * Jarvis thread that made it, it is marked changedByOther, for good.
+ */
+export function markChangedBy(s: Schedule, by: Schedule["createdBy"]): void {
+  if (!isCreator(s, by)) s.changedByOther = true;
+}
+
 /** What PATCH /schedules/:id may change. */
 export const EDITABLE_FIELDS = ["enabled", "name", "prompt", "when", "overlap", "notify", "maxRuns", "endsAt"] as const;
 
@@ -401,7 +440,12 @@ export type EditScheduleResult =
  * drops the pending fire (it was a fire of the old times) and, on a schedule
  * that is enabled, moves nextRunAt to its first run after now.
  */
-export function editSchedule(id: string, body: any, at: number = Date.now()): EditScheduleResult {
+export function editSchedule(
+  id: string,
+  body: any,
+  at: number = Date.now(),
+  editor: Schedule["createdBy"] = { kind: "user" },
+): EditScheduleResult {
   if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, status: 400, error: "body must be a JSON object" };
   const keys = Object.keys(body);
   const editable: readonly string[] = EDITABLE_FIELDS;
@@ -447,6 +491,8 @@ export function editSchedule(id: string, body: any, at: number = Date.now()): Ed
   };
   // Edits the freshly read schedule; a refusal returns false, so nothing is saved.
   const updated = updateSchedule(id, (s) => {
+    // Saved only if the edit is (a refusal below writes nothing).
+    if (REARMING_FIELDS.some((k) => body[k] !== undefined && !(k === "enabled" && body[k] === false))) markChangedBy(s, editor);
     const resuming = enabled === true && !s.enabled;
     const pausing = enabled === false && (s.enabled || !!s.pending);
     // Ended already: disabled, not by a pause.
@@ -529,6 +575,20 @@ export function nextRunsOf(s: Schedule, n = 3): string[] {
     endsAt: s.endsAt ? Date.parse(s.endsAt) : undefined,
     runsLeft: runsLeft(s),
   }).map(iso);
+}
+
+/**
+ * The schedule in words, for Jarvis to repeat: its times (describeWhen; a
+ * once read in `tz`) and how it ends, e.g. "every 2 minutes, at most 2 runs".
+ */
+export function describeSchedule(s: Pick<Schedule, "when" | "maxRuns" | "endsAt">, tz: string): string {
+  if (!isUsableWhen(s.when)) return "a schedule this build cannot read";
+  const zone = s.when.kind === "cron" ? s.when.tz : tz;
+  const ends = [
+    s.maxRuns ? `at most ${s.maxRuns} run${s.maxRuns === 1 ? "" : "s"}` : "",
+    s.endsAt ? `until ${localHuman(Date.parse(s.endsAt), zone)} ${zone}` : "",
+  ].filter(Boolean);
+  return [describeWhen(s.when, tz), ...ends].join(", ");
 }
 
 // --- Validation and creation ---
@@ -636,6 +696,8 @@ export function createSchedule(
     prompt,
     when: parsed.when,
     target: { kind: "thread", threadId: thread.id },
+    // A schedule Jarvis made reports its notes to that Jarvis thread.
+    ...(createdBy.kind === "jarvis" ? { notesTo: createdBy.threadId } : {}),
     createdBy,
     enabled: true,
     overlap: overlap ?? "queue",

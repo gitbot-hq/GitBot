@@ -54,7 +54,7 @@ export function serverTimeZone(): string {
 }
 
 /** The server's zone if it is a region name, else UTC (a server set to "EST" gets no DST surprise). */
-function defaultTimeZone(): { ok: true; tz: string } {
+export function defaultTimeZone(): { ok: true; tz: string } {
   const own = canonicalTimeZone(serverTimeZone());
   return own.ok ? own : { ok: true, tz: "UTC" };
 }
@@ -355,6 +355,132 @@ export function minGapMinutes(when: When, from: number): number {
     if (min <= MINUTE_MS || t - start >= DAY_MS) break;
   }
   return min / MINUTE_MS;
+}
+
+// --- Local times, for people (Jarvis's schedule tools) ---
+
+const pad = (n: number, width = 2) => String(n).padStart(width, "0");
+
+/** `t` as an ISO time in `tz`, with that zone's offset then: "2026-10-15T17:00:00+01:00" (Z in UTC). */
+export function localIso(t: number, tz: string): string {
+  const wall = wallMs(t, tz);
+  const offsetMin = Math.round((wall - Math.floor(t / 1000) * 1000) / MINUTE_MS);
+  const d = new Date(wall);
+  const stamp = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+  if (offsetMin === 0 && tz === "UTC") return `${stamp}Z`;
+  const sign = offsetMin < 0 ? "-" : "+";
+  const abs = Math.abs(offsetMin);
+  return `${stamp}${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+}
+
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** `t` on `tz`'s wall clock, for reading: "Thu 15 Oct 2026, 17:00". */
+export function localHuman(t: number, tz: string): string {
+  const d = new Date(wallMs(t, tz));
+  return `${WEEKDAYS[d.getUTCDay()].slice(0, 3)} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+
+/** A wall time with no zone: "2026-10-15T17:00" or "2026-10-15 17:00:30". */
+const LOCAL_TIME = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/;
+
+/** True for a date and time with no zone (LOCAL_TIME). */
+export function isLocalTime(text: unknown): text is string {
+  return typeof text === "string" && LOCAL_TIME.test(text.trim());
+}
+
+/**
+ * A wall time with no zone ("2026-10-15T17:00"), read in `tz`, as an ISO
+ * instant in that zone's offset. When the clocks go back and the time
+ * happens twice, the first; a time the clocks skip when they go forward
+ * does not exist, and is refused.
+ */
+export function zonedTimeToIso(local: string, tz: string): { ok: true; at: string } | { ok: false; error: string } {
+  const m = LOCAL_TIME.exec(local.trim());
+  const fields = m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6] ?? "00"}` : "";
+  if (!m || !isIsoInstant(`${fields}Z`)) return { ok: false, error: `${JSON.stringify(local)} is not a real date and time` };
+  const wall = Date.parse(`${fields}Z`);
+  // The zone's offset just before and after: at most one change between.
+  const offsets = new Set([wall - 12 * 3_600_000, wall, wall + 12 * 3_600_000].map((x) => wallMs(x, tz) - x));
+  const fits = [...offsets].map((o) => wall - o).filter((t) => wallMs(t, tz) === wall).sort((a, b) => a - b);
+  if (!fits.length) return { ok: false, error: `${fields.replace("T", " ")} does not exist in ${tz}: the clocks go forward over it` };
+  return { ok: true, at: localIso(fits[0], tz) };
+}
+
+/** "every 2 minutes", "every 3 hours", "every day". */
+function everyText(minutes: number): string {
+  const unit = (n: number, word: string) => (n === 1 ? `every ${word}` : `every ${n} ${word}s`);
+  if (minutes % 1440 === 0) return unit(minutes / 1440, "day");
+  if (minutes % 60 === 0) return unit(minutes / 60, "hour");
+  return unit(minutes, "minute");
+}
+
+const NICKNAMES: Record<string, string> = {
+  "@yearly": "every 1 January at 00:00",
+  "@annually": "every 1 January at 00:00",
+  "@monthly": "on the 1st of every month at 00:00",
+  "@weekly": "every Sunday at 00:00",
+  "@daily": "every day at 00:00",
+  "@midnight": "every day at 00:00",
+  "@hourly": "every hour, on the hour",
+};
+
+const DAY_NAMES: Record<string, number> = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
+
+/** A cron weekday field in words ("every weekday"), or null for one too odd to say. */
+function weekdaysText(field: string): string | null {
+  const f = field.toUpperCase();
+  if (f === "*" || f === "?") return "every day";
+  if (f === "1-5" || f === "MON-FRI") return "every weekday";
+  const days: number[] = [];
+  for (const part of f.split(",")) {
+    const n = part in DAY_NAMES ? DAY_NAMES[part] : /^[0-7]$/.test(part) ? Number(part) % 7 : NaN;
+    if (Number.isNaN(n)) return null;
+    if (!days.includes(n)) days.push(n);
+  }
+  const names = days.map((d) => WEEKDAYS[d]);
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return `every ${list}`;
+}
+
+/** A cron pattern in words where it is a common one, else the pattern itself. */
+function cronText(expr: string): string {
+  const nick = NICKNAMES[expr.toLowerCase()];
+  if (nick) return nick;
+  const [minute, hour, dom, month, dow] = expr.split(" ");
+  const plain = (s: string) => /^\d{1,2}$/.test(s);
+  if (dom === "*" && month === "*") {
+    if (plain(minute) && plain(hour)) {
+      const days = weekdaysText(dow);
+      if (days) return `${days} at ${pad(Number(hour))}:${pad(Number(minute))}`;
+    }
+    if (dow === "*" && hour === "*") {
+      if (minute === "*") return "every minute";
+      if (plain(minute)) return `every hour at :${pad(Number(minute))}`;
+      const step = /^\*\/(\d+)$/.exec(minute);
+      if (step) return everyText(Number(step[1]));
+    }
+  }
+  return `cron "${expr}"`;
+}
+
+/**
+ * A `when` in words: "every weekday at 09:00 Europe/London", "every 2
+ * minutes", "once at Thu 15 Oct 2026, 17:00 Europe/London". A cron reads in
+ * its own zone; a once in `tz`.
+ */
+export function describeWhen(when: When, tz: string): string {
+  switch (when.kind) {
+    case "once":
+      return `once at ${localHuman(Date.parse(when.at), tz)} ${tz}`;
+    case "interval":
+      return everyText(when.everyMinutes);
+    case "cron":
+      return `${cronText(when.expr)} ${when.tz}`;
+    default:
+      return "an unknown kind of schedule";
+  }
 }
 
 // --- Validation ---

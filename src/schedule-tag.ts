@@ -10,6 +10,15 @@ export interface ScheduledTurn {
   id: string;
   name: string;
   run: number;
+  /**
+   * True when the thread it runs on is the Jarvis thread that made it, with
+   * its own create_schedule tool (createdBy jarvis, that thread), and nobody
+   * else has changed its words or re-armed it since (changedByOther). Only such a
+   * prompt is the user's own earlier request to that Jarvis; any other
+   * schedule (the API has no access guard yet, so an agent with a shell can
+   * make one) is data to it. The tag says so with `by="you"`.
+   */
+  createdHere?: true;
 }
 
 /** An attribute value as the tag carries it: no quotes or angle brackets, one line. */
@@ -17,17 +26,18 @@ function attr(value: string): string {
   return value.replace(/["<>\r\n]/g, "");
 }
 
-/** `<gitbot-schedule id="…" name="…" run="N"/>` */
+/** `<gitbot-schedule id="…" name="…" run="N"/>`, with ` by="you"` when createdHere. */
 export function formatScheduleTag(s: ScheduledTurn): string {
-  return `<gitbot-schedule id="${attr(s.id)}" name="${attr(s.name)}" run="${Math.floor(s.run)}"/>`;
+  const by = s.createdHere ? ` by="you"` : "";
+  return `<gitbot-schedule id="${attr(s.id)}" name="${attr(s.name)}" run="${Math.floor(s.run)}"${by}/>`;
 }
 
-// Well-formed only: the three attributes, in this order, at the very start
+// Well-formed only: the three attributes (and by="you"), in this order, at the very start
 // of the text, where agentPromptText (the only writer) puts it. Its own line
 // break goes with it, so the prompt comes back exactly as sent. A tag
 // anywhere else (quoted in a compaction summary or a report, pasted into a
 // message) is someone's text, and is left as text.
-const TAG = /^<gitbot-schedule id="([^"<>\r\n]*)" name="([^"<>\r\n]*)" run="(\d+)"\/>[ \t]*(?:\r?\n)?/;
+const TAG = /^<gitbot-schedule id="([^"<>\r\n]*)" name="([^"<>\r\n]*)" run="(\d+)"( by="you")?\/>[ \t]*(?:\r?\n)?/;
 
 /**
  * Removes the schedule tag from the start of the text and returns its
@@ -39,6 +49,6 @@ export function parseScheduleTag(text: string): { text: string; scheduled?: Sche
   if (!m) return { text };
   return {
     text: text.slice(m[0].length),
-    scheduled: { id: m[1], name: m[2], run: Number(m[3]) },
+    scheduled: { id: m[1], name: m[2], run: Number(m[3]), ...(m[4] ? { createdHere: true as const } : {}) },
   };
 }

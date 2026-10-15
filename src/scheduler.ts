@@ -8,6 +8,7 @@ import {
   claimManualRun,
   dropPending,
   getSchedule,
+  markChangedBy,
   isRunnable,
   listSchedules,
   pauseSchedule,
@@ -303,10 +304,17 @@ function tick(): void {
 export function runScheduleNow(
   id: string,
   availableAgents: readonly string[],
+  by: Schedule["createdBy"] = { kind: "user" },
 ): { schedule: Schedule; run?: ScheduleRun; queued?: true } | { refused: string } | undefined {
   const s = getSchedule(id);
   if (!s) return undefined;
   if (!isRunnable(s)) return { refused: `this schedule (${s.when?.kind} on ${s.target?.kind}) is not supported by this build` };
+  // A run at a time someone else chose is no longer the creating Jarvis's own (madeByThisJarvis).
+  updateSchedule(id, (x) => {
+    if (x.changedByOther) return false;
+    markChangedBy(x, by);
+    if (!x.changedByOther) return false;
+  });
   const due = s.enabled && !!s.nextRunAt && Date.parse(s.nextRunAt) <= schedulerClock.now();
   let fired = due ? fireSchedule(id, availableAgents, "due") : undefined;
   // A due fire that may no longer run (past endsAt) ended the schedule
@@ -538,7 +546,7 @@ function startScheduledTurn(s: Schedule, run: number, availableAgents: readonly 
       {
         threadId,
         prompt: s.prompt,
-        scheduled: { id: s.id, name: s.name, run },
+        scheduled: { id: s.id, name: s.name, run, ...(madeByThisJarvis(s, threadId) ? { createdHere: true as const } : {}) },
         // Unattended, so always auto-approve and never plan-only, whatever the
         // bot's default or the thread's pick in a browser: nobody is there to
         // answer an approval. (Jarvis is auto-approve anyway.) Documented in
@@ -557,6 +565,19 @@ function startScheduledTurn(s: Schedule, run: number, availableAgents: readonly 
   } catch (err: any) {
     return { at, outcome: "failed-to-start", threadId, error: err?.message ?? "failed to start" };
   }
+}
+
+/**
+ * True when the schedule runs on the Jarvis thread that made it with its own
+ * create_schedule tool, and nobody else has changed its words or re-armed it
+ * since (changedByOther): the only kind whose prompt that Jarvis takes as
+ * the user's own request (the tag's by="you"). POST /schedules always
+ * records createdBy user. A PATCH of its words or times (or a resume), a run
+ * now through the route, or another Jarvis thread's update or run marks a
+ * Jarvis-made one changedByOther for good, so its turns lose by="you" too.
+ */
+function madeByThisJarvis(s: Schedule, threadId: string): boolean {
+  return s.createdBy?.kind === "jarvis" && s.createdBy.threadId === threadId && !s.changedByOther;
 }
 
 /**

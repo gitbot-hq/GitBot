@@ -76,7 +76,7 @@ export async function handleScheduleRoutes(
   if (method === "PATCH" && action === undefined) {
     if (!getSchedule(id)) { jsonError(res, 404, "Schedule not found"); return true; }
     const body = await readBody(req);
-    const edited = editSchedule(id, body, schedulerClock.now());
+    const edited = editSchedule(id, body, schedulerClock.now(), { kind: "user", remote: remoteOf(req) });
     if (!edited.ok) { jsonError(res, edited.status, edited.error); return true; }
     logWrite(edited.verb, id, req);
     if (edited.droppedPending) console.log(`[schedules] ${id}: the fire queued since ${edited.droppedPending} is dropped (${edited.verb})`);
@@ -97,7 +97,7 @@ export async function handleScheduleRoutes(
   // POST /schedules/:id/run
   if (method === "POST" && action === "run") {
     if (!getSchedule(id)) { jsonError(res, 404, "Schedule not found"); return true; }
-    const fired = runScheduleNow(id, availableAgents);
+    const fired = runScheduleNow(id, availableAgents, { kind: "user", remote: remoteOf(req) });
     if (!fired) { jsonError(res, 404, "Schedule not found"); return true; }
     if ("refused" in fired) { logWrite("run-refused", id, req); jsonError(res, 400, fired.refused); return true; }
     logWrite("run", id, req);
