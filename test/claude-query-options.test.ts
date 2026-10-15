@@ -271,3 +271,76 @@ test("a nonsense window in the entry is ignored rather than shown", async () => 
   assert.equal(s.context?.window, 1_000_000);
   assert.equal(meterWarned().length, 1);
 });
+
+// --- Claude Code's own scheduling tools are off ---
+//
+// Each turn is a one-shot CLI process, so a session cron dies unfired. The
+// four names are merged into whatever a bot denies already, never in its place.
+
+const SCHEDULING = ["CronCreate", "CronDelete", "CronList", "ScheduleWakeup"];
+
+test("every Claude Code session denies the SDK's scheduling tools", async () => {
+  await runAgent(store());
+  assert.deepEqual(optionsOf().disallowedTools, SCHEDULING);
+  // RemoteTrigger is left alone, by decision.
+  assert.equal(optionsOf().disallowedTools.includes("RemoteTrigger"), false);
+  // Nothing else about a plain thread moves with it.
+  assert.equal("tools" in optionsOf(), false);
+  assert.equal("hooks" in optionsOf(), false);
+  assert.equal(optionsOf().permissionMode, "default");
+});
+
+test("the deny list merges with a bot's own disallowedTools, without duplicates", async () => {
+  const bot: BotPreset = { id: "b1", name: "Careful", instructions: "", disallowedTools: ["Bash"] };
+  await runAgent(store({ botPreset: bot }));
+  assert.deepEqual(optionsOf().disallowedTools, ["Bash", ...SCHEDULING]);
+
+  // A bot that already names one of them gets it once.
+  const overlap: BotPreset = { id: "b2", name: "Overlap", instructions: "", disallowedTools: ["CronList", "Bash"] };
+  await runAgent(store({ botPreset: overlap }));
+  assert.deepEqual(optionsOf(1).disallowedTools, ["CronList", "Bash", "CronCreate", "CronDelete", "ScheduleWakeup"]);
+  // And the bot's own list is not mutated by the merge.
+  assert.deepEqual(overlap.disallowedTools, ["CronList", "Bash"]);
+});
+
+test("an allow-listed bot keeps the same tools and hooks", async () => {
+  const bot: BotPreset = { id: "b3", name: "Reader", instructions: "", allowedTools: ["Read", "mcp__docs__search"] };
+  await runAgent(store({ botPreset: bot, mode: "plan" }));
+  assert.deepEqual(optionsOf().tools, ["Read", "mcp__docs__search"]);
+  assert.deepEqual(optionsOf().disallowedTools, SCHEDULING);
+  assert.equal(optionsOf().permissionMode, "plan");
+
+  // The allow-list hook still lets listed tools through and turns others away.
+  const hook = optionsOf().hooks.PreToolUse[0].hooks[0];
+  const signal = new AbortController().signal;
+  assert.deepEqual(await hook({ tool_name: "Read" }, undefined, { signal }), {});
+  assert.deepEqual(await hook({ tool_name: "mcp__docs__search" }, undefined, { signal }), {});
+  const denied = await hook({ tool_name: "Bash" }, undefined, { signal });
+  assert.equal(denied.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /Reader is only allowed these tools: Read, mcp__docs__search/);
+});
+
+test("Jarvis and setup threads get the deny list too", async () => {
+  const jarvis: BotPreset = {
+    id: "builtin-jarvis",
+    name: "Jarvis",
+    instructions: "",
+    jarvis: { availableAgents: ["claude-code"], threadId: "t1" },
+  };
+  await runAgent(store({ botPreset: jarvis }));
+  assert.deepEqual(optionsOf().disallowedTools, SCHEDULING);
+  assert.ok(optionsOf().mcpServers, "Jarvis still gets its tool server");
+
+  // A setup run drops the allow-list but keeps the bot's denials, plus these.
+  const setup: BotPreset = {
+    id: "b4",
+    name: "Builder",
+    instructions: "",
+    disallowedTools: ["WebFetch"],
+    setup: true,
+    setupInstructions: "install node",
+  };
+  await runAgent(store({ botPreset: setup }));
+  assert.deepEqual(optionsOf(1).disallowedTools, ["WebFetch", ...SCHEDULING]);
+  assert.equal("tools" in optionsOf(1), false);
+});

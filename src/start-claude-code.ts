@@ -127,7 +127,8 @@ export async function runAgent(store: SessionStore): Promise<void> {
         // it runs before every tool call, pre-approved ones included. An MCP tool
         // named on the list (mcp__server__tool) still passes.
         ...(preset?.allowedTools?.length ? { hooks: allowListHooks(preset.allowedTools, preset.name) } : {}),
-        ...(preset?.disallowedTools?.length ? { disallowedTools: preset.disallowedTools } : {}),
+        // Merged into the bot's own denials, never in place of them.
+        disallowedTools: withSdkSchedulingDenied(preset?.disallowedTools),
         ...(store.sdkSessionId ? { resume: store.sdkSessionId } : {}),
         // Jarvis's gitbot tools: a fresh in-process server per turn, for Jarvis only.
         ...jarvisQueryOptions(preset),
@@ -348,6 +349,20 @@ export function permissionRequest(
 ): Record<string, unknown> {
   const questions = toolName === ASK_USER_QUESTION ? parseAskUserQuestion(input) : null;
   return { toolUseID, toolName, input, ...(questions ? { questions } : {}) };
+}
+
+/**
+ * Claude Code's own scheduling tools, off in every session. Each gitbot turn is
+ * a one-shot CLI process, so a session cron dies with the turn unfired — and
+ * the tool would still let the model say "scheduled!". gitbot's scheduler is
+ * the only path. RemoteTrigger is left on by choice. The CLI the SDK bundles
+ * (2.1.291) ships all four names, so they go out ungated.
+ */
+export const SDK_SCHEDULING_TOOLS = ["CronCreate", "CronDelete", "CronList", "ScheduleWakeup"];
+
+/** The bot's own denials, if any, plus the SDK's scheduling tools; no repeats. */
+export function withSdkSchedulingDenied(disallowedTools: string[] = []): string[] {
+  return [...new Set([...disallowedTools, ...SDK_SCHEDULING_TOOLS])];
 }
 
 /** Denies every tool call that is not on the bot's allow-list. */
