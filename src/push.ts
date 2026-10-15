@@ -4,7 +4,7 @@ import { basename, join } from "path";
 // What web-push resolves the endpoint's host with when it sends.
 import { parse as legacyParse } from "url";
 import webpush from "web-push";
-import { errorLine, latestLine, turnOutcome } from "./attention";
+import { errorLine, latestLine, scheduledNotify, scheduledOutcomeIsQuiet, turnOutcome } from "./attention";
 import { dataDir, getBot, getThread, isJarvisBot } from "./bot-store";
 import { askUserQuestionLabel, isAskUserQuestion } from "./ask-user-question";
 import { decide, liveTabs, onPresenceChange, parsePresence, PresenceLimitError, presenceClock, recordPresence } from "./presence";
@@ -584,6 +584,9 @@ export function worthSending(payload: PushPayload, now = presenceClock.now()): b
  * reportDelivered is set by the report watcher (reports.ts), a turn-end
  * listener of its own: it must be registered before watchPush, as server.ts
  * does, so the flag is set by the time this reads it.
+ *
+ * A scheduled turn's body starts `⏰ <schedule name>: `. Whether it is sent
+ * at all is its schedule's `notify` (watchPush, scheduledOutcomeIsQuiet).
  */
 export function turnEndNotification(turn: EndedTurn): PushPayload | null {
   if (isShuttingDown()) return null;
@@ -597,9 +600,10 @@ export function turnEndNotification(turn: EndedTurn): PushPayload | null {
   const failed = outcome === "failed";
   const line = failed ? errorLine(turn) : latestLine(lastAssistantMessage(turn.events));
   const head = failed ? `${botName} failed` : `${botName} finished`;
+  const body = line ? `${head}: ${line}` : head;
   return {
     title: thread.title,
-    body: line ? `${head}: ${line}` : head,
+    body: turn.scheduled ? `⏰ ${turn.scheduled.name}: ${body}` : body,
     tag: `thread-${thread.id}`,
     url: threadUrl(thread.id, thread.botId),
     kind: failed ? "failed" : "done",
@@ -891,6 +895,10 @@ let cancelHeldPush: (tag: string) => void = () => {};
  * push of its own (EndedTurn.schedulePaused): one notification for the turn,
  * not two. Sent at once, without the presence hold: a pause is something the
  * thread itself does not show. Logged like any push, or why it was not sent.
+ *
+ * Sent whatever the schedule's `notify` says, `never` included: a pause is
+ * the user's only sign that a schedule stopped, and a schedule that is quiet
+ * on purpose would otherwise stop without a word (slice 06's choice).
  */
 export function sendSchedulePausedPush(pause: { id: string; name: string; threadId?: string; body: string }): void {
   const thread = pause.threadId ? getThread(pause.threadId) : undefined;
@@ -965,6 +973,13 @@ export function watchPush(): () => void {
       // This failure paused its schedule: that push, sent already, says it.
       if (turn.schedulePaused) {
         logPushSkipped(payload, "the schedule's pause push stands in for it");
+        return;
+      }
+      // A scheduled turn whose schedule's notify does not cover this outcome
+      // (the activity stamp leaves it seen by the same rule). Needs-you
+      // pushes never come here: they always go out.
+      if (scheduledOutcomeIsQuiet(turn)) {
+        logPushSkipped(payload, `schedule notify is "${scheduledNotify(turn)}"`);
         return;
       }
       // A child's report waits on this Jarvis thread and starts right after

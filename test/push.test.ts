@@ -15,6 +15,7 @@ import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
 import { clearPresence, MAX_PRESENCE_TABS, PRESENCE_LEASE_MS, presenceClock, presenceTimer, recordPresence, type PresenceUpdate } from "../src/presence";
 import { watchChildReports } from "../src/reports";
+import { createSchedule, deleteSchedule } from "../src/schedules";
 import {
   DEFAULT_PUSH_SUBJECT,
   describeUserAgent,
@@ -1716,4 +1717,161 @@ test("a push not sent is logged with why: no browser, push off, muted, or Jarvis
   await notifyFromJarvis(bound.id, { title: "x", message: "y" });
   lines = await pushLogs(t, async () => { await endTurn(store); });
   assert.ok(lines.some((l) => l.includes(`(thread ${bound.id}): Jarvis sent its own notification this turn`)), lines.join("\n"));
+});
+
+// --- Scheduled turns: the schedule's notify (slice 06) ---
+
+/** A schedule on the thread with this notify, stored as the route stores it. */
+function scheduleOn(threadId: string, notify: "always" | "on-failure" | "never", name = "Nightly check") {
+  const created = createSchedule({
+    name,
+    prompt: "Reply: ok",
+    when: { kind: "interval", everyMinutes: 60 },
+    target: { kind: "thread", threadId },
+    notify,
+  }, { kind: "user" });
+  assert.ok(created.ok, JSON.stringify(created));
+  return created.schedule;
+}
+
+/** Runs one scheduled turn of `schedule` on the thread and ends it with the reply. */
+async function scheduledTurn(threadId: string, schedule: { id: string; name: string }, reply: string, status: SessionStore["status"] = "done") {
+  const started = startTurn({ threadId, prompt: "Reply: ok", scheduled: { id: schedule.id, name: schedule.name, run: 1 } }, ALL_AGENTS);
+  assert.ok(started.ok, JSON.stringify(started));
+  const store = runs[runs.length - 1];
+  await tick();
+  emitEvent(store, "assistant", { content: reply });
+  store.status = status;
+  notifyPermissionsChanged();
+  await settle();
+  return store;
+}
+
+test("a scheduled turn's push body is prefixed with the schedule name", async () => {
+  await subscribe("a");
+  const thread = plainThread("Tester");
+  const s = scheduleOn(thread.id, "always");
+  await scheduledTurn(thread.id, s, "## All green");
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].payload, {
+    title: "Fix the flaky test",
+    body: "⏰ Nightly check: Tester finished: All green",
+    tag: `thread-${thread.id}`,
+    url: `/?thread=${thread.id}&bot=${thread.botId}`,
+    kind: "done",
+    threadId: thread.id,
+    botId: thread.botId,
+  });
+
+  sent = [];
+  await scheduledTurn(thread.id, s, "", "error");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.kind, "failed");
+  assert.equal(sent[0].payload.body, "⏰ Nightly check: Tester failed");
+
+  // Deleted mid-run: told as always, under the name it ran with, and nothing throws.
+  sent = [];
+  const gone = scheduleOn(thread.id, "never", "Gone soon");
+  deleteSchedule(gone.id);
+  await scheduledTurn(thread.id, gone, "Still ran.");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.body, "⏰ Gone soon: Tester finished: Still ran.");
+});
+
+test("notify on-failure: done is not pushed, failed is", async (t) => {
+  await subscribe("a");
+  const thread = plainThread("Tester");
+  const s = scheduleOn(thread.id, "on-failure");
+  const lines = await pushLogs(t, async () => { await scheduledTurn(thread.id, s, "ok"); });
+  assert.equal(sent.length, 0);
+  assert.deepEqual(lines, [`[push] skipped done "Fix the flaky test" (thread ${thread.id}): schedule notify is "on-failure"`]);
+
+  await scheduledTurn(thread.id, s, "", "error");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.kind, "failed");
+  assert.equal(sent[0].payload.body, "⏰ Nightly check: Tester failed");
+});
+
+test("notify never: nothing is pushed, and the skip is logged", async (t) => {
+  await subscribe("a");
+  const thread = plainThread("Tester");
+  const s = scheduleOn(thread.id, "never");
+  const lines = await pushLogs(t, async () => {
+    await scheduledTurn(thread.id, s, "ok");
+    await scheduledTurn(thread.id, s, "", "error");
+  });
+  assert.equal(sent.length, 0);
+  assert.deepEqual(lines, [
+    `[push] skipped done "Fix the flaky test" (thread ${thread.id}): schedule notify is "never"`,
+    `[push] skipped failed "Fix the flaky test" (thread ${thread.id}): schedule notify is "never"`,
+  ]);
+});
+
+test("needs-you pushes go out whatever notify says", async () => {
+  await subscribe("a");
+  const thread = plainThread("Builder");
+  const s = scheduleOn(thread.id, "never");
+  const started = startTurn({ threadId: thread.id, prompt: "build it", scheduled: { id: s.id, name: s.name, run: 1 } }, ALL_AGENTS);
+  assert.ok(started.ok);
+  const store = runs[runs.length - 1];
+  await tick();
+  store.pendingPermissions.set("tu-s1", { resolve: () => {}, input: { command: "npm test" }, toolName: "Bash", toolUseID: "tu-s1" });
+  notifyPermissionsChanged();
+  await settle();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.kind, "approval");
+  assert.equal(sent[0].payload.body, "Builder needs approval: Bash: npm");
+
+  // Presence still mutes it on top: watched, nothing goes out until it isn't.
+  store.pendingPermissions.clear();
+  notifyPermissionsChanged();
+  await settle();
+  sent = [];
+  const watcher = tab("watching", thread.id);
+  store.pendingPermissions.set("tu-s2", {
+    resolve: () => {},
+    toolName: "AskUserQuestion",
+    toolUseID: "tu-s2",
+    input: { questions: [{ question: "Which branch?", header: "Branch", options: [{ label: "main" }, { label: "dev" }] }] },
+  });
+  notifyPermissionsChanged();
+  await settle();
+  assert.equal(sent.length, 0, "muted while watched");
+  recordPresence({ tab: watcher, threadId: null, state: "away" });
+  await settle();
+  assert.equal(sent.length, 1, "told once the thread is not watched");
+  assert.equal(sent[0].payload.kind, "question");
+  store.pendingPermissions.clear();
+  store.status = "done";
+  notifyPermissionsChanged();
+  await settle();
+});
+
+test("unscheduled turns push exactly as before", async (t) => {
+  await subscribe("a");
+  const thread = plainThread("Tester");
+  // A never schedule on the same thread changes nothing for the user's own turns.
+  scheduleOn(thread.id, "never");
+  const lines = await pushLogs(t, async () => { await turn(thread.id, "## Fixed\n\nThe test was racing the clock."); });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.body, "Tester finished: Fixed");
+  assert.ok(!lines.some((l) => l.includes("schedule notify")), lines.join("\n"));
+  sent = [];
+  await turn(thread.id, "", "error");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].payload.body, "Tester failed");
+});
+
+test("a scheduled turn on a Jarvis thread that used notify gets no duplicate done push", async () => {
+  await subscribe("a");
+  const jarvis = boundJarvisChat();
+  const s = scheduleOn(jarvis.id, "always");
+  const started = startTurn({ threadId: jarvis.id, prompt: "check", scheduled: { id: s.id, name: s.name, run: 1 } }, ALL_AGENTS);
+  assert.ok(started.ok, JSON.stringify(started));
+  await tick();
+  const store = runs[runs.length - 1];
+  await notifyFromJarvis(jarvis.id, { title: "Checked", message: "All fine." });
+  assert.equal(sent.length, 1);
+  await endTurn(store);
+  assert.equal(sent.length, 1, "no ⏰ finished push after its own notification");
 });

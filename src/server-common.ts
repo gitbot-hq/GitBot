@@ -293,6 +293,14 @@ export interface SessionStore {
    * own copies of the prompt stay clean.
    */
   scheduled?: ScheduledTurn;
+  /**
+   * Per turn, reset by startTurn: this turn ended quietly, a scheduled run
+   * whose schedule's notify does not tell its outcome (attention.ts,
+   * scheduledOutcomeIsQuiet). Not news: the thread's row shows the stored
+   * lastOutcome, never this ending (an earlier unseen failure stays red).
+   * Set by the activity listener (watchThreadActivity).
+   */
+  quietEnd?: boolean;
 }
 
 /** The parts of a bot that shape the agent run. Mirrors fields on Bot in bot-store. */
@@ -374,6 +382,12 @@ export interface SessionSummaryItem {
   stopped: boolean;
   /** The schedule that started the current (or last) turn, or null. */
   scheduled: ScheduledTurn | null;
+  /**
+   * The last turn ended quietly (SessionStore.quietEnd): its ending is not
+   * news, so a thread row shows its stored lastOutcome instead. False while
+   * a turn runs.
+   */
+  quietEnd: boolean;
 }
 
 /**
@@ -405,6 +419,7 @@ export function buildSessionsDump(): SessionSummaryItem[] {
     botId: store.botId ?? null,
     stopped: store.status !== "running" && turnStopped(store),
     scheduled: store.scheduled ?? null,
+    quietEnd: store.status !== "running" && !!store.quietEnd,
   }));
 }
 

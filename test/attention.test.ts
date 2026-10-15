@@ -10,6 +10,7 @@ import { coalesce } from "../ui/app/lib/coalesce";
 import { errorLine, latestLine, resultError, turnOutcome, watchThreadActivity } from "../src/attention";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
+import { createSchedule, deleteSchedule } from "../src/schedules";
 import {
   buildPermissionsDump,
   buildSessionsDump,
@@ -24,6 +25,7 @@ import {
 import { handleRequest } from "../src/server";
 import { startTurn, agentRunners } from "../src/turns";
 import { pendingByJarvis, type ChildApproval } from "../ui/app/lib/approvals";
+import { byThread, threadIndicator } from "../ui/app/lib/use-thread-sessions";
 import {
   attentionRows,
   attentionTitle,
@@ -347,4 +349,144 @@ test("a turn whose result reports an error failed, whatever its status; an earli
   assert.equal(turnOutcome({ ...base, events: recovered }), "done");
   // No result at all (Codex, OpenCode): status decides.
   assert.equal(turnOutcome({ ...base, events: [ev(1, "user_prompt")] }), "done");
+});
+
+// --- Scheduled runs: unread follows the schedule's notify (slice 06) ---
+
+/** A plain thread, seen, with a schedule on it whose notify is `notify`. */
+function scheduledThread(notify: "always" | "on-failure" | "never") {
+  const bot = createBot({ name: "Sched", agent: "claude-code" });
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "gitbot-sched-unread-")));
+  const thread = createThread(bot.id, folder, undefined, "chat", "claude-code");
+  const created = createSchedule({
+    name: "Tick",
+    prompt: "Reply: ok",
+    when: { kind: "interval", everyMinutes: 1 },
+    target: { kind: "thread", threadId: thread.id },
+    notify,
+  }, { kind: "user" });
+  assert.ok(created.ok, JSON.stringify(created));
+  assert.equal(created.schedule.notify, notify);
+  return { thread, schedule: created.schedule };
+}
+
+/** Runs one scheduled turn of `schedule` on the thread and ends it. */
+async function scheduledTurn(threadId: string, schedule: { id: string; name: string }, status: SessionStore["status"], run = 1) {
+  const started = startTurn({ threadId, prompt: "Reply: ok", scheduled: { id: schedule.id, name: schedule.name, run } }, ALL_AGENTS);
+  assert.ok(started.ok, JSON.stringify(started));
+  const store = runs[runs.length - 1];
+  await tick();
+  await pause(2);
+  emitEvent(store, "assistant", { content: status === "error" ? "" : "ok" });
+  if (status === "error") emitEvent(store, "error", { message: "it broke" });
+  store.status = status;
+  notifyPermissionsChanged();
+  await tick();
+  return store;
+}
+
+test("an on-failure schedule's successful run leaves no unread dot; a failure does", async () => {
+  const { thread, schedule } = scheduledThread("on-failure");
+  assert.equal((await request("POST", `/threads/${thread.id}/seen`)).status, 200);
+  await pause(5);
+
+  await scheduledTurn(thread.id, schedule, "done");
+  let got = getThread(thread.id)!;
+  assert.ok(got.lastActivityAt, "the run is still activity");
+  assert.equal(got.lastOutcome, "done");
+  assert.equal(hasNews(got), false, "a success is seen");
+
+  await pause(5);
+  await scheduledTurn(thread.id, schedule, "error", 2);
+  got = getThread(thread.id)!;
+  assert.equal(got.lastOutcome, "failed");
+  assert.equal(hasNews(got), true, "a failure is news");
+
+  // A success after an unseen failure leaves that failure's dot, red, in place.
+  await pause(5);
+  await scheduledTurn(thread.id, schedule, "done", 3);
+  got = getThread(thread.id)!;
+  assert.equal(hasNews(got), true);
+  assert.equal(got.lastOutcome, "failed");
+});
+
+test("notify never leaves no dot; always leaves one", async () => {
+  const never = scheduledThread("never");
+  assert.equal((await request("POST", `/threads/${never.thread.id}/seen`)).status, 200);
+  await pause(5);
+  await scheduledTurn(never.thread.id, never.schedule, "done");
+  assert.equal(hasNews(getThread(never.thread.id)!), false);
+  await pause(5);
+  await scheduledTurn(never.thread.id, never.schedule, "error", 2);
+  assert.equal(getThread(never.thread.id)!.lastOutcome, "failed");
+  assert.equal(hasNews(getThread(never.thread.id)!), false);
+
+  const always = scheduledThread("always");
+  assert.equal((await request("POST", `/threads/${always.thread.id}/seen`)).status, 200);
+  await pause(5);
+  await scheduledTurn(always.thread.id, always.schedule, "done");
+  assert.equal(hasNews(getThread(always.thread.id)!), true);
+
+  // A schedule deleted mid-run counts as always: its run is news, and nothing throws.
+  const gone = scheduledThread("never");
+  assert.equal((await request("POST", `/threads/${gone.thread.id}/seen`)).status, 200);
+  assert.ok(deleteSchedule(gone.schedule.id));
+  await pause(5);
+  await scheduledTurn(gone.thread.id, gone.schedule, "done");
+  assert.equal(hasNews(getThread(gone.thread.id)!), true);
+
+  // The user's own turn on a never schedule's thread is news, as ever.
+  await request("POST", `/threads/${never.thread.id}/seen`);
+  await pause(5);
+  await turn(never.thread.id, "Done by hand.");
+  assert.equal(hasNews(getThread(never.thread.id)!), true);
+});
+
+/** The thread's row indicator, as the UI draws it from the session snapshot and the stored thread. */
+function rowIndicator(threadId: string) {
+  const t = getThread(threadId)!;
+  return threadIndicator(byThread(buildSessionsDump()).states[threadId], { unseen: hasNews(t), lastOutcome: t.lastOutcome });
+}
+
+test("a quiet scheduled success never recolours an earlier unseen dot, live or reloaded", async () => {
+  const { thread, schedule } = scheduledThread("on-failure");
+  assert.equal((await request("POST", `/threads/${thread.id}/seen`)).status, 200);
+  await pause(5);
+  await scheduledTurn(thread.id, schedule, "error");
+  assert.equal(rowIndicator(thread.id), "failed");
+
+  // The quiet success: its session is the thread's newest, ended "done", and
+  // stays in the snapshot until restart. The row still shows the failure.
+  await pause(5);
+  const quiet = await scheduledTurn(thread.id, schedule, "done", 2);
+  assert.equal(quiet.quietEnd, true);
+  const item = buildSessionsDump().find((s) => s.gitbotId === quiet.gitbotId)!;
+  assert.equal(item.status, "done");
+  assert.equal(item.quietEnd, true);
+  assert.equal(getThread(thread.id)!.lastOutcome, "failed");
+  assert.equal(rowIndicator(thread.id), "failed");
+
+  // Seen, the dot goes, as ever.
+  assert.equal((await request("POST", `/threads/${thread.id}/seen`)).status, 200);
+  assert.equal(rowIndicator(thread.id), null);
+
+  // A told run (a failure under on-failure) shows its own ending, quietEnd false.
+  await pause(5);
+  const told = await scheduledTurn(thread.id, schedule, "error", 3);
+  assert.equal(told.quietEnd, false);
+  assert.equal(rowIndicator(thread.id), "failed");
+
+  // An unscheduled turn after a quiet one: its own ending shows, unchanged.
+  const plain = scheduledThread("never");
+  await request("POST", `/threads/${plain.thread.id}/seen`);
+  await pause(5);
+  const q = await scheduledTurn(plain.thread.id, plain.schedule, "done");
+  assert.equal(q.quietEnd, true);
+  assert.equal(rowIndicator(plain.thread.id), null, "seen: no dot");
+  await pause(5);
+  const mine = await turn(plain.thread.id, "Done by hand.");
+  assert.equal(mine.quietEnd, false);
+  const own = buildSessionsDump().find((s) => s.gitbotId === mine.gitbotId)!;
+  assert.equal(own.quietEnd, false);
+  assert.equal(rowIndicator(plain.thread.id), "done");
 });

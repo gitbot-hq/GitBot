@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { join } from "path";
 import { dataDir, quarantineCorrupt, readCollection, writeCollection } from "./json-store";
 import { getThread, type Bot, type TurnOutcome } from "./bot-store";
-import { countOccurrences, isIsoInstant, isUsableWhen, nextOccurrence, parseWhen, upcomingRuns, type When } from "./schedule-time";
+import { countOccurrences, isIsoInstant, isUsableWhen, minGapMinutes, nextOccurrence, parseWhen, upcomingRuns, type When } from "./schedule-time";
 
 // Schedules: a prompt gitbot sends itself at a given time, or again and
 // again (cron, interval), as a real turn on a thread. Stored in
@@ -40,8 +40,13 @@ export interface Schedule {
    * `skipped-busy`, and nothing starts.
    */
   overlap: "queue" | "skip";
-  /** Which of its turns' ends push. Stored; not read yet. */
-  notify: "always" | "on-failure" | "never";
+  /**
+   * Which of its turns' ends push, and leave the thread's unread dot
+   * (attention.ts, scheduledOutcomeIsQuiet): `always`, only `on-failure`, or
+   * `never`. Default by gap: defaultNotify. Needs-you pushes, and the push
+   * for a pause, go out whatever it says.
+   */
+  notify: Notify;
   /** It ends once runCount reaches this. */
   maxRuns?: number;
   /** No run at or after this time; it ends instead. */
@@ -77,6 +82,8 @@ export interface Schedule {
   updatedAt: string;
 }
 
+export type Notify = "always" | "on-failure" | "never";
+
 export interface ScheduleRun {
   at: string;
   outcome: "started" | "skipped-busy" | "missed" | "failed-to-start";
@@ -99,6 +106,8 @@ export const SCHEDULES_MAX = 100;
 export const SCHEDULES_PER_THREAD_MAX = 20;
 export const HISTORY_MAX = 20;
 export const MAX_RUNS_MAX = 100_000;
+/** At this many minutes between runs or more, a schedule pushes every run by default. */
+export const NOTIFY_ALWAYS_GAP_MINUTES = 15;
 
 // --- Storage ---
 
@@ -365,7 +374,7 @@ export function hasEnded(s: Schedule, now: number): boolean {
 }
 
 /** What PATCH /schedules/:id may change. */
-export const EDITABLE_FIELDS = ["enabled", "name", "prompt", "when", "overlap", "maxRuns", "endsAt"] as const;
+export const EDITABLE_FIELDS = ["enabled", "name", "prompt", "when", "overlap", "notify", "maxRuns", "endsAt"] as const;
 
 export type EditScheduleResult =
   | {
@@ -380,9 +389,10 @@ export type EditScheduleResult =
 
 /**
  * Changes a schedule from a PATCH body: `enabled` to pause or resume it, and
- * `name`, `prompt`, `when`, `overlap`, `maxRuns`, `endsAt` (null clears the
- * last two), checked as createSchedule checks them. A refused edit changes
- * nothing.
+ * `name`, `prompt`, `when`, `overlap`, `notify`, `maxRuns`, `endsAt` (null
+ * clears the last two), checked as createSchedule checks them. A refused edit
+ * changes nothing. A new `when` keeps the stored `notify`: only a schedule
+ * being created takes the default by gap.
  *
  * Pausing drops the pending fire. Resuming clears pausedReason, resets
  * consecutiveFailures and sets nextRunAt to the next run after now: runs
@@ -400,7 +410,7 @@ export function editSchedule(id: string, body: any, at: number = Date.now()): Ed
   if (unknown) return { ok: false, status: 400, error: `${unknown} cannot be changed: a schedule's PATCH takes ${fields}` };
   if (!keys.length) return { ok: false, status: 400, error: `nothing to change: a schedule's PATCH takes ${fields}` };
 
-  const { enabled, name, prompt, overlap, maxRuns, endsAt } = body;
+  const { enabled, name, prompt, overlap, notify, maxRuns, endsAt } = body;
   if (enabled !== undefined && typeof enabled !== "boolean") return { ok: false, status: 400, error: "enabled must be true or false" };
   if (name !== undefined) {
     const bad = nameError(name);
@@ -420,6 +430,7 @@ export function editSchedule(id: string, body: any, at: number = Date.now()): Ed
   if (overlap !== undefined && overlap !== "queue" && overlap !== "skip") {
     return { ok: false, status: 400, error: `overlap must be "queue" or "skip"` };
   }
+  if (notify !== undefined && !isNotify(notify)) return { ok: false, status: 400, error: NOTIFY_ERROR };
   if (maxRuns != null && (!Number.isInteger(maxRuns) || maxRuns < 1 || maxRuns > MAX_RUNS_MAX)) {
     return { ok: false, status: 400, error: `maxRuns must be a whole number from 1 to ${MAX_RUNS_MAX}` };
   }
@@ -447,6 +458,7 @@ export function editSchedule(id: string, body: any, at: number = Date.now()): Ed
     if (name !== undefined) s.name = name.trim();
     if (prompt !== undefined) s.prompt = prompt;
     if (overlap !== undefined) s.overlap = overlap;
+    if (notify !== undefined) s.notify = notify;
     if (when) {
       s.when = when;
       // A once runs one time: whatever ending the old times had goes.
@@ -533,6 +545,24 @@ export function nameError(name: unknown): string | null {
   return null;
 }
 
+const NOTIFY_VALUES: readonly Notify[] = ["always", "on-failure", "never"];
+const NOTIFY_ERROR = `notify must be "always", "on-failure" or "never"`;
+
+export function isNotify(value: unknown): value is Notify {
+  return NOTIFY_VALUES.includes(value as Notify);
+}
+
+/**
+ * The `notify` a new schedule gets when none is given: `always` when its
+ * runs are at least NOTIFY_ALWAYS_GAP_MINUTES apart (a once counts as an
+ * endless gap), else `on-failure`, so a schedule every minute does not push,
+ * and leave an unread dot, sixty times an hour (M6). The gap is the closest
+ * two runs come from `at` on (minGapMinutes).
+ */
+export function defaultNotify(when: When, at: number): Notify {
+  return minGapMinutes(when, at) >= NOTIFY_ALWAYS_GAP_MINUTES ? "always" : "on-failure";
+}
+
 /** Why a prompt can't be used, or null. */
 export function promptError(prompt: unknown): string | null {
   if (typeof prompt !== "string" || !prompt.trim()) return "prompt is required";
@@ -577,10 +607,11 @@ export function createSchedule(
     if (Date.parse(endsAt) <= first) return { ok: false, error: `endsAt must be after the first run (${iso(first)})` };
   }
 
-  const { overlap } = body;
+  const { overlap, notify } = body;
   if (overlap !== undefined && overlap !== "queue" && overlap !== "skip") {
     return { ok: false, error: `overlap must be "queue" or "skip"` };
   }
+  if (notify !== undefined && !isNotify(notify)) return { ok: false, error: NOTIFY_ERROR };
 
   if (!target || typeof target !== "object") return { ok: false, error: "target is required" };
   if (target.kind !== "thread") return { ok: false, error: `target.kind "${String(target.kind)}" is not supported yet: use "thread"` };
@@ -608,7 +639,7 @@ export function createSchedule(
     createdBy,
     enabled: true,
     overlap: overlap ?? "queue",
-    notify: "always",
+    notify: notify ?? defaultNotify(parsed.when, at),
     ...(maxRuns !== undefined ? { maxRuns } : {}),
     ...(endsAt !== undefined ? { endsAt } : {}),
     runCount: 0,

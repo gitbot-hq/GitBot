@@ -2974,3 +2974,76 @@ test("OpenCode's user message arriving marks the prompt delivered, ahead of prom
   assert.equal(getThread(thread.id)!.failedRuns, undefined, "an ordinary failed turn: in OpenCode's history");
   assert.equal(getSchedule(s.id)!.consecutiveFailures, 1);
 });
+
+// --- Notify (slice 06) ---
+
+test("notify defaults by gap: always at 15 minutes or more, on-failure below", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const thread = plainThread("Demo");
+  const notifyOf = async (when: Record<string, unknown>) => (await scheduleRecurring(thread.id, when)).notify;
+  assert.equal(await notifyOf({ kind: "interval", everyMinutes: 1 }), "on-failure");
+  assert.equal(await notifyOf({ kind: "interval", everyMinutes: 14 }), "on-failure");
+  assert.equal(await notifyOf({ kind: "interval", everyMinutes: 15 }), "always");
+  assert.equal(await notifyOf({ kind: "cron", expr: "*/5 * * * *", tz: "UTC" }), "on-failure");
+  assert.equal(await notifyOf({ kind: "cron", expr: "*/15 * * * *", tz: "UTC" }), "always");
+  assert.equal(await notifyOf({ kind: "cron", expr: "0 9 * * *", tz: "UTC" }), "always");
+  // The closest two runs decide: 9:00 and 9:05 each day is on-failure.
+  assert.equal(await notifyOf({ kind: "cron", expr: "0,5 9 * * *", tz: "UTC" }), "on-failure");
+  assert.equal((await scheduleOnce(thread.id)).notify, "always", "a once is an endless gap");
+
+  // Given, it is kept whatever the gap.
+  assert.equal((await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 1 }, { notify: "always" })).notify, "always");
+  assert.equal((await scheduleOnce(thread.id, 90_000, { notify: "never" })).notify, "never");
+  const bad = await serve("POST", "/schedules", {
+    name: "Bad", prompt: "x", when: { kind: "interval", everyMinutes: 60 }, target: { kind: "thread", threadId: thread.id }, notify: "sometimes",
+  });
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.error, /notify must be "always", "on-failure" or "never"/);
+
+  // PATCH takes it, checked; a new when keeps the stored one.
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 });
+  const patched = await serve("PATCH", `/schedules/${s.id}`, { notify: "never" });
+  assert.equal(patched.status, 200, JSON.stringify(patched.body));
+  assert.equal(patched.body.notify, "never");
+  const refused = await serve("PATCH", `/schedules/${s.id}`, { notify: "loud" });
+  assert.equal(refused.status, 400);
+  assert.match(refused.body.error, /notify must be/);
+  const rewhen = await serve("PATCH", `/schedules/${s.id}`, { when: { kind: "interval", everyMinutes: 1 } });
+  assert.equal(rewhen.status, 200, JSON.stringify(rewhen.body));
+  assert.equal(rewhen.body.notify, "never");
+  assert.equal(getSchedule(s.id)!.notify, "never");
+});
+
+test("the pause push goes out even when notify is never; the failed runs before it push nothing", async (t) => {
+  const logs = t.mock.method(console, "log", () => {});
+  const sent: PushPayload[] = [];
+  const realSend = pushSender.send;
+  const realSchedule = pushTiming.schedule;
+  pushSender.send = async (_sub, payload) => { sent.push(JSON.parse(payload)); };
+  pushTiming.schedule = (fn) => { fn(); return () => {}; };
+  const ecdh = createECDH("prime256v1");
+  addSubscription({
+    endpoint: "https://fcm.googleapis.com/fcm/send/sched-never",
+    keys: { p256dh: ecdh.generateKeys().toString("base64url"), auth: randomBytes(16).toString("base64url") },
+  });
+  const unwatch = watchPush();
+  t.after(() => {
+    unwatch();
+    pushSender.send = realSend;
+    pushTiming.schedule = realSchedule;
+    rmSync(join(dataDir(), "push-subscriptions.json"), { force: true });
+  });
+
+  const thread = plainThread("Demo");
+  const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 60 }, { notify: "never" });
+  await endTurn(await runNow(s.id), "error");
+  await endTurn(await runNow(s.id), "error");
+  await settle();
+  assert.equal(sent.length, 0);
+  assert.equal(pushLines(logs).filter((l) => l.endsWith(`schedule notify is "never"`)).length, 2, pushLines(logs).join("\n"));
+  await endTurn(await runNow(s.id), "error");
+  await settle();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].body, "⏰ Tick paused after 3 failed runs");
+  assert.equal(getSchedule(s.id)!.enabled, false);
+});

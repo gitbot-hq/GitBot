@@ -17,6 +17,8 @@ type SessionSummary = {
   botId?: string | null;
   /** The user stopped this session's turn. */
   stopped?: boolean;
+  /** Its last turn ended quietly (a scheduled run its schedule's notify does not tell): not news. */
+  quietEnd?: boolean;
 };
 
 /**
@@ -57,7 +59,12 @@ function rowState(s: SessionSummary): ThreadRowState {
   return s.status === "error" ? "failed" : "done";
 }
 
-/** A thread's status across its sessions: any live one wins, else the newest. */
+/**
+ * A thread's status across its sessions: any live one wins, else the newest.
+ * A newest one that ended quietly gives the thread no row state, so its row
+ * shows the stored lastOutcome (threadIndicator): a quiet scheduled success
+ * never recolours an earlier unseen dot.
+ */
 export function byThread(sessions: SessionSummary[]): Pick<ThreadSessions, "statuses" | "states" | "runningChildren"> {
   const statuses: Record<string, ThreadSessionStatus> = {};
   const states: Record<string, ThreadRowState> = {};
@@ -70,7 +77,8 @@ export function byThread(sessions: SessionSummary[]): Pick<ThreadSessions, "stat
     const prev = statuses[s.threadId];
     if (prev && live(prev)) continue;
     statuses[s.threadId] = s.status;
-    states[s.threadId] = rowState(s);
+    if (s.quietEnd && !live(s.status)) delete states[s.threadId];
+    else states[s.threadId] = rowState(s);
   }
   return { statuses, states, runningChildren };
 }
