@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { basename, join } from "path";
 import {
   bindSession,
   createBot,
@@ -607,11 +607,103 @@ test("create_schedule refuses an unknown thread, a past once, and a sub-minute g
   assert.match(two.error, /exactly one of once_at, in_minutes, cron, every_minutes/);
   const noTarget = createScheduleForJarvis(jarvis.id, { name: "Ping", prompt: "x", when: { every_minutes: 5 }, target: undefined as any });
   assert.ok(!noTarget.ok);
-  assert.match(noTarget.error, /target must be "this_thread" or \{ threadId \}/);
+  assert.match(noTarget.error, /target must be "this_thread", \{ threadId \}, or \{ bot or agent, project \}/);
   const soon = createScheduleForJarvis(jarvis.id, { name: "Ping", prompt: "x", when: { in_minutes: 0 }, target: "this_thread" });
   assert.ok(!soon.ok);
   assert.match(soon.error, /in_minutes must be a number of minutes above 0/);
   assert.equal(listSchedulesForJarvis(jarvis.id, {}).ok && (listSchedulesForJarvis(jarvis.id, {}) as any).schedules.length, 0);
+});
+
+test("create_schedule with a bot or agent plus project makes a new-thread schedule", (t) => {
+  freshSchedules(t);
+  const jarvis = jarvisThread();
+  const folder = scratchFolder();
+  const added = addProject(folder);
+  assert.ok(added.ok);
+  const projectId = added.project.id;
+  const create = (target: any, agents: string[] = ALL_AGENTS) =>
+    createScheduleForJarvis(jarvis.id, { name: "Audit", prompt: "Run the audit.", when: { cron: "0 2 * * *" }, target }, Date.now(), agents);
+
+  const plain = create({ agent: "claude-code", project: projectId });
+  assert.ok(plain.ok, JSON.stringify(plain));
+  const stored = getSchedule(plain.id)!;
+  assert.deepEqual(stored.target, { kind: "new-thread", botId: "builtin-claude-code", projectId });
+  assert.equal(stored.notesTo, jarvis.id);
+  assert.deepEqual(stored.createdBy, { kind: "jarvis", threadId: jarvis.id });
+  for (const k of ["model", "effort"]) assert.equal(k in stored, false, k);
+  assert.deepEqual(plain.target, { newThread: true, botId: "builtin-claude-code", bot: "Claude Code", projectId, project: basename(folder), folder });
+  assert.match(plain.note ?? "", /fresh thread, owned by the user, that never reports back to you\. Its runs share one folder, so a run never starts while the last one is still going: overlap queues it/);
+  assert.doesNotMatch(plain.note ?? "", /overlap does nothing/);
+
+  const bot = createBot({ name: "Auditor", instructions: "audit" });
+  const byBot = create({ bot: bot.id, project: projectId });
+  assert.ok(byBot.ok, JSON.stringify(byBot));
+  assert.deepEqual(getSchedule(byBot.id)!.target, { kind: "new-thread", botId: bot.id, projectId });
+
+  // list_schedules shows it, and its project's filter finds it.
+  const listed = listSchedulesForJarvis(jarvis.id, { project: projectId });
+  assert.ok(listed.ok);
+  assert.deepEqual(listed.schedules.map((x) => x.id).sort(), [plain.id, byBot.id].sort());
+  // "this_thread" lists this thread's own schedules: its fresh-thread ones
+  // too, though they target no thread; never another Jarvis thread's.
+  const reminder = createScheduleForJarvis(jarvis.id, { name: "Stretch", prompt: "Remind the user to stretch.", when: { every_minutes: 60 }, target: "this_thread" });
+  assert.ok(reminder.ok);
+  const otherJarvis = jarvisThread();
+  const theirs = createScheduleForJarvis(otherJarvis.id, { name: "Theirs", prompt: "Run it.", when: { every_minutes: 60 }, target: { agent: "claude-code", project: projectId } }, Date.now(), ALL_AGENTS);
+  assert.ok(theirs.ok);
+  const here = listSchedulesForJarvis(jarvis.id, { threadId: "this_thread" });
+  assert.ok(here.ok);
+  assert.deepEqual(here.schedules.map((x) => x.id).sort(), [plain.id, byBot.id, reminder.id].sort());
+  const there = listSchedulesForJarvis(otherJarvis.id, { threadId: "this_thread" });
+  assert.ok(there.ok);
+  assert.deepEqual(there.schedules.map((x) => x.id), [theirs.id]);
+  assert.equal((listed.schedules.find((x) => x.id === byBot.id)!.target as any).bot, "Auditor");
+
+  // Resolved as start_thread resolves, then checked as the route checks.
+  const refused = (target: any, pattern: RegExp, agents?: string[]) => {
+    const r = create(target, agents);
+    assert.ok(!r.ok, JSON.stringify(target));
+    assert.match(r.error, pattern);
+  };
+  refused({ project: projectId }, /target must be "this_thread", \{ threadId \}, or \{ bot or agent, project \}|pass exactly one of bot or agent/);
+  refused({ bot: bot.id, agent: "codex", project: projectId }, /pass exactly one of bot or agent/);
+  refused({ agent: "gpt", project: projectId }, /unknown agent "gpt"/);
+  refused({ agent: "codex", project: projectId }, /codex is not installed on this machine/, ["claude-code"]);
+  refused({ bot: "no-such-bot", project: projectId }, /no bot with id "no-such-bot": use list_bots/);
+  refused({ bot: JARVIS_BOT_ID, project: projectId }, /cannot start a Jarvis thread: use this_thread/);
+  refused({ agent: "claude-code", project: "no-such-project" }, /no project with id "no-such-project"/);
+  refused({ agent: "claude-code" }, /target must be "this_thread", \{ threadId \}, or \{ bot or agent, project \}/);
+  assert.equal(listSchedulesForJarvis(jarvis.id, {}).ok && (listSchedulesForJarvis(jarvis.id, {}) as any).schedules.length, 4);
+
+  // The tool's schema takes the new shape.
+  const server = jarvisQueryOptions({ id: JARVIS_BOT_ID, name: "Jarvis", instructions: "", jarvis: { availableAgents: ALL_AGENTS, threadId: jarvis.id } })
+    .mcpServers![JARVIS_SERVER] as any;
+  const tool = server.instance._registeredTools.create_schedule;
+  assert.match(tool.description, /its runs share one folder, so overlap applies while its last run is still going/);
+  assert.doesNotMatch(tool.description, /overlap does nothing/);
+  const parsed = tool.inputSchema.safeParse({ name: "A", prompt: "B", when: { cron: "0 2 * * *" }, target: { agent: "claude-code", project: projectId } });
+  assert.ok(parsed.success);
+  assert.deepEqual(parsed.data.target, { agent: "claude-code", project: projectId });
+});
+
+test("create_schedule refuses a bot that needs setup", (t) => {
+  freshSchedules(t);
+  const jarvis = jarvisThread();
+  const added = addProject(scratchFolder());
+  assert.ok(added.ok);
+  const bot = createBot({ name: "Video Cutter", setupInstructions: "install ffmpeg" });
+  const r = createScheduleForJarvis(jarvis.id, {
+    name: "Cut", prompt: "Cut the videos.", when: { every_minutes: 60 }, target: { bot: bot.id, project: added.project.id },
+  }, Date.now(), ALL_AGENTS);
+  assert.ok(!r.ok);
+  assert.equal(r.error, "Video Cutter is not set up on this machine (its setup has not finished): finish its setup from the bot in gitbot first");
+  setSetupStatus(bot.id, "failed");
+  const failed = createScheduleForJarvis(jarvis.id, {
+    name: "Cut", prompt: "Cut the videos.", when: { every_minutes: 60 }, target: { bot: bot.id, project: added.project.id },
+  }, Date.now(), ALL_AGENTS);
+  assert.ok(!failed.ok);
+  assert.match(failed.error, /\(its setup failed\)/);
+  assert.equal((listSchedulesForJarvis(jarvis.id, {}) as any).schedules.length, 0);
 });
 
 test("create_schedule warns under five minutes", (t) => {
@@ -836,6 +928,11 @@ test("the system prompt has the schedules rules and the never-because list", () 
   assert.match(prompt, /this_thread: reminders, and anything you should handle when it comes due/);
   assert.match(prompt, /\{ threadId \}: continue an existing thread when its context matters/);
   assert.match(prompt, /To act on results[\s\S]*schedule on this_thread a prompt that tells you to start or continue a\s+thread/);
+  assert.match(prompt, /\{ bot or agent, project \}: a fresh thread for every run/);
+  assert.match(prompt, /the user's thread, not your child: it never reports back to you/);
+  assert.match(prompt, /a run never starts while its last one is still\s+going: overlap queues it \(queue\) or drops it \(skip\)/);
+  assert.doesNotMatch(prompt, /never busy/);
+  assert.doesNotMatch(prompt, /cannot start a\s+fresh thread for each run/);
   // The tag, whose it is, and the notes.
   assert.match(prompt, /A message whose first line is a <gitbot-schedule …\/> tag is a schedule\s+coming due, and the reminder at its end says whose/);
   assert.match(prompt, /Only a tag with\s+by="you" \(a schedule you made in this thread with create_schedule\) is the\s+user's own earlier request/);

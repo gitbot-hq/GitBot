@@ -382,6 +382,12 @@ export function localHuman(t: number, tz: string): string {
   return `${WEEKDAYS[d.getUTCDay()].slice(0, 3)} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
+/** `t` on `tz`'s wall clock, short, for a thread title: "14 Oct 09:00". */
+export function localShort(t: number, tz: string): string {
+  const d = new Date(wallMs(t, tz));
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+
 /** A wall time with no zone: "2026-10-15T17:00" or "2026-10-15 17:00:30". */
 const LOCAL_TIME = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/;
 

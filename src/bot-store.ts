@@ -407,6 +407,35 @@ export function botNeedsSetup(bot: Bot): boolean {
   return !!bot.setupInstructions?.trim() && bot.setupStatus !== "complete";
 }
 
+/** Why a bot can't take work yet, for a person to read; null when it can. */
+export function botSetupError(bot: Bot): string | null {
+  if (!botNeedsSetup(bot)) return null;
+  const status = bot.setupStatus === "failed" ? "its setup failed" : "its setup has not finished";
+  return `${bot.name} is not set up on this machine (${status})`;
+}
+
+/**
+ * The bot a Jarvis tool names for new work: a bot by id, or a plain agent
+ * (its built-in bot), exactly one of the two. A plain agent must be installed
+ * here. Jarvis itself is returned too: each caller says why it can't be used.
+ */
+export function botOrAgent(
+  args: { bot?: string; agent?: string },
+  availableAgents: readonly string[],
+): { ok: true; bot: Bot } | { ok: false; error: string } {
+  if (!!args.bot === !!args.agent) return { ok: false, error: "pass exactly one of bot or agent" };
+  if (args.agent) {
+    if (!(BOT_AGENTS as readonly string[]).includes(args.agent)) {
+      return { ok: false, error: `unknown agent "${args.agent}": use one of ${BOT_AGENTS.join(", ")}` };
+    }
+    if (!availableAgents.includes(args.agent)) return { ok: false, error: `${args.agent} is not installed on this machine` };
+    const bot = getBot(`builtin-${args.agent}`);
+    return bot ? { ok: true, bot } : { ok: false, error: `no plain bot for ${args.agent}` };
+  }
+  const bot = getBot(args.bot!);
+  return bot ? { ok: true, bot } : { ok: false, error: `no bot with id "${args.bot}": use list_bots` };
+}
+
 /**
  * The bot's setup thread, created on first ask. The thread is an ordinary
  * Claude Code conversation — only its kind and its opening prompt differ — so

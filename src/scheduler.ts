@@ -1,13 +1,27 @@
-import { addFailedRun, clearFailedRuns, getThread, type Thread } from "./bot-store";
+import {
+  addFailedRun,
+  botNeedsSetup,
+  clearFailedRuns,
+  createThread,
+  deleteThread,
+  getBot,
+  getThread,
+  isJarvisBot,
+  threadAgent,
+  type Thread,
+} from "./bot-store";
 import { transcriptHasTimes } from "./thread-tools";
 import { runningChildOf } from "./child-lock";
 import { errorLine, latestLine, turnOutcome } from "./attention";
 import { sendSchedulePausedPush } from "./push";
-import { isShuttingDown, onTurnEnd, type EndedTurn } from "./server-common";
+import { findProject } from "./project-index";
+import { defaultTimeZone, localShort } from "./schedule-time";
+import { isShuttingDown, onTurnEnd, sessions, type EndedTurn } from "./server-common";
 import {
   claimManualRun,
   dropPending,
   getSchedule,
+  isFolder,
   markChangedBy,
   isRunnable,
   listSchedules,
@@ -17,6 +31,7 @@ import {
   settleDue,
   targetThreadId,
   updateSchedule,
+  type NewThreadTarget,
   type Schedule,
   type ScheduleRun,
   type SettledDue,
@@ -27,16 +42,19 @@ import { startTurn } from "./turns";
 // The scheduler: one timer, set to the earliest due schedule, that fires it
 // as a real turn on its thread through startTurn — the same door every turn
 // goes through, so a scheduled turn is streamed, stoppable and in history
-// like any other. A fire is claimed (counted, its next run set, and saved)
-// before its turn starts: a crash in between loses at most that run, and
-// never fires twice. At most RATE_CAP_STARTS scheduled turns start in any
-// rolling minute; a fire over the cap waits, unclaimed, and is never dropped.
+// like any other. A new-thread target starts a fresh thread for each run
+// instead (startNewThreadRun); it is busy while one of its own runs is still
+// going. A fire is claimed (counted, its next run set, and saved) before its
+// turn starts: a crash in between loses at most that run, and never fires
+// twice. At most RATE_CAP_STARTS scheduled turns start in any rolling minute; a fire over the cap waits, unclaimed, and is never dropped.
 //
 // A fire whose thread is busy (its own turn running, or a Jarvis thread
 // waiting on its child) never gets in the user's way. With `overlap: "queue"`
 // it waits as the schedule's one `pending` fire, and the deferred-turn drain
 // (deferred-turns.ts) starts it once the thread's turn has ended, after any
-// queued report; with `overlap: "skip"` it is recorded `skipped-busy`.
+// queued report; with `overlap: "skip"` it is recorded `skipped-busy`. A
+// new-thread schedule is busy the same way while one of its runs is going,
+// and its pending fire starts when that run's turn ends.
 //
 // When does a queued fire count as claimed? When it starts (or is given up):
 // its runCount and its "run N" are taken then, as for any start. Its time
@@ -53,8 +71,8 @@ import { startTurn } from "./turns";
 // resets the count; a turn the user stopped, a busy skip, a queued fire or a
 // missed run change nothing. At PAUSE_AFTER_FAILURES in a row it is paused
 // (`pausedReason`), and one `failed` push says so. A start that can never
-// work (its thread or bot is gone) pauses it at once. Only the user resumes
-// it (PATCH /schedules/:id).
+// work (its thread or bot is gone; a new-thread target's bot or project)
+// pauses it at once. Only the user resumes it (PATCH /schedules/:id).
 
 /**
  * Time and timers, as the scheduler sees them. A seam: tests set `now` and
@@ -139,9 +157,9 @@ const UNSAVED_LOG_MS = 60_000;
 
 /**
  * The schedules this build can run: enabled, with a due time, and of a kind
- * it knows (a once, cron or interval on a thread, whose times it can work
- * out). Others (a new-thread target a later build wrote, a bad pattern
- * written by hand) are left exactly as they are, and logged once.
+ * it knows (a once, cron or interval on a thread or a new thread, whose
+ * times it can work out). Others (a target kind a later build wrote, a bad
+ * pattern written by hand) are left exactly as they are, and logged once.
  */
 function runnableSchedules(): Schedule[] {
   const out: Schedule[] = [];
@@ -392,7 +410,8 @@ export function fireSchedule(
     console.log(`[schedules] missed ${id}: ${about}${settled.missed.missedCount} run(s) from ${settled.missed.at} ${why}`);
   }
   if (queuedSince) {
-    console.log(`[schedules] fire ${id}: thread ${targetThreadId(claimed)} is busy; queued (due ${queuedSince})`);
+    const busy = claimed.target?.kind === "new-thread" ? "its last run is still going" : `thread ${targetThreadId(claimed)} is busy`;
+    console.log(`[schedules] fire ${id}: ${busy}; queued (due ${queuedSince})`);
     return { schedule: claimed, queued: true };
   }
   if (runNumber === undefined) {
@@ -428,7 +447,7 @@ export function fireSchedule(
   const late = run.delayedMs ? ` ${Math.round(run.delayedMs / 1000)}s late (rate cap)` : "";
   const end = schedule.enabled || paused ? "" : schedule.pausedReason ? "; the schedule is paused" : "; the schedule has ended";
   console.log(`[schedules] fire ${id} run ${runNumber}: ${run.outcome}${where}${late}${why}${end}`);
-  if (paused) announcePause(schedule, paused);
+  if (paused) announcePause(schedule, paused, run.threadId);
   return { schedule, run };
 }
 
@@ -441,11 +460,27 @@ function threadBusy(thread: Thread): boolean {
   return threadIsRunning(thread) || !!runningChildOf(thread.id);
 }
 
-/** The schedule's target thread is busy. A thread that is gone is not: its start says why. */
+/**
+ * The schedule's target is busy. A thread that is gone is not: its start
+ * says why. A new-thread target is busy while one of its own runs is still
+ * going (newThreadRunBusy).
+ */
 function targetIsBusy(s: Schedule): boolean {
+  if (s.target?.kind === "new-thread") return newThreadRunBusy(s.id);
   const threadId = targetThreadId(s);
   const thread = threadId ? getThread(threadId) : undefined;
   return !!thread && threadBusy(thread);
+}
+
+/**
+ * A new-thread schedule's run is still going: a session whose turn this
+ * schedule started is running. Its runs share one folder, so a run never
+ * starts beside another (overlap queues or skips it, as on a busy thread).
+ * A thread the user has since taken over is no longer the schedule's: its
+ * turns are not scheduled.
+ */
+function newThreadRunBusy(scheduleId: string): boolean {
+  return [...sessions.values()].some((x) => x.scheduled?.id === scheduleId && x.status === "running");
 }
 
 /** Hands a claimed run back (its start found the thread busy after all). */
@@ -477,65 +512,103 @@ export function deliverPendingSchedule(threadId: string, availableAgents: readon
     if (!waiting.length) return false;
     // Right before the start: never a second turn on the thread.
     if (threadBusy(thread)) return false;
-    const id = waiting[0].id;
-    const nowMs = schedulerClock.now();
-    const at = iso(nowMs);
-    let runNumber: number | undefined;
-    let dueAt = at;
-    let manual = false;
-    let lastRunBefore: string | undefined;
-    // Claimed, and off the queue, before the start: never both pending and started.
-    const claimed = updateSchedule(id, (s) => {
-      if (!s.pending) return false;
-      dueAt = s.pending.dueAt;
-      manual = !!s.pending.manual;
-      lastRunBefore = s.lastRunAt;
-      delete s.pending;
-      s.runCount += 1;
-      runNumber = s.runCount;
-      s.lastRunAt = at;
-    });
-    if (!claimed || runNumber === undefined) continue;
-    let run = startScheduledTurn(claimed, runNumber, availableAgents, at);
-    if (run.outcome === "skipped-busy") {
-      const pendingAt = dueAt;
-      updateSchedule(id, (s) => {
-        unclaim(s, lastRunBefore);
-        s.pending = manual ? { dueAt: pendingAt, manual: true } : { dueAt: pendingAt };
-      });
-      console.log(`[schedules] ${id}: thread ${threadId} is busy again; still queued (due ${pendingAt})`);
-      return false;
-    }
-    const waited = nowMs - Date.parse(dueAt);
-    if (waited > 0) run = { ...run, delayedMs: waited };
-    if (run.outcome === "started") recentStarts.push(nowMs);
-    let paused: Paused | undefined;
-    const after = updateSchedule(id, (s) => {
-      s.history.push(run);
-      paused = countStartFailure(s, run);
-    });
-    const why = run.error ? ` (${run.error})` : "";
-    console.log(`[schedules] fire ${id} run ${runNumber}: ${run.outcome} on thread ${threadId}, queued since ${dueAt}${why}`);
-    if (paused && after) announcePause(after, paused);
-    if (run.outcome === "started") return true;
+    const started = startPendingFire(waiting[0].id, availableAgents, `thread ${threadId}`);
+    if (started === "busy") return false;
+    if (started === "started") return true;
   }
 }
 
 /**
+ * Starts a new-thread schedule's pending fire once its last run has ended:
+ * the deferred-turn drain calls it when a turn that schedule started ends.
+ * As deliverPendingSchedule: claimed now, with `delayedMs`; not held by the
+ * rate cap, though it counts toward it. True when a run started.
+ */
+export function deliverPendingNewThreadRun(scheduleId: string, availableAgents: readonly string[]): boolean {
+  if (isShuttingDown()) return false;
+  const s = getSchedule(scheduleId);
+  if (!s?.pending || s.target?.kind !== "new-thread" || !isRunnable(s) || missedUnsaved.has(s.id)) return false;
+  // Right before the start: never two of its runs at once.
+  if (newThreadRunBusy(s.id)) return false;
+  return startPendingFire(s.id, availableAgents, "a new thread") === "started";
+}
+
+/**
+ * Claims a schedule's pending fire and starts it. "busy": the start found
+ * its target busy after all, so the claim is handed back and the fire stays
+ * pending. "none": there was no pending fire to claim. Else the run's outcome,
+ * recorded and counted toward the pause.
+ */
+function startPendingFire(id: string, availableAgents: readonly string[], where: string): ScheduleRun["outcome"] | "busy" | "none" {
+  const nowMs = schedulerClock.now();
+  const at = iso(nowMs);
+  let runNumber: number | undefined;
+  let dueAt = at;
+  let manual = false;
+  let lastRunBefore: string | undefined;
+  // Claimed, and off the queue, before the start: never both pending and started.
+  const claimed = updateSchedule(id, (s) => {
+    if (!s.pending) return false;
+    dueAt = s.pending.dueAt;
+    manual = !!s.pending.manual;
+    lastRunBefore = s.lastRunAt;
+    delete s.pending;
+    s.runCount += 1;
+    runNumber = s.runCount;
+    s.lastRunAt = at;
+  });
+  if (!claimed || runNumber === undefined) return "none";
+  let run = startScheduledTurn(claimed, runNumber, availableAgents, at);
+  if (run.outcome === "skipped-busy") {
+    const pendingAt = dueAt;
+    updateSchedule(id, (s) => {
+      unclaim(s, lastRunBefore);
+      s.pending = manual ? { dueAt: pendingAt, manual: true } : { dueAt: pendingAt };
+    });
+    console.log(`[schedules] ${id}: ${where} is busy again; still queued (due ${pendingAt})`);
+    return "busy";
+  }
+  const waited = nowMs - Date.parse(dueAt);
+  if (waited > 0) run = { ...run, delayedMs: waited };
+  if (run.outcome === "started") recentStarts.push(nowMs);
+  let paused: Paused | undefined;
+  const after = updateSchedule(id, (s) => {
+    s.history.push(run);
+    paused = countStartFailure(s, run);
+  });
+  const why = run.error ? ` (${run.error})` : "";
+  const on = run.threadId ? `thread ${run.threadId}` : where;
+  console.log(`[schedules] fire ${id} run ${runNumber}: ${run.outcome} on ${on}, queued since ${dueAt}${why}`);
+  if (paused && after) announcePause(after, paused, run.threadId);
+  return run.outcome;
+}
+
+/** A new-thread run's start errors for a bot or project that is gone. */
+const NEW_THREAD_BOT_GONE = "bot not found";
+const NEW_THREAD_PROJECT_GONE = "project not found";
+
+/**
  * Start errors that no retry can fix: what is gone stays gone. The schedule
- * pauses at once, with the reason. (A new-thread target's project or bot
- * joins these with that target.) Keyed by the run's `error`.
+ * pauses at once, with the reason. Keyed by the run's `error`.
  */
 const GONE: Record<string, string> = {
   "thread not found": "its thread was deleted",
   "Thread not found": "its thread was deleted",
   "Bot not found": "its thread's bot was deleted",
+  // A new-thread target's (startNewThreadRun). The project index drops a
+  // folder that is gone, so a removed folder reads as no project.
+  [NEW_THREAD_BOT_GONE]: "its bot was deleted",
+  [NEW_THREAD_PROJECT_GONE]: "its project is gone (its folder was removed or moved)",
 };
+
+/** Unattended: always auto-approve, never plan-only (see startScheduledTurn). */
+const SCHEDULED_PERMISSION = { permissionMode: "yolo", mode: "build" } as const;
 
 /** Starts a claimed fire's turn, or says why not. */
 function startScheduledTurn(s: Schedule, run: number, availableAgents: readonly string[], at: string): ScheduleRun {
+  if (s.target?.kind === "new-thread") return startNewThreadRun(s, s.target, run, availableAgents, at);
   const threadId = targetThreadId(s);
-  if (!threadId) return { at, outcome: "failed-to-start", error: `target "${s.target.kind}" is not supported yet` };
+  if (!threadId) return { at, outcome: "failed-to-start", error: `target "${s.target?.kind}" is not supported` };
   const thread = getThread(threadId);
   if (!thread) return { at, outcome: "failed-to-start", threadId, error: "thread not found" };
   // Busy (with `overlap: "skip"`, or the drain racing a new turn): nothing
@@ -551,8 +624,7 @@ function startScheduledTurn(s: Schedule, run: number, availableAgents: readonly 
         // bot's default or the thread's pick in a browser: nobody is there to
         // answer an approval. (Jarvis is auto-approve anyway.) Documented in
         // docs/API.md, and the chat never adopts this as the thread's pick.
-        permissionMode: "yolo",
-        mode: "build",
+        ...SCHEDULED_PERMISSION,
       },
       availableAgents,
     );
@@ -565,6 +637,76 @@ function startScheduledTurn(s: Schedule, run: number, availableAgents: readonly 
   } catch (err: any) {
     return { at, outcome: "failed-to-start", threadId, error: err?.message ?? "failed to start" };
   }
+}
+
+/**
+ * A new-thread run: a fresh thread with the target's bot, in its project's
+ * folder, titled "<name> · <run time>", then its first turn. The thread is
+ * the user's: no reportTo, so the run is never a Jarvis child (no report, no
+ * lock, not in any Jarvis thread's list), and its result is its own thread,
+ * its push and the run history. It gets no model or effort: the bot's, or
+ * the default, as a thread the user opens would. Its runs share one folder,
+ * so one never starts while another is still going (newThreadRunBusy):
+ * `overlap` queues it, as the schedule's one pending fire that the drain
+ * starts when that run ends, or skips it.
+ *
+ * Everything that can be checked is checked before the thread is made, so a
+ * start that can't work leaves no thread: a bot or project that is gone
+ * (GONE: it pauses at once), an agent not installed, a bot that still needs
+ * setup. A start that fails anyway deletes the thread it just made, unless a
+ * session already holds it.
+ */
+function startNewThreadRun(
+  s: Schedule,
+  target: NewThreadTarget,
+  run: number,
+  availableAgents: readonly string[],
+  at: string,
+): ScheduleRun {
+  const failed = (error: string): ScheduleRun => ({ at, outcome: "failed-to-start", error });
+  const bot = getBot(target.botId);
+  if (!bot || isJarvisBot(bot)) return failed(NEW_THREAD_BOT_GONE);
+  const project = findProject(target.projectId);
+  if (!project || !isFolder(project.path)) return failed(NEW_THREAD_PROJECT_GONE);
+  const agent = threadAgent({}, bot);
+  if (!availableAgents.includes(agent)) return failed(`${bot.name} runs on ${agent}, which is not installed on this machine`);
+  if (botNeedsSetup(bot)) return failed(`${bot.name} still needs to set up this machine`);
+  // Its last run still going (overlap "skip", or a race with the drain):
+  // nothing starts. The callers queue it, or record it.
+  if (newThreadRunBusy(s.id)) return { at, outcome: "skipped-busy" };
+
+  let thread: Thread | undefined;
+  let error: string;
+  try {
+    // Inside the try: a threads.json that can't be written is a failed
+    // start, recorded and counted, not a claimed run that vanishes.
+    thread = createThread(bot.id, project.path, newThreadTitle(s, Date.parse(at)), "chat", agent);
+    const started = startTurn(
+      { threadId: thread.id, prompt: s.prompt, scheduled: { id: s.id, name: s.name, run }, ...SCHEDULED_PERMISSION },
+      availableAgents,
+    );
+    if (started.ok) return { at, outcome: "started", threadId: thread.id };
+    error = started.message;
+  } catch (err: any) {
+    error = err?.message ?? "failed to start";
+  }
+  // A thread that never ran is noise in the bot's list. One a session holds
+  // did start something (its turn ends, and is kept, as any other): left be.
+  if (!thread) return failed(error);
+  const made = thread;
+  if ([...sessions.values()].some((x) => x.threadId === made.id)) return { at, outcome: "failed-to-start", threadId: made.id, error };
+  try {
+    deleteThread(made.id);
+  } catch (err: any) {
+    console.error(`[scheduler] schedule ${s.id}: could not delete the empty thread ${made.id}: ${err?.message ?? err}`);
+  }
+  return failed(error);
+}
+
+/** A new-thread run's title: "<name> · 14 Oct 09:00", in a cron's zone, else the server's. */
+export function newThreadTitle(s: Pick<Schedule, "name" | "when">, at: number): string {
+  const tz = s.when?.kind === "cron" ? s.when.tz : defaultTimeZone().tz;
+  return `${s.name} · ${localShort(at, tz)}`;
 }
 
 /**
@@ -743,11 +885,15 @@ function countStartFailure(s: Schedule, run: ScheduleRun): Paused | undefined {
   return countResult(s, "failed", run.error ?? "", run.error ? GONE[run.error] : undefined);
 }
 
-/** Logs a pause and sends its one push. Never throws. */
-function announcePause(s: Schedule, paused: Paused): void {
+/**
+ * Logs a pause and sends its one push. Never throws. `runThreadId`: the
+ * thread of the run that paused it, which the push opens when the schedule
+ * has no thread of its own (a new-thread target); none when no thread ran.
+ */
+function announcePause(s: Schedule, paused: Paused, runThreadId?: string): void {
   try {
     console.log(`[schedules] ${s.id} paused: ${paused.reason}`);
-    sendSchedulePausedPush({ id: s.id, name: s.name, threadId: targetThreadId(s), body: paused.body });
+    sendSchedulePausedPush({ id: s.id, name: s.name, threadId: targetThreadId(s) ?? runThreadId, body: paused.body });
   } catch (err: any) {
     console.error(`[scheduler] schedule ${s.id}: could not announce the pause: ${err?.message ?? err}`);
   }
@@ -784,7 +930,7 @@ export function noteScheduledTurnEnd(turn: EndedTurn): void {
   });
   if (paused && after) {
     turn.schedulePaused = true;
-    announcePause(after, paused);
+    announcePause(after, paused, turn.threadId);
   }
 }
 

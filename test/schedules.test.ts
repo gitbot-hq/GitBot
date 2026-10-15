@@ -6,7 +6,7 @@ import { EventEmitter } from "events";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { bindSession, createBot, createThread, dataDir, deleteThread, getThread, JARVIS_BOT_ID, jarvisDir, updateThread } from "../src/bot-store";
+import { bindSession, createBot, createThread, dataDir, deleteThread, getThread, JARVIS_BOT_ID, jarvisDir, listThreads, updateThread } from "../src/bot-store";
 import { runningChildOf } from "../src/child-lock";
 import { watchDeferredTurns } from "../src/deferred-turns";
 import { startChildThread } from "../src/jarvis";
@@ -17,7 +17,7 @@ import { createECDH, randomBytes } from "crypto";
 import { watchChildReports } from "../src/reports";
 import { Cron } from "croner";
 import { clipAtWord, ERROR_BACKOFF_MS, LATE_GRACE_MS, MIN_REARM_MS, RATE_CAP_STARTS, RATE_RETRY_MS, RATE_WINDOW_MS, schedulerClock, startScheduler, stopScheduler, TIMER_CAP_MS } from "../src/scheduler";
-import { countOccurrences, minGapMinutes, nextOccurrence } from "../src/schedule-time";
+import { countOccurrences, defaultTimeZone, localShort, minGapMinutes, nextOccurrence } from "../src/schedule-time";
 import { createSchedule, getSchedule, listSchedules, nextRunsOf, SCHEDULES_MAX, SCHEDULES_PER_THREAD_MAX, updateSchedule, type Schedule } from "../src/schedules";
 import {
   buildSessionsDump,
@@ -1072,7 +1072,7 @@ test("POST /schedules validates name, prompt, time, target and limits", async (t
   await refused({ ...good, prompt: "  " }, /prompt is required/);
   await refused({ ...good, attachments: [{ url: "https://x/y.png" }] }, /text only/);
   await refused({ ...good, when: { kind: "weekly" } }, /when.kind must be/);
-  await refused({ ...good, target: { kind: "new-thread", botId: "b", projectId: "p" } }, /not supported yet/);
+  await refused({ ...good, target: { kind: "webhook", url: "https://x" } }, /target.kind "webhook" is not supported: use "thread" or "new-thread"/);
   await refused({ ...good, when: undefined }, /when is required/);
   // Impossible dates and times, which Date.parse would roll over.
   for (const at of ["2099-02-30T10:00:00Z", "2099-02-29T10:00Z", "2099-13-01T10:00:00Z", "2099-04-31T10:00:00Z", "2099-01-01T24:00:00Z", "2099-01-01T10:60:00Z", "2099-01-01T10:00:00+25:00"]) {
@@ -1201,8 +1201,8 @@ test("a schedule kind this build doesn't run never fires and never arms a 0 ms t
   const warns = t.mock.method(console, "warn", () => {});
   t.mock.method(console, "log", () => {});
   const thread = plainThread("Demo");
-  // A new-thread target (slice 09), and whens no build can work out (written by hand).
-  const newThread = foreignSchedule(thread.id, { when: { kind: "once", at: atIso(now - 1000) }, target: { kind: "new-thread", botId: "b", projectId: "p" } });
+  // A target kind a later build might write, and whens no build can work out (written by hand).
+  const newThread = foreignSchedule(thread.id, { when: { kind: "once", at: atIso(now - 1000) }, target: { kind: "webhook", url: "https://x" } as any });
   const badCron = foreignSchedule(thread.id, { when: { kind: "cron", expr: "not a pattern", tz: "UTC" } });
   const badZone = foreignSchedule(thread.id, { when: { kind: "cron", expr: "0 9 * * *", tz: "Mars/Olympus" } });
   const badInterval = foreignSchedule(thread.id, { when: { kind: "interval", everyMinutes: 0, anchor: atIso(now) } });
@@ -3199,4 +3199,400 @@ test("the pause push goes out even when notify is never; the failed runs before 
   assert.equal(sent.length, 1);
   assert.equal(sent[0].body, "⏰ Tick paused after 3 failed runs");
   assert.equal(getSchedule(s.id)!.enabled, false);
+});
+
+// --- New-thread targets (slice 09) ---
+
+/** A new-thread schedule on `botId` in a fresh project, created through the route. */
+async function scheduleNewThread(botId: string, when: Record<string, unknown>, fields: Record<string, unknown> = {}) {
+  const p = project();
+  const created = await serve("POST", "/schedules", {
+    name: "Audit",
+    prompt: "List the files in the repo",
+    when,
+    target: { kind: "new-thread", botId, projectId: p.id },
+    ...fields,
+  });
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  return { schedule: created.body as Schedule & { nextRuns: string[] }, project: p };
+}
+
+const threadsOf = (botId: string) => listThreads(botId).filter((th) => th.kind !== "setup");
+
+test("a new-thread schedule creates a fresh titled thread per run with no reportTo", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const before = threadsOf("builtin-claude-code").length;
+  const { schedule: s, project: p } = await scheduleNewThread("builtin-claude-code", { kind: "interval", everyMinutes: 1 }, { maxRuns: 2 });
+  assert.deepEqual(s.target, { kind: "new-thread", botId: "builtin-claude-code", projectId: p.id });
+  assert.equal(s.overlap, "queue");
+
+  const first = Date.parse(s.nextRunAt!);
+  advanceTo(first);
+  assert.equal(runs.length, 1);
+  // Each run's turn ends before the next fire: one fresh thread per run.
+  await endTurn(runs[0], "error");
+  advanceTo(first + MIN);
+  assert.equal(runs.length, 2);
+  await endTurn(runs[1]);
+  const got = getSchedule(s.id)!;
+  assert.equal(got.pending, undefined);
+  assert.equal(got.enabled, false, "maxRuns used up");
+  assert.deepEqual(got.history.map((h) => h.outcome), ["started", "started"]);
+
+  const made = threadsOf("builtin-claude-code");
+  assert.equal(made.length, before + 2, "exactly one thread per run");
+  for (const [i, store] of runs.entries()) {
+    const run = got.history[i];
+    const thread = getThread(store.threadId!)!;
+    assert.equal(run.threadId, thread.id, "the run history links its thread");
+    assert.equal(thread.botId, "builtin-claude-code");
+    assert.equal(thread.agent, "claude-code");
+    assert.equal(thread.repoPath, p.folder);
+    assert.equal(thread.title, `Audit · ${localShort(Date.parse(run.at), defaultTimeZone().tz)}`);
+    assert.equal(thread.titleIsAuto, false, "the explicit title survives the turn's touch");
+    assert.equal(thread.preview, "List the files in the repo", "the clean prompt, no tag");
+    assert.equal(thread.reportTo, undefined);
+    assert.equal(thread.runningFor, undefined);
+    assert.deepEqual(store.scheduled, { id: s.id, name: "Audit", run: i + 1 });
+    assert.deepEqual(userPrompt(store).scheduled, { id: s.id, name: "Audit", run: i + 1 });
+    assert.equal(userPrompt(store).prompt, "List the files in the repo");
+  }
+  assert.notEqual(runs[0].threadId, runs[1].threadId);
+  // Each run's turn end lands on its own run.
+  assert.deepEqual(got.history.map((h) => h.turnOutcome), ["failed", "done"]);
+});
+
+test("a new-thread schedule waits for its own last run: one pending fire, replaced by newer ones, started when that run ends", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const { schedule: s, project: p } = await scheduleNewThread("builtin-claude-code", { kind: "interval", everyMinutes: 1 });
+  const inFolder = () => threadsOf("builtin-claude-code").filter((th) => th.repoPath === p.folder).length;
+  const first = Date.parse(s.nextRunAt!);
+  advanceTo(first);
+  assert.equal(runs.length, 1);
+  const running = runs[0];
+
+  // Its run is still going (5–10 minute turns on a 1-minute schedule): the
+  // next fires never start a second agent in the same folder.
+  advanceTo(first + MIN);
+  assert.equal(runs.length, 1, "no second run beside the first");
+  let got = getSchedule(s.id)!;
+  assert.deepEqual(got.pending, { dueAt: atIso(first + MIN) });
+  advanceTo(first + 2 * MIN);
+  assert.equal(runs.length, 1);
+  got = getSchedule(s.id)!;
+  assert.deepEqual(got.pending, { dueAt: atIso(first + 2 * MIN) }, "one pending at most: the newer fire replaces it");
+  assert.deepEqual(got.history.map((h) => h.outcome), ["started", "skipped-busy"]);
+  assert.equal(got.history[1].dueAt, atIso(first + MIN));
+  assert.equal(inFolder(), 1);
+
+  // A thread target's busy thread is not this schedule's business: another
+  // thread running elsewhere never holds it.
+  const other = plainThread("Unrelated");
+  assert.ok(startTurn({ threadId: other.id, prompt: "hello" }, ALL_AGENTS).ok);
+  assert.equal(runs.length, 2);
+
+  // The run ends: the waiting fire starts at once, in a fresh thread.
+  now = first + 2 * MIN + 30_000;
+  await endTurn(running);
+  assert.equal(runs.length, 3);
+  const next = runs[2];
+  assert.equal(next.scheduled?.id, s.id);
+  assert.notEqual(next.threadId, running.threadId);
+  got = getSchedule(s.id)!;
+  assert.equal(got.pending, undefined);
+  const started = got.history.at(-1)!;
+  assert.equal(started.outcome, "started");
+  assert.equal(started.threadId, next.threadId);
+  assert.equal(started.delayedMs, 30_000);
+  assert.equal(inFolder(), 2);
+  await endTurn(runs[1]);
+  await endTurn(next);
+  assert.equal(runs.length, 3, "nothing else was waiting");
+});
+
+test("overlap skip on a new-thread schedule records skipped-busy while its run is going", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const { schedule: s } = await scheduleNewThread("builtin-claude-code", { kind: "interval", everyMinutes: 1 }, { overlap: "skip" });
+  const first = Date.parse(s.nextRunAt!);
+  advanceTo(first);
+  advanceTo(first + MIN);
+  assert.equal(runs.length, 1);
+  let got = getSchedule(s.id)!;
+  assert.equal(got.pending, undefined);
+  assert.deepEqual(got.history.map((h) => h.outcome), ["started", "skipped-busy"]);
+  assert.equal(got.history[1].threadId, undefined);
+  assert.equal(got.consecutiveFailures, 0, "busy is no failure");
+  // A run now while it runs is skipped too.
+  const r = await serve("POST", `/schedules/${s.id}/run`);
+  assert.equal(r.body.run.outcome, "skipped-busy");
+  assert.equal(runs.length, 1);
+  await endTurn(runs[0]);
+  assert.equal(runs.length, 1, "nothing queued to start");
+  advanceTo(first + 2 * MIN);
+  assert.equal(runs.length, 2, "free again: the next fire runs");
+  got = getSchedule(s.id)!;
+  assert.equal(got.history.at(-1)!.outcome, "started");
+});
+
+test("run-nows on a new-thread schedule while a run is going start no second agent; they collapse into one pending", async (t) => {
+  t.mock.method(console, "log", () => {});
+  watchDrain(t);
+  const jarvis = jarvisThread();
+  const p = project();
+  const made = createScheduleForJarvis(jarvis.id, {
+    name: "Fixer", prompt: "Run the tests and fix what fails", when: { every_minutes: 60 },
+    target: { agent: "claude-code", project: p.id },
+  }, now, ALL_AGENTS);
+  assert.ok(made.ok, JSON.stringify(made));
+  const first = runScheduleNowForJarvis(jarvis.id, made.id, ALL_AGENTS);
+  assert.ok(first.ok && first.run?.outcome === "started", JSON.stringify(first));
+  for (let i = 0; i < 4; i++) {
+    const again = runScheduleNowForJarvis(jarvis.id, made.id, ALL_AGENTS);
+    assert.ok(again.ok && again.queued, JSON.stringify(again));
+    assert.match(again.note, /busy/);
+  }
+  const route = await serve("POST", `/schedules/${made.id}/run`);
+  assert.equal(route.status, 200);
+  assert.equal(route.body.queued, true);
+  assert.equal(runs.length, 1, "one agent in the folder, however many run-nows");
+  let got = getSchedule(made.id)!;
+  assert.equal(got.pending?.manual, true);
+  assert.equal(got.history.filter((h) => h.outcome === "skipped-busy").length, 4, "each newer run now replaced the waiting one");
+
+  await endTurn(runs[0]);
+  assert.equal(runs.length, 2, "the one waiting run starts when the first ends");
+  got = getSchedule(made.id)!;
+  assert.equal(got.pending, undefined);
+  await endTurn(runs[1]);
+  assert.equal(runs.length, 2);
+});
+
+test("a threads.json that can't be written records the new-thread run failed-to-start and counts it", async (t) => {
+  t.mock.method(console, "log", () => {});
+  t.mock.method(console, "error", () => {});
+  const blocked = `${join(dataDir(), "threads.json")}.${process.pid}.tmp`;
+  const { schedule: s } = await scheduleNewThread("builtin-claude-code", { kind: "interval", everyMinutes: 60 });
+  const other = await scheduleNewThread("builtin-claude-code", { kind: "interval", everyMinutes: 60 });
+  mkdirSync(blocked, { recursive: true });
+  t.after(() => rmSync(blocked, { recursive: true, force: true }));
+  try {
+    // A run now: recorded, not a 500.
+    const r = await serve("POST", `/schedules/${s.id}/run`);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.run.outcome, "failed-to-start");
+    assert.ok(r.body.run.error);
+    assert.equal(r.body.run.threadId, undefined);
+    let got = getSchedule(s.id)!;
+    assert.equal(got.runCount, 1);
+    assert.equal(got.consecutiveFailures, 1);
+    assert.equal(got.history.at(-1)!.outcome, "failed-to-start");
+
+    // Due fires: each is recorded and counted, the tick goes on to the next
+    // due schedule, and three in a row pause it.
+    const due = Date.parse(getSchedule(s.id)!.nextRunAt!);
+    advanceTo(due);
+    got = getSchedule(s.id)!;
+    assert.equal(got.consecutiveFailures, 2);
+    const o = getSchedule(other.schedule.id)!;
+    assert.equal(o.history.at(-1)!.outcome, "failed-to-start", "the other due schedule still fired in the same tick");
+    await serve("POST", `/schedules/${s.id}/run`);
+    got = getSchedule(s.id)!;
+    assert.equal(got.enabled, false);
+    assert.match(got.pausedReason ?? "", /^paused after 3 failed runs/);
+    assert.equal(runs.length, 0);
+  } finally {
+    rmSync(blocked, { recursive: true, force: true });
+  }
+});
+
+test("a cron new-thread schedule's titles read in its zone", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const { schedule: s } = await scheduleNewThread("builtin-claude-code", { kind: "cron", expr: "*/5 * * * *", tz: "Asia/Kolkata" });
+  advanceTo(Date.parse(s.nextRunAt!));
+  assert.equal(runs.length, 1);
+  const at = Date.parse(getSchedule(s.id)!.history[0].at);
+  assert.equal(getThread(runs[0].threadId!)!.title, `Audit · ${localShort(at, "Asia/Kolkata")}`);
+  assert.match(getThread(runs[0].threadId!)!.title, /^Audit · \d{1,2} [A-Z][a-z]{2} \d{2}:\d{2}$/);
+});
+
+test("the new thread runs the bot's own model and effort; the schedule carries none", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const bot = createBot({ name: "Pinned Auditor", instructions: "audit", agent: "claude-code", model: "claude-opus-4-6", permissionMode: "auto-approve" });
+  const { schedule: s } = await scheduleNewThread(bot.id, { kind: "once", at: atIso(now + 90_000) });
+  for (const k of ["model", "effort", "permissionMode"]) {
+    assert.equal(k in s, false, k);
+    assert.equal(k in s.target, false, k);
+  }
+  advanceTo(now + 90_000);
+  assert.equal(runs.length, 1);
+  const store = runs[0];
+  assert.equal(store.model, "claude-opus-4-6", "the bot's model");
+  assert.equal(store.effort, undefined, "the default effort");
+  const thread = getThread(store.threadId!)!;
+  assert.equal(thread.model, undefined, "nothing written onto the thread");
+  assert.equal(thread.effort, undefined);
+  const config = await serve("GET", `/sessions/${store.gitbotId}/config`);
+  assert.equal(config.body.model, "claude-opus-4-6");
+
+  // A plain agent: the default, nothing pinned.
+  const plain = await scheduleNewThread("builtin-claude-code", { kind: "once", at: atIso(now + 90_000) });
+  await serve("POST", `/schedules/${plain.schedule.id}/run`);
+  assert.equal(runs.length, 2);
+  assert.equal(runs[1].model, undefined);
+  assert.equal(runs[1].effort, undefined);
+
+  // A model, effort or permission mode on the target is refused.
+  const p = project();
+  for (const extra of [{ model: "claude-opus-4-6" }, { effort: "high" }]) {
+    const r = await serve("POST", "/schedules", {
+      name: "Audit", prompt: "x", when: { kind: "once", at: atIso(now + 90_000) },
+      target: { kind: "new-thread", botId: bot.id, projectId: p.id, ...extra },
+    });
+    assert.equal(r.status, 400);
+    assert.match(r.body.error, /is not supported: a new-thread target takes botId and projectId/);
+  }
+});
+
+test("a new-thread run always auto-approves, whatever the bot's mode; a permissionMode is refused", async (t) => {
+  t.mock.method(console, "log", () => {});
+  for (const permissionMode of ["ask-permissions", "plan", "auto-approve"] as const) {
+    const bot = createBot({ name: `Mode ${permissionMode}`, permissionMode });
+    const { schedule: s } = await scheduleNewThread(bot.id, { kind: "once", at: atIso(now + 3_600_000) });
+    await serve("POST", `/schedules/${s.id}/run`);
+    const store = runs[runs.length - 1];
+    assert.equal(store.permissionMode, "yolo", permissionMode);
+    assert.equal(store.mode, "build", permissionMode);
+    await endTurn(store);
+  }
+  const p = project();
+  const r = await serve("POST", "/schedules", {
+    name: "Audit", prompt: "x", when: { kind: "once", at: atIso(now + 90_000) },
+    target: { kind: "new-thread", botId: "builtin-claude-code", projectId: p.id, permissionMode: "ask-permissions" },
+  });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /permissionMode is not supported: scheduled runs always auto-approve/);
+});
+
+test("POST /schedules checks a new-thread target's bot and project; only the total limit applies", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const p = project();
+  const body = (target: Record<string, unknown>) => ({
+    name: "Audit", prompt: "x", when: { kind: "interval", everyMinutes: 60 },
+    target: { kind: "new-thread", botId: "builtin-claude-code", projectId: p.id, ...target },
+  });
+  const refused = async (target: Record<string, unknown>, pattern: RegExp, agents?: string[]) => {
+    const r = agents ? createSchedule(body(target), { kind: "user" }, now, agents) : await serve("POST", "/schedules", body(target));
+    const error = "status" in r ? (assert.equal(r.status, 400), r.body.error) : (assert.ok(!r.ok), r.error);
+    assert.match(error, pattern);
+  };
+  await refused({ botId: undefined }, /target.botId is required/);
+  await refused({ projectId: "" }, /target.projectId is required/);
+  await refused({ botId: "no-such-bot" }, /no bot with id "no-such-bot"/);
+  await refused({ botId: JARVIS_BOT_ID }, /cannot start a Jarvis thread/);
+  await refused({ projectId: "p-0000000000" }, /no project with id "p-0000000000"/);
+  await refused({ botId: "builtin-codex" }, /Codex runs on codex, which is not installed on this machine/, ["claude-code"]);
+  const needsSetup = createBot({ name: "Video Cutter", setupInstructions: "install ffmpeg" });
+  await refused({ botId: needsSetup.id }, /Video Cutter is not set up on this machine \(its setup has not finished\): finish its setup/);
+
+  // 25 on one project and bot: no per-thread 20.
+  for (let i = 0; i < SCHEDULES_PER_THREAD_MAX + 5; i++) {
+    assert.ok(createSchedule(body({}), { kind: "user" }, now, ALL_AGENTS).ok);
+  }
+  const fill = SCHEDULES_MAX - listSchedules().length;
+  for (let i = 0; i < fill; i++) assert.ok(createSchedule(body({}), { kind: "user" }, now).ok);
+  await refused({}, /at most 100 schedules/);
+});
+
+test("a failed start deletes the empty thread and counts as a failure", async (t) => {
+  const logs = t.mock.method(console, "log", () => {});
+  const { schedule: s } = await scheduleNewThread("builtin-claude-code", { kind: "interval", everyMinutes: 60 });
+  // A prompt startTurn refuses, as a hand-edited schedules.json might hold.
+  updateSchedule(s.id, (x) => { x.prompt = ""; });
+  const before = threadsOf("builtin-claude-code").length;
+  for (let i = 1; i <= 3; i++) {
+    const r = await serve("POST", `/schedules/${s.id}/run`);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.run.outcome, "failed-to-start");
+    assert.equal(r.body.run.error, "prompt or attachments is required");
+    assert.equal(r.body.run.threadId, undefined, "the thread it made is gone");
+    assert.equal(threadsOf("builtin-claude-code").length, before, `run ${i} left no thread`);
+    assert.equal(getSchedule(s.id)!.consecutiveFailures, i);
+  }
+  const got = getSchedule(s.id)!;
+  assert.equal(got.enabled, false);
+  assert.match(got.pausedReason ?? "", /^paused after 3 failed runs: prompt or attachments is required/);
+  assert.equal(runs.length, 0);
+  // No thread to open: the pause push carries the schedule's own tag.
+  assert.equal(pushLines(logs).filter((l) => l.includes(`failed "Audit" (schedule-${s.id})`)).length, 1);
+});
+
+test("a missing bot or project pauses at once", async (t) => {
+  const logs = t.mock.method(console, "log", () => {});
+  // The bot is deleted.
+  const bot = createBot({ name: "Short Lived" });
+  const { schedule: s } = await scheduleNewThread(bot.id, { kind: "interval", everyMinutes: 1 });
+  const botsFile = join(dataDir(), "bots.json");
+  const bots = JSON.parse(readFileSync(botsFile, "utf-8"));
+  writeFileSync(botsFile, JSON.stringify(Array.isArray(bots) ? bots.filter((b: any) => b.id !== bot.id) : { ...bots, bots: bots.bots.filter((b: any) => b.id !== bot.id) }));
+  advanceTo(Date.parse(s.nextRunAt!));
+  let got = getSchedule(s.id)!;
+  assert.equal(got.history.at(-1)!.outcome, "failed-to-start");
+  assert.equal(got.history.at(-1)!.error, "bot not found");
+  assert.equal(got.enabled, false);
+  assert.equal(got.nextRunAt, null);
+  assert.equal(got.pausedReason, "its bot was deleted");
+  assert.equal(listThreads(bot.id).length, 0, "no thread made");
+  assert.equal(pushLines(logs).filter((l) => l.includes(`failed "Audit" (schedule-${s.id})`)).length, 1);
+
+  // The project's folder is removed.
+  const { schedule: o, project: p } = await scheduleNewThread("builtin-claude-code", { kind: "interval", everyMinutes: 60 });
+  rmSync(p.folder, { recursive: true, force: true });
+  const before = threadsOf("builtin-claude-code").length;
+  const fired = await serve("POST", `/schedules/${o.id}/run`);
+  assert.equal(fired.status, 200);
+  assert.equal(fired.body.run.outcome, "failed-to-start");
+  assert.equal(fired.body.run.error, "project not found");
+  got = getSchedule(o.id)!;
+  assert.equal(got.enabled, false);
+  assert.equal(got.pausedReason, "its project is gone (its folder was removed or moved)");
+  assert.equal(threadsOf("builtin-claude-code").length, before, "no thread made");
+  assert.equal(runs.length, 0);
+});
+
+test("new-thread runs never lock or report to a Jarvis thread", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const jarvis = jarvisThread();
+  const p = project();
+  const made = createScheduleForJarvis(jarvis.id, {
+    name: "Audit", prompt: "List the files in the repo", when: { every_minutes: 60 },
+    target: { agent: "claude-code", project: p.id },
+  }, now, ALL_AGENTS);
+  assert.ok(made.ok, JSON.stringify(made));
+  assert.equal(getSchedule(made.id)!.notesTo, jarvis.id);
+  const fired = runScheduleNowForJarvis(jarvis.id, made.id, ALL_AGENTS);
+  assert.ok(fired.ok && fired.run?.outcome === "started", JSON.stringify(fired));
+  const store = runs[0];
+  assert.equal(store.reportable, false);
+  assert.equal(store.reportOwner, undefined);
+  assert.equal(store.scheduled?.createdHere, undefined, "never by=\"you\": it is no Jarvis thread");
+  const thread = getThread(store.threadId!)!;
+  assert.equal(thread.reportTo, undefined);
+  assert.equal(thread.runningFor, undefined);
+  // Not Jarvis's child: no lock, not in its list of started threads.
+  assert.equal(runningChildOf(jarvis.id), undefined);
+  assert.equal(listThreads().filter((th) => th.reportTo === jarvis.id).length, 0);
+  // Jarvis takes a message while the run is going.
+  const mine = await serve("POST", "/chat", { threadId: jarvis.id, prompt: "hello" });
+  assert.equal(mine.status, 200);
+  await endTurn(runs[1]);
+
+  await endTurn(store);
+  assert.equal(runs.length, 2, "no report turn on Jarvis");
+  const after = getThread(jarvis.id)!;
+  assert.equal(after.queuedReports?.length ?? 0, 0);
+  assert.equal(after.pendingNote, undefined);
+  assert.equal(getSchedule(made.id)!.history[0].turnOutcome, "done");
 });

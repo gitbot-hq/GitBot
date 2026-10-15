@@ -1,7 +1,9 @@
 import { randomUUID } from "crypto";
+import { statSync } from "fs";
 import { join } from "path";
 import { dataDir, quarantineCorrupt, readCollection, writeCollection } from "./json-store";
-import { getThread, type Bot, type TurnOutcome } from "./bot-store";
+import { botSetupError, getBot, getThread, isJarvisBot, threadAgent, type TurnOutcome } from "./bot-store";
+import { findProject } from "./project-index";
 import {
   countOccurrences,
   describeWhen,
@@ -33,9 +35,13 @@ export interface Schedule {
   prompt: string;
   /** A cron's `tz` is an IANA zone; an interval runs at anchor + N, + 2N, … minutes. */
   when: When;
-  target:
-    | { kind: "thread"; threadId: string }
-    | { kind: "new-thread"; botId: string; projectId: string; permissionMode?: Bot["permissionMode"] };
+  /**
+   * `thread`: every run is a turn on that thread. `new-thread`: every run
+   * starts a fresh thread of its own, with that bot (a plain agent is its
+   * built-in bot) in that project's folder, owned by the user: it reports to
+   * nobody (scheduler.ts, startNewThreadRun).
+   */
+  target: ThreadTarget | NewThreadTarget;
   /** The Jarvis thread that gets the schedule note (its creator). */
   notesTo?: string;
   createdBy: { kind: "jarvis"; threadId: string } | { kind: "user"; remote?: string };
@@ -103,6 +109,22 @@ export interface Schedule {
 
 export type Notify = "always" | "on-failure" | "never";
 
+export interface ThreadTarget {
+  kind: "thread";
+  threadId: string;
+}
+
+/**
+ * No permission mode, model or effort: a run auto-approves, as every
+ * scheduled turn does, and its thread gets the bot's model and effort (or
+ * the default), as one the user opens would.
+ */
+export interface NewThreadTarget {
+  kind: "new-thread";
+  botId: string;
+  projectId: string;
+}
+
 export interface ScheduleRun {
   at: string;
   outcome: "started" | "skipped-busy" | "missed" | "failed-to-start";
@@ -158,11 +180,15 @@ export function getSchedule(id: string): Schedule | undefined {
 
 /**
  * True for what this build can fire: a once, cron or interval (whose times
- * it can work out) on a thread. Not a new-thread target yet, nor a `when`
- * it can't read (a bad pattern written by hand).
+ * it can work out) on a thread, or starting a new thread. Not a target kind
+ * it doesn't know, nor a `when` it can't read (a bad pattern written by hand).
  */
 export function isRunnable(s: Pick<Schedule, "when" | "target">): boolean {
-  return isUsableWhen(s.when) && s.target?.kind === "thread" && typeof s.target.threadId === "string";
+  if (!isUsableWhen(s.when)) return false;
+  const target = s.target;
+  if (target?.kind === "thread") return typeof target.threadId === "string";
+  if (target?.kind === "new-thread") return typeof target.botId === "string" && typeof target.projectId === "string";
+  return false;
 }
 
 /** A schedule that may still fire. A fired or missed once is kept for its history, but is done. */
@@ -630,15 +656,65 @@ export function promptError(prompt: unknown): string | null {
   return null;
 }
 
+/** What a new-thread target may say; anything else is refused. */
+const NEW_THREAD_KEYS = ["kind", "botId", "projectId"];
+
+/**
+ * A new-thread target, checked: its bot exists, is not Jarvis, runs on an
+ * agent installed here (when `availableAgents` is given) and is set up; its
+ * project is known and its folder is there. A permission mode, model or
+ * effort is refused: runs always auto-approve, and their threads run what
+ * the bot gives, as one the user opens would.
+ */
+export function checkNewThreadTarget(
+  target: any,
+  availableAgents?: readonly string[],
+): { ok: true; target: NewThreadTarget } | { ok: false; error: string } {
+  if (target.permissionMode !== undefined) {
+    return { ok: false, error: "target.permissionMode is not supported: scheduled runs always auto-approve" };
+  }
+  const extra = Object.keys(target).find((k) => !NEW_THREAD_KEYS.includes(k));
+  if (extra) {
+    return { ok: false, error: `target.${extra} is not supported: a new-thread target takes botId and projectId (its thread runs the bot's own model and effort)` };
+  }
+  if (typeof target.botId !== "string" || !target.botId) return { ok: false, error: "target.botId is required" };
+  if (typeof target.projectId !== "string" || !target.projectId) return { ok: false, error: "target.projectId is required" };
+  const bot = getBot(target.botId);
+  if (!bot) return { ok: false, error: `no bot with id "${target.botId}"` };
+  if (isJarvisBot(bot)) return { ok: false, error: "a new-thread schedule cannot start a Jarvis thread: target a Jarvis thread by its threadId instead" };
+  const agent = threadAgent({}, bot);
+  if (availableAgents && !availableAgents.includes(agent)) {
+    return { ok: false, error: `${bot.name} runs on ${agent}, which is not installed on this machine` };
+  }
+  const notSetUp = botSetupError(bot);
+  if (notSetUp) return { ok: false, error: `${notSetUp}: finish its setup from the bot in gitbot first` };
+  const project = findProject(target.projectId);
+  if (!project) return { ok: false, error: `no project with id "${target.projectId}"` };
+  if (!isFolder(project.path)) return { ok: false, error: `the project's folder ${project.path} is not there` };
+  return { ok: true, target: { kind: "new-thread", botId: bot.id, projectId: project.id } };
+}
+
+/** True when `path` is a folder that exists now. */
+export function isFolder(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Checks a new schedule from a request body and stores it. Only what this
- * build runs is accepted: a once, cron or interval on an existing thread.
- * Anything else is refused, not stored half-understood.
+ * build runs is accepted: a once, cron or interval on an existing thread, or
+ * starting a new thread. Anything else is refused, not stored
+ * half-understood. `availableAgents`, when given, refuses a new-thread
+ * target whose bot's agent is not installed here.
  */
 export function createSchedule(
   body: any,
   createdBy: Schedule["createdBy"],
   at: number = Date.now(),
+  availableAgents?: readonly string[],
 ): NewScheduleResult {
   if (!body || typeof body !== "object") return { ok: false, error: "body must be a JSON object" };
   const { name, prompt, when, target } = body;
@@ -674,18 +750,29 @@ export function createSchedule(
   if (notify !== undefined && !isNotify(notify)) return { ok: false, error: NOTIFY_ERROR };
 
   if (!target || typeof target !== "object") return { ok: false, error: "target is required" };
-  if (target.kind !== "thread") return { ok: false, error: `target.kind "${String(target.kind)}" is not supported yet: use "thread"` };
-  if (typeof target.threadId !== "string" || !target.threadId) return { ok: false, error: "target.threadId is required" };
-  const thread = getThread(target.threadId);
-  if (!thread) return { ok: false, error: `no thread with id "${target.threadId}"` };
-  if (thread.kind === "setup") return { ok: false, error: "a bot's setup thread cannot be scheduled" };
+  let stored: Schedule["target"];
+  if (target.kind === "thread") {
+    if (typeof target.threadId !== "string" || !target.threadId) return { ok: false, error: "target.threadId is required" };
+    const thread = getThread(target.threadId);
+    if (!thread) return { ok: false, error: `no thread with id "${target.threadId}"` };
+    if (thread.kind === "setup") return { ok: false, error: "a bot's setup thread cannot be scheduled" };
+    stored = { kind: "thread", threadId: thread.id };
+  } else if (target.kind === "new-thread") {
+    const checked = checkNewThreadTarget(target, availableAgents);
+    if (!checked.ok) return checked;
+    stored = checked.target;
+  } else {
+    return { ok: false, error: `target.kind "${String(target.kind)}" is not supported: use "thread" or "new-thread"` };
+  }
 
   const all = listForWrite();
   // The total counts every stored schedule (it bounds the file); a thread's
   // 20 counts only those that can still fire, so fired one-shots kept for
-  // their history never block a new one.
+  // their history never block a new one. A new-thread target has no thread
+  // to count against: only the total holds it.
   if (all.length >= SCHEDULES_MAX) return { ok: false, error: `at most ${SCHEDULES_MAX} schedules: delete one first` };
-  if (all.filter((s) => targetThreadId(s) === thread.id && canStillFire(s)).length >= SCHEDULES_PER_THREAD_MAX) {
+  const threadId = targetThreadId({ target: stored });
+  if (threadId && all.filter((s) => targetThreadId(s) === threadId && canStillFire(s)).length >= SCHEDULES_PER_THREAD_MAX) {
     return { ok: false, error: `at most ${SCHEDULES_PER_THREAD_MAX} active schedules on one thread: delete one first` };
   }
 
@@ -695,7 +782,7 @@ export function createSchedule(
     name: name.trim(),
     prompt,
     when: parsed.when,
-    target: { kind: "thread", threadId: thread.id },
+    target: stored,
     // A schedule Jarvis made reports its notes to that Jarvis thread.
     ...(createdBy.kind === "jarvis" ? { notesTo: createdBy.threadId } : {}),
     createdBy,

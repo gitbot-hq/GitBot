@@ -1,13 +1,15 @@
 import { getThread } from "./bot-store";
 import { deliverQueuedReport, jarvisIsMidTurn } from "./reports";
-import { deliverPendingSchedule } from "./scheduler";
+import { deliverPendingNewThreadRun, deliverPendingSchedule } from "./scheduler";
 import { isShuttingDown, onTurnEnd } from "./server-common";
 
 // The deferred-turn slot. Work that found its thread busy waits on the
 // thread and starts when that turn ends: a child's report that found its
 // Jarvis mid-turn (reports.ts, Thread.queuedReports, a list, oldest first),
 // and a schedule's fire that found its thread busy (scheduler.ts, each
-// schedule's one `pending` fire, in schedules.json).
+// schedule's one `pending` fire, in schedules.json). A new-thread schedule's
+// pending fire waits on its own last run instead, and starts when that run's
+// turn ends (in a thread of its own).
 //
 // The drain never runs inside the turn-end listener pass. Its listener only
 // schedules it (setImmediate), so it runs after every other listener and
@@ -43,8 +45,17 @@ export function watchDeferredTurns(availableAgents: readonly string[]): () => vo
     // after its own listeners, never before.
     const owner = turn.reportOwner && !jarvisIsMidTurn(turn.reportOwner) ? turn.reportOwner : undefined;
     const threads = new Set([turn.threadId, owner].filter((id): id is string => !!id));
-    if (threads.size === 0) return;
+    // A run of a new-thread schedule: that schedule may have a fire waiting for it.
+    const scheduleId = turn.scheduled?.id;
+    if (threads.size === 0 && !scheduleId) return;
     setImmediate(() => {
+      if (scheduleId) {
+        try {
+          deliverPendingNewThreadRun(scheduleId, availableAgents);
+        } catch (err: any) {
+          console.error(`[deferred] schedule ${scheduleId}: ${err?.message ?? err}`);
+        }
+      }
       for (const threadId of threads) {
         try {
           drainThread(threadId, availableAgents);

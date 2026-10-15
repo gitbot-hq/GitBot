@@ -1,5 +1,5 @@
-import { getThread } from "./bot-store";
-import { findProject, projectId, projectIdForFolder } from "./project-index";
+import { BOT_AGENTS, botOrAgent, getBot, getThread, isJarvisBot } from "./bot-store";
+import { findProject, projectId, projectIdForFolder, projectNames } from "./project-index";
 import {
   createSchedule,
   deleteSchedule,
@@ -50,7 +50,11 @@ export interface JarvisWhen {
   every_minutes?: number;
 }
 
-export type JarvisTarget = "this_thread" | { threadId: string };
+/**
+ * "this_thread", an existing thread, or a fresh thread for every run with a
+ * bot or a plain agent in a project (resolved as start_thread resolves them).
+ */
+export type JarvisTarget = "this_thread" | { threadId: string } | { bot?: string; agent?: string; project: string };
 
 export interface CreateScheduleArgs {
   name: string;
@@ -132,6 +136,17 @@ function serverClock(at: number) {
 }
 
 function targetOf(s: Schedule, jarvisThreadId: string) {
+  if (s.target?.kind === "new-thread") {
+    const bot = getBot(s.target.botId);
+    const project = findProject(s.target.projectId);
+    return {
+      newThread: true as const,
+      botId: s.target.botId,
+      ...(bot ? { bot: bot.name } : { botGone: true as const }),
+      projectId: s.target.projectId,
+      ...(project ? { project: projectNames().get(project.id) ?? project.path, folder: project.path } : { projectGone: true as const }),
+    };
+  }
   const threadId = targetThreadId(s);
   if (!threadId) return { kind: s.target?.kind ?? "unknown" };
   const thread = getThread(threadId);
@@ -167,9 +182,20 @@ export type CreateScheduleResult = Result<{
   overlap: "queue" | "skip";
   serverTime: { now: string; timeZone: string };
   warning?: string;
+  /** A new-thread target: where its results go. */
+  note?: string;
 }>;
 
-export function createScheduleForJarvis(jarvisThreadId: string, args: CreateScheduleArgs, at: number = schedulerClock.now()): CreateScheduleResult {
+/** What create_schedule says about a new-thread target's runs. */
+export const NEW_THREAD_NOTE =
+  "Each run starts a fresh thread, owned by the user, that never reports back to you. Its runs share one folder, so a run never starts while the last one is still going: overlap queues it (one waits at most) or skips it. Its results: a push (by notify), its run history in list_schedules with each run's thread id, and read_thread_tail on that thread.";
+
+export function createScheduleForJarvis(
+  jarvisThreadId: string,
+  args: CreateScheduleArgs,
+  at: number = schedulerClock.now(),
+  availableAgents?: readonly string[],
+): CreateScheduleResult {
   const zone = zoneFor(args.tz);
   if (!zone.ok) return zone;
   const when = routeWhen(args.when, args.tz, zone.tz, at);
@@ -178,17 +204,15 @@ export function createScheduleForJarvis(jarvisThreadId: string, args: CreateSche
   const endsAt = args.endsAt === undefined ? { ok: true as const, at: undefined } : instantIn(args.endsAt, zone.tz);
   if (!endsAt.ok) return endsAt;
 
-  let threadId: string;
-  if (args.target === "this_thread") threadId = jarvisThreadId;
-  else if (args.target && typeof args.target === "object" && typeof args.target.threadId === "string") threadId = args.target.threadId;
-  else return { ok: false, error: `target must be "this_thread" or { threadId }` };
+  const target = routeTarget(args.target, jarvisThreadId, availableAgents);
+  if (!target.ok) return target;
 
   const created = createSchedule(
     {
       name: args.name,
       prompt: args.prompt,
       when: when.when,
-      target: { kind: "thread", threadId },
+      target: target.target,
       overlap: args.overlap,
       notify: args.notify,
       maxRuns: args.maxRuns,
@@ -196,6 +220,7 @@ export function createScheduleForJarvis(jarvisThreadId: string, args: CreateSche
     },
     { kind: "jarvis", threadId: jarvisThreadId },
     at,
+    availableAgents,
   );
   if (!created.ok) return created;
   const s = created.schedule;
@@ -220,7 +245,27 @@ export function createScheduleForJarvis(jarvisThreadId: string, args: CreateSche
     ...(gap < COST_WARNING_GAP_MINUTES
       ? { warning: `Runs ${gap} minute${gap === 1 ? "" : "s"} apart: every run is a full agent turn, so this costs tokens quickly. Tell the user, and offer a longer gap or maxRuns.` }
       : {}),
+    ...(s.target.kind === "new-thread" ? { note: NEW_THREAD_NOTE } : {}),
   };
+}
+
+const TARGET_SHAPES = `target must be "this_thread", { threadId }, or { bot or agent, project } for a fresh thread each run`;
+
+/**
+ * Jarvis's target as the route's. A bot or plain agent is resolved as
+ * start_thread resolves it (botOrAgent); the route checks the rest (the
+ * bot's setup, the project), with its own messages.
+ */
+function routeTarget(target: JarvisTarget, jarvisThreadId: string, availableAgents?: readonly string[]): Result<{ target: unknown }> {
+  if (target === "this_thread") return { ok: true, target: { kind: "thread", threadId: jarvisThreadId } };
+  if (!target || typeof target !== "object") return { ok: false, error: TARGET_SHAPES };
+  if ("threadId" in target && typeof target.threadId === "string") return { ok: true, target: { kind: "thread", threadId: target.threadId } };
+  if (!("project" in target) || typeof target.project !== "string") return { ok: false, error: TARGET_SHAPES };
+  // Without the installed agents (a test), any agent is taken as installed.
+  const resolved = botOrAgent(target, availableAgents ?? BOT_AGENTS);
+  if (!resolved.ok) return resolved;
+  if (isJarvisBot(resolved.bot)) return { ok: false, error: "a new-thread schedule cannot start a Jarvis thread: use this_thread" };
+  return { ok: true, target: { kind: "new-thread", botId: resolved.bot.id, projectId: target.project } };
 }
 
 // --- list_schedules ---
@@ -284,11 +329,19 @@ export function listSchedulesForJarvis(
   filter: { threadId?: string; project?: string },
   at: number = schedulerClock.now(),
 ): ListSchedulesResult {
-  const threadId = filter.threadId === "this_thread" ? jarvisThreadId : filter.threadId;
+  const thisThread = filter.threadId === "this_thread";
+  const threadId = thisThread ? jarvisThreadId : filter.threadId;
   if (filter.project && !findProject(filter.project)) return { ok: false, error: `no project with id "${filter.project}": use list_projects` };
   let all = listSchedules(threadId ? { threadId } : {});
+  // "this_thread" also lists the fresh-thread schedules this thread made:
+  // they target no thread, but they are its own.
+  if (thisThread) {
+    const made = listSchedules().filter((s) => s.target?.kind === "new-thread" && (s.notesTo === jarvisThreadId || (s.createdBy?.kind === "jarvis" && s.createdBy.threadId === jarvisThreadId)));
+    all = [...all, ...made];
+  }
   if (filter.project) {
     all = all.filter((s) => {
+      if (s.target?.kind === "new-thread") return s.target.projectId === filter.project;
       const thread = getThread(targetThreadId(s) ?? "");
       return !!thread && (projectIdForFolder(thread.repoPath) ?? projectId(thread.repoPath)) === filter.project;
     });

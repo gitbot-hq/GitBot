@@ -59,7 +59,7 @@ export async function handleScheduleRoutes(
   // POST /schedules
   if (method === "POST" && path === "/schedules") {
     const body = await readBody(req);
-    const created = createSchedule(body, { kind: "user", remote: remoteOf(req) }, schedulerClock.now());
+    const created = createSchedule(body, { kind: "user", remote: remoteOf(req) }, schedulerClock.now(), availableAgents);
     if (!created.ok) { jsonError(res, 400, created.error); return true; }
     logWrite("create", created.schedule.id, req);
     rearmScheduler();
