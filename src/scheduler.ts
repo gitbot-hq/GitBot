@@ -29,6 +29,7 @@ import {
   isRunnable,
   JARVIS_THREAD_GONE,
   listSchedules,
+  madeByThisJarvis,
   pauseSchedule,
   PAUSE_AFTER_FAILURES,
   queueManualRun,
@@ -40,6 +41,7 @@ import {
   type ScheduleRun,
   type SettledDue,
 } from "./schedules";
+export { madeByThisJarvis };
 import { threadIsRunning } from "./send-to-thread";
 import { startTurn } from "./turns";
 
@@ -735,21 +737,6 @@ function startNewThreadRun(
 export function newThreadTitle(s: Pick<Schedule, "name" | "when">, at: number): string {
   const tz = s.when?.kind === "cron" ? s.when.tz : defaultTimeZone().tz;
   return `${s.name} · ${localShort(at, tz)}`;
-}
-
-/**
- * True when the schedule runs on the Jarvis thread that made it with its own
- * create_schedule tool, and nobody else has changed its words or re-armed it
- * since (changedByOther): the only kind whose prompt that Jarvis takes as
- * the user's own request (the tag's by="you"). POST /schedules always
- * records createdBy user. A PATCH of its words or times (or a resume), or
- * another Jarvis thread's update, marks a Jarvis-made one changedByOther for
- * good, so its turns lose by="you" too. A run now by anyone but its creator
- * (the route, the schedules panel, another Jarvis thread) is data for that
- * one run only: startScheduledTurn's `byOther`.
- */
-function madeByThisJarvis(s: Schedule, threadId: string): boolean {
-  return s.createdBy?.kind === "jarvis" && s.createdBy.threadId === threadId && !s.changedByOther;
 }
 
 /**

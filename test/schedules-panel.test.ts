@@ -158,3 +158,10 @@ test("thread row shows the clock badge with the next run", () => {
   assert.match(shell, /title=\{badge\.title\} aria-label=\{badge\.title\}/);
   assert.match(shell, /<span className="thread-schedule-badge-time">\{badge\.label\}<\/span>/);
 });
+
+test("the server's state wins: a paused schedule that can't resume is Ended, with Delete only", () => {
+  const dead = { ...schedule({ enabled: false, pausedReason: "paused by the user", nextRunAt: null }), state: "ended" as const, canResume: false };
+  assert.equal(scheduleState(dead), "ended");
+  assert.equal(statusText(dead, NOW, TZ), "Ended");
+  assert.deepEqual(scheduleActions(dead), { pause: false, resume: false, runNow: false, notify: false, delete: true });
+});

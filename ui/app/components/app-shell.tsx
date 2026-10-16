@@ -29,6 +29,7 @@ import LearnMorePanel, { type LearnMoreKind } from "./learn-more-panel";
 import ThreadPanel from "./thread-panel";
 import JarvisChildren from "./jarvis-children";
 import SchedulesPanel from "./schedules-panel";
+import ScheduledDock from "./scheduled-dock";
 import { IconClock } from "@tabler/icons-react";
 import OnboardingFlow from "./onboarding-flow";
 import ThemeButton from "./theme-button";
@@ -99,6 +100,17 @@ function storeOnboardingSkipped() {
     localStorage.setItem(ONBOARDING_SKIPPED_KEY, "1");
   } catch {
     // private mode — the skip lasts for this visit only
+  }
+}
+
+/** The Scheduled dock's open state (default open). */
+const SCHEDULED_OPEN_KEY = "gitbot-v2-scheduled-open";
+
+function storeDockOpen(open: boolean) {
+  try {
+    localStorage.setItem(SCHEDULED_OPEN_KEY, open ? "1" : "0");
+  } catch {
+    // private mode — it just won't persist
   }
 }
 
@@ -213,6 +225,16 @@ export default function V2() {
   const [threadsScrolled, setThreadsScrolled] = useState(false);
   const [threadsDragging, setThreadsDragging] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [dockOpen, setDockOpen] = useState(true);
+  // Bumped on every quiet refresh: the Scheduled dock re-reads with the thread list.
+  const [scheduleTick, setScheduleTick] = useState(0);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(SCHEDULED_OPEN_KEY) === "0") setDockOpen(false);
+    } catch {
+      // private mode
+    }
+  }, []);
   const [settled, setSettled] = useState(false);
   const [iconSet, setIconSet] = useState<"full" | "solo">("full");
   const [iconsDim, setIconsDim] = useState(false);
@@ -611,7 +633,10 @@ export default function V2() {
   useAttentionTitle(needsYou);
   // One quiet re-read at a time, however many reasons arrive together.
   const [quietRefresh] = useState(() =>
-    coalesce(() => (selectedRef.current ? refreshThreads(selectedRef.current, true) : Promise.resolve())),
+    coalesce(() => {
+      setScheduleTick((n) => n + 1);
+      return selectedRef.current ? refreshThreads(selectedRef.current, true) : Promise.resolve();
+    }),
   );
   const tabVisible = useTabVisible(quietRefresh);
   const attentionKey = bot
@@ -1232,6 +1257,28 @@ export default function V2() {
     setThreadByBot((prev) => ({ ...prev, [thread.botId]: thread.id }));
   }
 
+  /** A dock row: on mobile the drawer closes first and focus goes to the composer. */
+  function openFromDock(botId: string, threadId: string) {
+    closeMobilePanel(() => document.querySelector<HTMLElement>(".chat-col .composer textarea"));
+    openThread(botId, threadId);
+  }
+
+  function toggleDock() {
+    setDockOpen((open) => {
+      storeDockOpen(!open);
+      return !open;
+    });
+  }
+
+  /** The collapsed rail's clock: expand the rail, with the dock open. */
+  function expandToSchedules() {
+    if (!dockOpen) {
+      setDockOpen(true);
+      storeDockOpen(true);
+    }
+    toggleCollapse();
+  }
+
   /** Opens a thread under its own bot, as picking the bot and then the thread would. */
   function openThread(botId: string, threadId: string) {
     dismissLearnMore();
@@ -1492,6 +1539,25 @@ export default function V2() {
             </div>
             <div className={`side-scroll-edge side-scroll-edge-bottom${botsScrollEdge === "bottom" ? " is-visible" : ""}`} aria-hidden="true" />
           </div>
+          {!(railCollapsed && railSettled) && (
+            <ScheduledDock
+              open={dockOpen}
+              onToggle={toggleDock}
+              refreshKey={`${scheduleTick}:${activeThread?.id ?? ""}`}
+              onOpen={openFromDock}
+            />
+          )}
+          {railCollapsed && railSettled && (
+            <button
+              type="button"
+              className="collapse-btn collapsed-schedules fade-in-slow"
+              onClick={expandToSchedules}
+              aria-label="Show schedules"
+              data-tip="Scheduled"
+            >
+              <IconClock size={18} aria-hidden="true" />
+            </button>
+          )}
           {railCollapsed && railSettled && (
             <div ref={collapsedCreateRef} className="collapsed-create-action">
               <NewBotButton onClick={() => setCreateMenuOpen((open) => !open)} />

@@ -1260,3 +1260,140 @@
   border: 1px dashed var(--faint);
   border-radius: var(--radius-sm);
 }
+
+/* The Scheduled dock: the bots rail's bottom, outside its scroll region, so
+   it stays on screen however many bots there are. Its body scrolls on its
+   own, capped at about 45% of the rail. */
+.v2 .scheduled-dock {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 45%;
+  margin: var(--space-2) calc(-1 * var(--space-2)) 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-sm);
+  overflow: hidden;
+}
+
+.v2 .side.closing .scheduled-dock {
+  visibility: hidden;
+}
+
+.v2 .dock-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.v2 .dock-head:hover { background: var(--surface-2); color: var(--text); }
+.v2 .dock-head-title { flex: 1; text-align: left; }
+.v2 .dock-head .action-icon { transform: rotate(-90deg); transition: transform var(--duration-slow, 200ms) ease; }
+.v2 .scheduled-dock.open .dock-head .action-icon { transform: none; }
+
+.v2 .dock-body {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding: var(--space-1) 0 var(--space-1);
+}
+
+.v2 .dock-group + .dock-group { margin-top: var(--space-2); }
+
+.v2 .dock-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.v2 .dock-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: 6px var(--space-2);
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.v2 .dock-row:hover { background: var(--surface-2); }
+.v2 .dock-row[aria-disabled="true"] { cursor: default; }
+.v2 .dock-row[aria-disabled="true"]:hover { background: none; }
+.v2 .dock-row-icon { flex: none; margin-top: 2px; color: var(--muted); }
+.v2 .dock-row.attention .dock-row-icon { color: var(--brand-honey); }
+
+.v2 .dock-row-copy {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.v2 .dock-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.v2 .dock-row-title,
+.v2 .dock-row-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2 .dock-row-title { flex: 1; font-weight: 550; }
+.v2 .dock-row-time { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.v2 .dock-row-line { color: var(--muted); font-size: 12px; }
+
+.v2 .dock-glyph {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.v2 .dock-glyph.ok { color: var(--ok); }
+.v2 .dock-glyph.failed { color: var(--danger); }
+
+.v2 .dock-note,
+.v2 .dock-empty p {
+  margin: var(--space-1) 0 0;
+  padding: 0 var(--space-2);
+  color: var(--muted);
+}
+
+.v2 .dock-empty p:first-child { margin-top: 0; color: var(--text); }
+.v2 .dock-hint { font-size: 12px; }
+
+/* The collapsed rail's clock, above its create action. */
+.v2 .side > .collapsed-schedules {
+  flex-shrink: 0;
+  margin: 0 auto var(--space-2);
+}
+
+@media (max-width: 900px) {
+  .v2 .dock-row { min-height: 44px; align-items: center; }
+  .v2 .dock-head { min-height: 44px; }
+}

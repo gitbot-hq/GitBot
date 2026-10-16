@@ -4,8 +4,8 @@ import AnimatedActionIcon from "./animated-action-icon";
 import { ChevronDownIcon } from "@animateicons/react/lucide/chevron-down-icon";
 import { IconClock } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { deleteSchedule, getThread, listSchedules, patchSchedule, runScheduleNow } from "../lib/api";
-import { JARVIS_BOT_ID, type Schedule, type ScheduleNotify } from "../lib/gitbot";
+import { deleteSchedule, listSchedules, patchSchedule, runScheduleNow } from "../lib/api";
+import { JARVIS_BOT_ID, type ScheduleNotify, type ScheduleView } from "../lib/gitbot";
 import {
   createdByText,
   fullTime,
@@ -48,7 +48,7 @@ export default function SchedulesPanel({
   onChanged?: () => void;
   onError?: (message: string) => void;
 }) {
-  const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [schedules, setSchedules] = useState<ScheduleView[]>([]);
   const [open, setOpen] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const live = useRef(true);
@@ -95,13 +95,6 @@ export default function SchedulesPanel({
       });
   }
 
-  function openRun(id: string) {
-    getThread(id).then(
-      ({ thread }) => onOpen(thread.botId, thread.id),
-      () => onError?.("That thread has been deleted"),
-    );
-  }
-
   if (schedules.length === 0) return null;
 
   return (
@@ -116,7 +109,8 @@ export default function SchedulesPanel({
           {schedules.map((s) => {
             const state = scheduleState(s);
             const can = scheduleActions(s);
-            const where = targetText(s, threadId);
+            const target = s.where;
+            const where = target.kind === "thread" && target.threadId === threadId ? null : targetText(s, threadId);
             const runs = lastRuns(s);
             const by = s.createdBy;
             const disabled = busy === s.id;
@@ -133,7 +127,20 @@ export default function SchedulesPanel({
                   {statusText(s)}
                 </div>
                 <div className="schedule-meta">
-                  {where && <span>{where}</span>}
+                  {target.kind === "thread" && target.threadId !== threadId ? (
+                    <span>
+                      runs on{" "}
+                      <button type="button" className="schedule-link" onClick={() => onOpen(target.botId, target.threadId)}>
+                        <b>{target.title}</b> · {target.botName}
+                      </button>
+                    </span>
+                  ) : target.kind === "new-thread" ? (
+                    <span>a new thread each run in {target.projectName} · {target.botName}</span>
+                  ) : target.kind === "missing" ? (
+                    <span>its target is gone</span>
+                  ) : (
+                    where && <span>{where}</span>
+                  )}
                   {by?.kind === "jarvis" && by.threadId !== threadId ? (
                     <button type="button" className="schedule-link" onClick={() => onOpen(JARVIS_BOT_ID, by.threadId)}>
                       {createdByText(s)}
@@ -166,8 +173,8 @@ export default function SchedulesPanel({
                     {runs.map((r, i) => (
                       <li key={`${r.at}-${i}`}>
                         <span className="schedule-run-at" title={fullTime(r.at)}>{shortTime(r.at)}</span>{" "}
-                        {r.threadId && r.threadId !== threadId ? (
-                          <button type="button" className="schedule-link" onClick={() => openRun(r.threadId!)}>
+                        {r.threadId && r.botId && r.threadId !== threadId ? (
+                          <button type="button" className="schedule-link" onClick={() => onOpen(r.botId!, r.threadId!)}>
                             {runText(r)}
                           </button>
                         ) : (

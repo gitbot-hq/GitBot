@@ -21,7 +21,10 @@ export const NOTIFY_OPTIONS: { value: ScheduleNotify; label: string }[] = [
  */
 export type ScheduleState = "active" | "paused" | "ended";
 
-export function scheduleState(s: Pick<Schedule, "enabled" | "pausedReason">): ScheduleState {
+export function scheduleState(s: Pick<Schedule, "enabled" | "pausedReason"> & { state?: ScheduleState }): ScheduleState {
+  // The server's own word, when it gave one: a paused schedule that can no
+  // longer fire is "ended" there.
+  if (s.state) return s.state;
   if (s.enabled) return "active";
   return s.pausedReason ? "paused" : "ended";
 }
@@ -114,7 +117,7 @@ export function runText(r: ScheduleRun): string {
 }
 
 /** The last runs, newest first. */
-export function lastRuns(s: Pick<Schedule, "history">, n: number = PANEL_RUNS): ScheduleRun[] {
+export function lastRuns<R extends ScheduleRun>(s: { history: R[] }, n: number = PANEL_RUNS): R[] {
   return (s.history ?? []).slice(-n).reverse();
 }
 
@@ -126,7 +129,7 @@ export function createdByText(s: Pick<Schedule, "createdBy">): string {
 }
 
 /** The status line: next run, waiting, paused (why), or ended. */
-export function statusText(s: Schedule, now: number = Date.now(), timeZone?: string): string {
+export function statusText(s: Schedule & { state?: ScheduleState }, now: number = Date.now(), timeZone?: string): string {
   const state = scheduleState(s);
   const waiting = s.pending ? " · a run is waiting for the thread" : "";
   if (state === "paused") return `Paused: ${s.pausedReason}${waiting}`;
@@ -143,7 +146,7 @@ export function targetText(s: Schedule, threadId: string): string | null {
 }
 
 /** What the panel offers: Pause or Resume, Run now, Notify, Delete. An ended one only Delete. */
-export function scheduleActions(s: Pick<Schedule, "enabled" | "pausedReason">): {
+export function scheduleActions(s: Pick<Schedule, "enabled" | "pausedReason"> & { state?: ScheduleState; canResume?: boolean }): {
   pause: boolean;
   resume: boolean;
   runNow: boolean;
@@ -153,7 +156,7 @@ export function scheduleActions(s: Pick<Schedule, "enabled" | "pausedReason">): 
   const state = scheduleState(s);
   return {
     pause: state === "active",
-    resume: state === "paused",
+    resume: state === "paused" && s.canResume !== false,
     runNow: state !== "ended",
     notify: state !== "ended",
     delete: true,

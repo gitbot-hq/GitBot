@@ -1,7 +1,7 @@
 import { jsonError, jsonOk, parseQuery, readBody, type IRequest, type IResponse } from "./server-common";
 import { findProject } from "./project-index";
-import { createSchedule, deleteSchedule, describeSchedule, editSchedule, getSchedule, listSchedulesFor, nextRunsOf } from "./schedules";
-import { defaultTimeZone } from "./schedule-time";
+import { createSchedule, deleteSchedule, editSchedule, getSchedule, listSchedulesFor, nextRunsOf, viewContext, viewSchedule } from "./schedules";
+import { canonicalTimeZone, defaultTimeZone } from "./schedule-time";
 import { rearmScheduler, runScheduleNow, scheduleChanged, schedulerClock } from "./scheduler";
 
 // /schedules: list, create, change (pause, resume, edit), delete and run
@@ -47,15 +47,21 @@ export async function handleScheduleRoutes(
   const allowed = canWriteSchedules(req);
   if (!allowed.ok) { jsonError(res, allowed.status, allowed.message); return true; }
 
-  // GET /schedules?threadId=&projectId=
+  // GET /schedules?threadId=&projectId=&tz=
   if (method === "GET" && path === "/schedules") {
-    const { threadId, projectId } = parseQuery(url);
+    const { threadId, projectId, tz } = parseQuery(url);
     if (projectId && !findProject(projectId)) { jsonError(res, 400, `no project with id "${projectId}"`); return true; }
+    // `tz`: the viewer's zone, for a once's `describe`; a bad one is ignored.
+    const zone = tz ? canonicalTimeZone(tz) : null;
+    const now = schedulerClock.now();
+    // Threads, bots and project names read once, for the whole list.
+    const ctx = viewContext(zone?.ok ? zone.tz : defaultTimeZone().tz, now);
+    const schedules = listSchedulesFor({ threadId: threadId || undefined, projectId: projectId || undefined })
+      .map((s) => viewSchedule(s, ctx));
     jsonOk(res, {
-      // `describe`: its times in words (a once in the server's zone), so the
-      // UI's panel needs no cron reading of its own.
-      schedules: listSchedulesFor({ threadId: threadId || undefined, projectId: projectId || undefined })
-        .map((s) => ({ ...s, describe: describeSchedule(s, defaultTimeZone().tz) })),
+      schedules,
+      attentionCount: schedules.filter((s) => s.attention).length,
+      now: new Date(now).toISOString(),
       // Fixed for now: one gitbot per data dir runs every schedule.
       owner: { pid: process.pid, thisProcess: true },
     });

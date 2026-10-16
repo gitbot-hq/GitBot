@@ -2,8 +2,8 @@ import { randomUUID } from "crypto";
 import { statSync } from "fs";
 import { join } from "path";
 import { dataDir, quarantineCorrupt, readCollection, writeCollection } from "./json-store";
-import { botSetupError, getBot, getThread, isJarvisBot, threadAgent, type TurnOutcome } from "./bot-store";
-import { findProject, projectId, projectIdForFolder } from "./project-index";
+import { BOT_AGENTS, botSetupError, getBot, getThread, isJarvisBot, listBots, listThreads, threadAgent, type Bot, type Thread, type TurnOutcome } from "./bot-store";
+import { findProject, projectId, projectIdForFolder, projectNames } from "./project-index";
 import {
   countOccurrences,
   describeWhen,
@@ -731,6 +731,147 @@ export function describeSchedule(s: Pick<Schedule, "when" | "maxRuns" | "endsAt"
     s.endsAt ? `until ${localHuman(Date.parse(s.endsAt), zone)} ${zone}` : "",
   ].filter(Boolean);
   return [describeWhen(s.when, tz), ...ends].join(", ");
+}
+
+// --- The view GET /schedules lists ---
+
+/**
+ * True when the schedule runs on the Jarvis thread that made it with its own
+ * create_schedule tool, and nobody else has changed its words or re-armed it
+ * since (changedByOther): the only kind whose prompt that Jarvis takes as
+ * the user's own request (the tag's by="you"). POST /schedules always
+ * records createdBy user. A PATCH of its words or times (or a resume), or
+ * another Jarvis thread's update, marks a Jarvis-made one changedByOther for
+ * good, so its turns lose by="you" too. A run now by anyone but its creator
+ * (the route, the schedules panel, another Jarvis thread) is data for that
+ * one run only: startScheduledTurn's `byOther`.
+ */
+export function madeByThisJarvis(s: Schedule, threadId: string): boolean {
+  return s.createdBy?.kind === "jarvis" && s.createdBy.threadId === threadId && !s.changedByOther;
+}
+
+export type ScheduleWhere =
+  | { kind: "thread"; threadId: string; title: string; botId: string; botName: string; jarvis: boolean }
+  | { kind: "new-thread"; botId: string; botName: string; projectId: string; projectName: string }
+  | { kind: "missing" };
+
+export interface ScheduleAttention {
+  kind: "paused" | "failed";
+  text: string;
+  at: string;
+}
+
+/**
+ * A schedule as GET /schedules lists it: the stored record plus fields
+ * derived on every read, never stored.
+ */
+export type ScheduleView = ListedSchedule & {
+  describe: string;
+  state: "active" | "paused" | "ended";
+  /** Paused and still able to fire: Resume is offered only then. */
+  canResume: boolean;
+  where: ScheduleWhere;
+  attention?: ScheduleAttention;
+  /** madeByThisJarvis on its own target thread. */
+  ownWords: boolean;
+  nextRuns: string[];
+  history: (ScheduleRun & { botId?: string })[];
+};
+
+/** What viewSchedule reads, once per request. */
+export interface ViewContext {
+  tz: string;
+  now: number;
+  threads: Map<string, Thread>;
+  bots: Map<string, Bot>;
+  projects: Map<string, string>;
+}
+
+/** Threads, bots and project names, read once for a whole list. */
+export function viewContext(tz: string, now: number): ViewContext {
+  return {
+    tz,
+    now,
+    threads: new Map(listThreads().map((t) => [t.id, t])),
+    // Every built-in, installed or not, so old threads still name their bot.
+    bots: new Map(listBots(BOT_AGENTS).map((b) => [b.id, b])),
+    projects: projectNames(),
+  };
+}
+
+/**
+ * The run's thread hasn't been looked at since the run: no thread (a start
+ * that made none), or one last seen before it. Tied to the run itself, not
+ * the thread's other news: a failed start writes none, and later news must
+ * not bring back a failure already seen.
+ */
+function unseenSince(t: Thread | undefined, at: string): boolean {
+  return !t?.lastSeenAt || Date.parse(t.lastSeenAt) < Date.parse(at);
+}
+
+/** Its last real run failed, and the thread it failed on hasn't been seen since. */
+function failedAttention(s: Schedule, threads: Map<string, Thread>): ScheduleAttention | undefined {
+  const runs = s.history ?? [];
+  for (let i = runs.length - 1; i >= 0; i--) {
+    const r = runs[i];
+    if (r.outcome === "failed-to-start") {
+      const t = r.threadId ? threads.get(r.threadId) : undefined;
+      return unseenSince(t, r.at) ? { kind: "failed", text: "Last run failed to start", at: r.at } : undefined;
+    }
+    if (r.outcome === "started") {
+      if (r.turnOutcome !== "failed") return undefined;
+      const t = r.threadId ? threads.get(r.threadId) : undefined;
+      return unseenSince(t, r.at) ? { kind: "failed", text: "Last run failed", at: r.at } : undefined;
+    }
+  }
+  return undefined;
+}
+
+/** The schedule with its derived fields (reads only). */
+export function viewSchedule(s: ListedSchedule, ctx: ViewContext): ScheduleView {
+  let state: ScheduleView["state"] = s.enabled ? "active" : s.pausedReason ? "paused" : "ended";
+  // An unreadable `when` (hand-edited, or a later build's) can never fire
+  // here: ended, and never handed to hasEnded, which would throw.
+  if (state === "paused" && (!isUsableWhen(s.when) || hasEnded(s, ctx.now))) state = "ended";
+
+  let where: ScheduleWhere = { kind: "missing" };
+  if (s.target?.kind === "thread") {
+    const t = ctx.threads.get(s.target.threadId);
+    const bot = t && ctx.bots.get(t.botId);
+    if (t) {
+      where = { kind: "thread", threadId: t.id, title: t.title, botId: t.botId, botName: bot?.name ?? t.botId, jarvis: isJarvisBot(bot) };
+    }
+  } else if (s.target?.kind === "new-thread") {
+    const bot = ctx.bots.get(s.target.botId);
+    const projectName = ctx.projects.get(s.target.projectId);
+    if (bot && projectName) {
+      where = { kind: "new-thread", botId: bot.id, botName: bot.name, projectId: s.target.projectId, projectName };
+    }
+  }
+
+  let attention: ScheduleAttention | undefined;
+  if (state === "paused" && s.pausedReason !== PAUSED_BY_USER) {
+    attention = { kind: "paused", text: `Paused: ${s.pausedReason}`, at: s.updatedAt };
+  } else if (state !== "ended") {
+    attention = failedAttention(s, ctx.threads);
+  }
+
+  const threadId = targetThreadId(s);
+  return {
+    ...s,
+    describe: describeSchedule(s, ctx.tz),
+    state,
+    canResume: state === "paused",
+    where,
+    ...(attention ? { attention } : {}),
+    ownWords: !!threadId && madeByThisJarvis(s, threadId),
+    nextRuns: nextRunsOf(s, 3),
+    history: (s.history ?? []).map((r) => {
+      // Only from a run thread that still exists: a deleted one's link must not open some other thread.
+      const botId = r.threadId ? ctx.threads.get(r.threadId)?.botId : undefined;
+      return botId ? { ...r, botId } : r;
+    }),
+  };
 }
 
 // --- Validation and creation ---

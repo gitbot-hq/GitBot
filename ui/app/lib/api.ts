@@ -221,15 +221,32 @@ export function deleteThread(id: string) {
   });
 }
 
-/** The schedules on a thread, and those whose notes go to it (`notesHere`). */
-export function listSchedules(filter: { threadId?: string; projectId?: string } = {}) {
+/** The viewer's IANA zone, for the server's words about a once. */
+function browserZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Every schedule, or those on a thread and those whose notes go to it
+ * (`notesHere`), with the server's view fields. `tz` defaults to the browser's.
+ */
+export function listSchedules(filter: { threadId?: string; projectId?: string; tz?: string } = {}) {
   const q = new URLSearchParams();
   if (filter.threadId) q.set("threadId", filter.threadId);
   if (filter.projectId) q.set("projectId", filter.projectId);
+  const tz = filter.tz ?? browserZone();
+  if (tz) q.set("tz", tz);
   const qs = q.toString();
-  return req<{ schedules: import("./gitbot").Schedule[]; owner: { pid: number; thisProcess: boolean } }>(
-    `/schedules${qs ? `?${qs}` : ""}`,
-  );
+  return req<{
+    schedules: import("./gitbot").ScheduleView[];
+    attentionCount: number;
+    now: string;
+    owner: { pid: number; thisProcess: boolean };
+  }>(`/schedules${qs ? `?${qs}` : ""}`);
 }
 
 /** Pause or resume (`enabled`), or change `notify`. */

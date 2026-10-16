@@ -1,0 +1,118 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "fs";
+import { join } from "path";
+import type { ScheduleView } from "../ui/app/lib/gitbot";
+import { dockGroups, recentText, rowTarget, rowText, runGlyph, UP_NEXT_MAX } from "../ui/app/lib/schedule-dock";
+
+// The Scheduled dock (scheduled-dock.tsx) draws what these say.
+
+const TZ = "Europe/London";
+const NOW = Date.parse("2026-10-16T09:00:00Z");
+const at = (ms: number) => new Date(NOW + ms).toISOString();
+
+let n = 0;
+function view(extra: Partial<ScheduleView> = {}): ScheduleView {
+  n += 1;
+  return {
+    id: `s${n}`,
+    name: `S${n}`,
+    prompt: "x",
+    when: { kind: "interval", everyMinutes: 60, anchor: at(0) },
+    target: { kind: "thread", threadId: "w" },
+    createdBy: { kind: "user" },
+    enabled: true,
+    overlap: "queue",
+    notify: "always",
+    runCount: 0,
+    consecutiveFailures: 0,
+    nextRunAt: at(3_600_000),
+    history: [],
+    createdAt: at(-86_400_000),
+    updatedAt: at(-86_400_000),
+    describe: "every hour",
+    state: "active",
+    canResume: false,
+    where: { kind: "thread", threadId: "w", title: "Fix CI", botId: "builtin-claude-code", botName: "Claude Code", jarvis: false },
+    ownWords: false,
+    nextRuns: [],
+    ...extra,
+  };
+}
+
+test("dockGroups sorts attention, up next (pending first) and recent", () => {
+  const late = view({ name: "Late", nextRunAt: at(7_200_000) });
+  const soon = view({ name: "Soon", nextRunAt: at(600_000) });
+  const waiting = view({ name: "Waiting", nextRunAt: at(9_000_000), pending: { dueAt: at(-60_000) } });
+  const oldBad = view({ name: "OldBad", attention: { kind: "failed", text: "Last run failed", at: at(-7_200_000) } });
+  const newBad = view({
+    name: "NewBad",
+    enabled: false,
+    state: "paused",
+    pausedReason: "paused after 3 failed runs",
+    attention: { kind: "paused", text: "Paused: paused after 3 failed runs", at: at(-60_000) },
+  });
+  const ran = view({
+    name: "Ran",
+    history: [
+      { at: at(-2 * 86_400_000), outcome: "started", threadId: "a", turnOutcome: "done", botId: "b1" },
+      { at: at(-3_600_000), outcome: "started", threadId: "a", turnOutcome: "done", botId: "b1" },
+      { at: at(-60_000), outcome: "started", threadId: "c", turnOutcome: "failed", botId: "b2" },
+    ],
+  });
+  const g = dockGroups([late, soon, oldBad, waiting, newBad, ran], NOW);
+  assert.deepEqual(g.attention.map((s) => s.name), ["NewBad", "OldBad"]);
+  assert.deepEqual(g.upNext.map((s) => s.name), ["Waiting", "Soon", "Ran", "Late"]);
+  assert.deepEqual(g.recent.map((r) => r.run.threadId), ["c", "a"], "newest first, last 24 h only");
+  assert.equal(recentText(g.recent[0], NOW, TZ).time, "1m");
+  assert.equal(runGlyph(g.recent[0].run).glyph, "✕");
+  assert.equal(runGlyph(g.recent[1].run).glyph, "✓");
+
+  assert.equal(rowText(soon, NOW, TZ).time, "10:10");
+  assert.equal(rowText(soon, NOW, TZ).line, "Fix CI · Claude Code");
+  assert.equal(rowText(waiting, NOW, TZ).time, "waiting");
+  assert.equal(rowText(oldBad, NOW, TZ).line, "Last run failed · 08:00");
+  assert.equal(rowText(newBad, NOW, TZ).line, "Paused: paused after 3 failed runs");
+  assert.match(rowText(soon, NOW, TZ).tooltip, /every hour/);
+});
+
+test("up next caps at 5 with a more count; paused and ended are counted, not listed", () => {
+  const active = Array.from({ length: UP_NEXT_MAX + 2 }, (_, i) => view({ nextRunAt: at((i + 1) * 60_000) }));
+  const paused = view({ enabled: false, state: "paused", pausedReason: "paused by the user", canResume: true, nextRunAt: null });
+  const ended = view({ enabled: false, state: "ended", nextRunAt: null });
+  const g = dockGroups([...active, paused, ended], NOW);
+  assert.equal(g.upNext.length, UP_NEXT_MAX);
+  assert.equal(g.more, 2);
+  assert.equal(g.pausedCount, 1);
+  assert.equal(g.endedCount, 1);
+  assert.ok(!g.upNext.includes(paused) && !g.upNext.includes(ended));
+  assert.deepEqual(dockGroups([], NOW), { attention: [], upNext: [], more: 0, recent: [], pausedCount: 0, endedCount: 0 });
+});
+
+test("rowTarget: thread target, run thread, none for an unrun new-thread schedule", () => {
+  assert.deepEqual(rowTarget(view()), { botId: "builtin-claude-code", threadId: "w" });
+  const fresh = { kind: "new-thread" as const, botId: "b", botName: "Bot", projectId: "p", projectName: "demo" };
+  assert.equal(rowTarget(view({ target: { kind: "new-thread", botId: "b", projectId: "p" }, where: fresh })), null);
+  const ran = view({
+    target: { kind: "new-thread", botId: "b", projectId: "p" },
+    where: fresh,
+    history: [
+      { at: at(-7_200_000), outcome: "started", threadId: "t1", botId: "b" },
+      { at: at(-3_600_000), outcome: "started", threadId: "t2", botId: "b" },
+      { at: at(-60_000), outcome: "missed" },
+    ],
+  });
+  assert.deepEqual(rowTarget(ran), { botId: "b", threadId: "t2" });
+  assert.equal(rowText(ran, NOW, TZ).line, "new thread in demo · Bot");
+});
+
+test("dock has no model or effort words", () => {
+  const ui = join(__dirname, "..", "ui", "app");
+  for (const file of [join(ui, "components", "scheduled-dock.tsx"), join(ui, "lib", "schedule-dock.ts")]) {
+    const code = readFileSync(file, "utf-8").replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    assert.doesNotMatch(code, /\bmodel\b|\beffort\b/i, file);
+  }
+  // Mounted in the bots rail, after its scroll region.
+  const shell = readFileSync(join(ui, "components", "app-shell.tsx"), "utf-8");
+  assert.match(shell, /side-scroll-edge-bottom[\s\S]*?<ScheduledDock[\s\S]*?className="side-handle"/);
+});

@@ -6,7 +6,7 @@ import { EventEmitter } from "events";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { bindSession, createBot, createThread, dataDir, getThread, JARVIS_BOT_ID, jarvisDir, listThreads, updateThread } from "../src/bot-store";
+import { bindSession, createBot, createThread, dataDir, getThread, JARVIS_BOT_ID, jarvisDir, listThreads, markThreadSeen, setThreadActivity, updateThread } from "../src/bot-store";
 import { runningChildOf } from "../src/child-lock";
 import { watchDeferredTurns } from "../src/deferred-turns";
 import { startChildThread } from "../src/jarvis";
@@ -18,7 +18,7 @@ import { watchChildReports } from "../src/reports";
 import { Cron } from "croner";
 import { clipAtWord, ERROR_BACKOFF_MS, LATE_GRACE_MS, MIN_REARM_MS, RATE_CAP_STARTS, RATE_RETRY_MS, RATE_WINDOW_MS, schedulerClock, startScheduler, stopScheduler, TIMER_CAP_MS } from "../src/scheduler";
 import { countOccurrences, defaultTimeZone, localShort, minGapMinutes, nextOccurrence } from "../src/schedule-time";
-import { createSchedule, getSchedule, listSchedules, nextRunsOf, SCHEDULES_MAX, SCHEDULES_PER_THREAD_MAX, updateSchedule, type Schedule } from "../src/schedules";
+import { createSchedule, getSchedule, listSchedules, madeByThisJarvis, nextRunsOf, SCHEDULES_MAX, SCHEDULES_PER_THREAD_MAX, updateSchedule, type Schedule } from "../src/schedules";
 import {
   buildSessionsDump,
   emitEvent,
@@ -3979,4 +3979,176 @@ test("GET /schedules?projectId filters by project", async (t) => {
   assert.deepEqual(both.body.schedules, []);
   const unknown = await serve("GET", "/schedules?projectId=p-0000000000");
   assert.equal(unknown.status, 400);
+});
+
+// --- The view fields of GET /schedules (sidebar 01) ---
+
+test("GET /schedules adds where, state, canResume, attention, ownWords and nextRuns", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const w = plainThread("Fix CI");
+  const p = project();
+  const every = await serve("POST", "/schedules", {
+    name: "Morning", prompt: "Hi.", when: { kind: "interval", everyMinutes: 60 }, target: { kind: "thread", threadId: w.id },
+  });
+  const fresh = await serve("POST", "/schedules", {
+    name: "Fresh", prompt: "Audit.", when: { kind: "interval", everyMinutes: 60 },
+    target: { kind: "new-thread", botId: "builtin-claude-code", projectId: p.id },
+  });
+  const gone = plainThread("Gone");
+  const lost = await scheduleOnce(gone.id, 90_000, { name: "Lost" });
+  updateSchedule(lost.id, (s) => { s.target = { kind: "thread", threadId: "t-nope" }; });
+
+  const got = await serve("GET", "/schedules");
+  assert.equal(got.status, 200);
+  assert.equal(got.body.now, atIso(now));
+  assert.equal(got.body.attentionCount, 0);
+  const by = (id: string) => got.body.schedules.find((s: any) => s.id === id);
+  const m = by(every.body.id);
+  assert.equal(m.state, "active");
+  assert.equal(m.canResume, false);
+  assert.deepEqual(m.where, { kind: "thread", threadId: w.id, title: "Fix CI", botId: "builtin-claude-code", botName: "Claude Code", jarvis: false });
+  assert.equal(m.ownWords, false);
+  assert.equal(m.nextRuns.length, 3);
+  assert.equal("attention" in m, false);
+  const f = by(fresh.body.id);
+  assert.equal(f.where.kind, "new-thread");
+  assert.equal(f.where.botName, "Claude Code");
+  assert.equal(f.where.projectId, p.id);
+  assert.equal(typeof f.where.projectName, "string");
+  assert.deepEqual(by(lost.id).where, { kind: "missing" });
+
+  // A run's botId: the run thread's bot.
+  updateSchedule(every.body.id, (s) => { s.history.push({ at: atIso(now - 1000), outcome: "started", threadId: w.id, turnOutcome: "done" }); });
+  const again = await serve("GET", "/schedules");
+  assert.equal(again.body.schedules.find((s: any) => s.id === every.body.id).history[0].botId, "builtin-claude-code");
+  // A deleted run thread gets no botId, so nothing links to it.
+  updateSchedule(every.body.id, (s) => { s.history.push({ at: atIso(now - 500), outcome: "started", threadId: "t-deleted", turnOutcome: "done" }); });
+  const third = await serve("GET", "/schedules");
+  const hist = third.body.schedules.find((s: any) => s.id === every.body.id).history;
+  assert.equal(hist[1].threadId, "t-deleted");
+  assert.equal("botId" in hist[1], false);
+});
+
+test("a paused once past its time is ended and cannot resume", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const w = plainThread();
+  const once = await scheduleOnce(w.id, 90_000);
+  assert.equal((await serve("PATCH", `/schedules/${once.id}`, { enabled: false })).status, 200);
+  let got = (await serve("GET", "/schedules")).body.schedules[0];
+  assert.equal(got.state, "paused");
+  assert.equal(got.canResume, true);
+  now += 120_000;
+  got = (await serve("GET", "/schedules")).body.schedules[0];
+  assert.equal(got.state, "ended");
+  assert.equal(got.canResume, false);
+  assert.equal(got.attention, undefined);
+});
+
+test("attention: system pause yes, user pause no, failed run only while its thread is unread", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const w = plainThread("W");
+  const sys = await serve("POST", "/schedules", { name: "Sys", prompt: "x", when: { kind: "interval", everyMinutes: 60 }, target: { kind: "thread", threadId: w.id } });
+  const usr = await serve("POST", "/schedules", { name: "Usr", prompt: "x", when: { kind: "interval", everyMinutes: 60 }, target: { kind: "thread", threadId: w.id } });
+  const bad = await serve("POST", "/schedules", { name: "Bad", prompt: "x", when: { kind: "interval", everyMinutes: 60 }, target: { kind: "thread", threadId: w.id } });
+  updateSchedule(sys.body.id, (s) => { s.enabled = false; s.nextRunAt = null; s.pausedReason = "paused after 3 failed runs"; });
+  assert.equal((await serve("PATCH", `/schedules/${usr.body.id}`, { enabled: false })).status, 200);
+  const runAt = atIso(now - 5000);
+  updateSchedule(bad.body.id, (s) => { s.history.push({ at: runAt, outcome: "started", threadId: w.id, turnOutcome: "failed" }); });
+  setThreadActivity(w.id, atIso(now - 1000), "it broke", "failed");
+
+  let list = await serve("GET", "/schedules");
+  const by = (id: string) => list.body.schedules.find((s: any) => s.id === id);
+  assert.deepEqual(by(sys.body.id).attention?.kind, "paused");
+  assert.equal(by(sys.body.id).attention.text, "Paused: paused after 3 failed runs");
+  assert.equal(by(usr.body.id).attention, undefined);
+  assert.deepEqual(by(bad.body.id).attention, { kind: "failed", text: "Last run failed", at: runAt });
+  assert.equal(list.body.attentionCount, 2);
+
+  // Opening the thread clears the failed one.
+  markThreadSeen(w.id, atIso(now));
+  list = await serve("GET", "/schedules");
+  assert.equal(by(bad.body.id).attention, undefined);
+  assert.equal(list.body.attentionCount, 1);
+
+  // A failed-to-start with no thread needs attention; a later good run clears it.
+  updateSchedule(bad.body.id, (s) => { s.history.push({ at: atIso(now), outcome: "failed-to-start", error: "gone" }); });
+  list = await serve("GET", "/schedules");
+  assert.equal(by(bad.body.id).attention?.text, "Last run failed to start");
+  updateSchedule(bad.body.id, (s) => { s.history.push({ at: atIso(now + 1), outcome: "started", threadId: w.id, turnOutcome: "done" }); });
+  list = await serve("GET", "/schedules");
+  assert.equal(by(bad.body.id).attention, undefined);
+});
+
+test("describe honours ?tz and ignores a bad zone", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const w = plainThread();
+  await serve("POST", "/schedules", { name: "Once", prompt: "x", when: { kind: "once", at: "2099-01-15T12:00:00Z" }, target: { kind: "thread", threadId: w.id } });
+  await serve("POST", "/schedules", { name: "Cron", prompt: "x", when: { kind: "cron", expr: "0 9 * * *", tz: "America/New_York" }, target: { kind: "thread", threadId: w.id } });
+  const tokyo = (await serve("GET", "/schedules?tz=Asia/Tokyo")).body.schedules;
+  assert.match(tokyo[0].describe, /21:00 Asia\/Tokyo$/);
+  assert.match(tokyo[1].describe, /America\/New_York$/, "a cron keeps its own zone");
+  const bad = (await serve("GET", "/schedules?tz=Not/AZone")).body.schedules;
+  assert.match(bad[0].describe, new RegExp(`${defaultTimeZone().tz.replace("/", "\\/")}$`));
+});
+
+test("ownWords only for a Jarvis-made schedule on its own thread without changedByOther", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const jarvis = jarvisThread();
+  const worker = plainThread("Worker");
+  const own = createScheduleForJarvis(jarvis.id, { name: "Own", prompt: "Do it.", when: { every_minutes: 60 }, target: "this_thread" });
+  const other = createScheduleForJarvis(jarvis.id, { name: "Other", prompt: "Do it.", when: { every_minutes: 60 }, target: { threadId: worker.id } });
+  assert.ok(own.ok && other.ok);
+  const user = await serve("POST", "/schedules", { name: "Usr", prompt: "x", when: { kind: "interval", everyMinutes: 60 }, target: { kind: "thread", threadId: jarvis.id } });
+  let list = (await serve("GET", "/schedules")).body.schedules;
+  const by = (id: string) => list.find((s: any) => s.id === id);
+  assert.equal(by(own.id).ownWords, true);
+  assert.equal(by(own.id).where.jarvis, true);
+  assert.equal(by(own.id).where.botName, "Jarvis");
+  assert.equal(by(other.id).ownWords, false);
+  assert.equal(by(user.body.id).ownWords, false);
+  assert.equal(madeByThisJarvis(getSchedule(own.id)!, jarvis.id), true);
+  assert.equal((await serve("PATCH", `/schedules/${own.id}`, { name: "Renamed" })).status, 200);
+  list = (await serve("GET", "/schedules")).body.schedules;
+  assert.equal(by(own.id).ownWords, false);
+});
+
+test("one paused schedule with an unreadable when doesn't break the list: it is ended", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const w = plainThread();
+  const ok = await serve("POST", "/schedules", { name: "Ok", prompt: "x", when: { kind: "interval", everyMinutes: 60 }, target: { kind: "thread", threadId: w.id } });
+  const bad = await serve("POST", "/schedules", { name: "Bad", prompt: "x", when: { kind: "cron", expr: "0 9 * * *", tz: "UTC" }, target: { kind: "thread", threadId: w.id } });
+  const gone = await serve("POST", "/schedules", { name: "Gone", prompt: "x", when: { kind: "interval", everyMinutes: 60 }, target: { kind: "thread", threadId: w.id } });
+  updateSchedule(bad.body.id, (s) => { s.enabled = false; s.nextRunAt = null; s.pausedReason = "paused by the user"; (s.when as any).expr = "not a cron"; });
+  updateSchedule(gone.body.id, (s) => { s.enabled = false; s.nextRunAt = null; s.pausedReason = "paused by the user"; delete (s as any).when; });
+  const got = await serve("GET", "/schedules");
+  assert.equal(got.status, 200, JSON.stringify(got.body));
+  const by = (id: string) => got.body.schedules.find((s: any) => s.id === id);
+  assert.equal(by(ok.body.id).state, "active");
+  for (const id of [bad.body.id, gone.body.id]) {
+    assert.equal(by(id).state, "ended");
+    assert.equal(by(id).canResume, false);
+    assert.equal(by(id).describe, "a schedule this build cannot read");
+  }
+});
+
+test("attention for a failed run is tied to the run: a failed start on a read thread shows, seen news doesn't bring it back", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const w = plainThread("W");
+  const sch = await serve("POST", "/schedules", { name: "S", prompt: "x", when: { kind: "interval", everyMinutes: 60 }, target: { kind: "thread", threadId: w.id } });
+  // The thread was read before the run; a failed start writes no news to it.
+  markThreadSeen(w.id, atIso(now - 60_000));
+  updateSchedule(sch.body.id, (s) => { s.history.push({ at: atIso(now - 1000), outcome: "failed-to-start", threadId: w.id, error: "agent missing" }); });
+  const list = async () => (await serve("GET", "/schedules")).body.schedules[0];
+  assert.equal((await list()).attention?.text, "Last run failed to start");
+  // Seen since: cleared.
+  markThreadSeen(w.id, atIso(now));
+  assert.equal((await list()).attention, undefined);
+  // Later unrelated news on the thread doesn't bring the old failure back.
+  setThreadActivity(w.id, atIso(now + 5000), "something else", "done");
+  assert.equal((await list()).attention, undefined);
+  // A failed started run, then the thread read before it: shows; seen after: gone.
+  updateSchedule(sch.body.id, (s) => { s.history.push({ at: atIso(now + 10_000), outcome: "started", threadId: w.id, turnOutcome: "failed" }); });
+  assert.equal((await list()).attention?.text, "Last run failed");
+  markThreadSeen(w.id, atIso(now + 20_000));
+  assert.equal((await list()).attention, undefined);
 });

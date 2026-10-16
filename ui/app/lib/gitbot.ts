@@ -118,6 +118,30 @@ export type Schedule = {
   describe?: string;
 };
 
+/** Where a schedule runs, named (GET /schedules). */
+export type ScheduleWhere =
+  | { kind: "thread"; threadId: string; title: string; botId: string; botName: string; jarvis: boolean }
+  | { kind: "new-thread"; botId: string; botName: string; projectId: string; projectName: string }
+  | { kind: "missing" };
+
+/** Why a schedule needs the user: a pause they didn't make, or a failed run still unread. */
+export type ScheduleAttention = { kind: "paused" | "failed"; text: string; at: string };
+
+/**
+ * A schedule as GET /schedules lists it: the record plus fields the server
+ * derives on every read (src/schedules.ts, viewSchedule).
+ */
+export type ScheduleView = Omit<Schedule, "history"> & {
+  describe: string;
+  state: "active" | "paused" | "ended";
+  canResume: boolean;
+  where: ScheduleWhere;
+  attention?: ScheduleAttention;
+  ownWords: boolean;
+  nextRuns: string[];
+  history: (ScheduleRun & { botId?: string })[];
+};
+
 /** One line of the agent's own plan, as TodoWrite writes it. `activeForm` is
  *  the present-continuous wording ("Running tests"), which is what a status
  *  line wants; `content` is the imperative form, and the fallback. */
