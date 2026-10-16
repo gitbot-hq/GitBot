@@ -610,6 +610,7 @@ export default function Chat({
   lock,
   approvals,
   onReviewApproval,
+  covered = false,
 }: {
   thread: ThreadFull | null;
   /** Jarvis threads: its children's approvals, each a row placed among the
@@ -667,6 +668,9 @@ export default function Chat({
   /** Present while this bot is preparing the current machine. Setup uses
    *  the chat transport, but is rendered as activation rather than a thread. */
   setup?: SetupMode;
+  /** Something covers the chat (a pane, a drawer, a modal): its Escape is
+   *  theirs, never "stop the turn". */
+  covered?: boolean;
 }) {
   // An explicit thread choice wins over the bot's, matching the server.
   const agent = thread?.agent ?? botAgent ?? "claude-code";
@@ -900,7 +904,7 @@ export default function Chat({
   }, [thread?.id]);
 
   useEffect(() => {
-    if (!streaming || activeMenu || setup) {
+    if (!streaming || activeMenu || setup || covered) {
       escapeStopArmedRef.current = false;
       setEscapeStopArmed(false);
       if (escapeStopTimer.current) window.clearTimeout(escapeStopTimer.current);
@@ -926,7 +930,7 @@ export default function Chat({
       document.removeEventListener("keydown", confirmStop);
       if (escapeStopTimer.current) window.clearTimeout(escapeStopTimer.current);
     };
-  }, [streaming, activeMenu, setup]);
+  }, [streaming, activeMenu, setup, covered]);
 
   useEffect(() => {
     if (activeMenu !== "more") return;

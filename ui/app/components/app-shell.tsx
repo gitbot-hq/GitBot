@@ -30,6 +30,7 @@ import ThreadPanel from "./thread-panel";
 import JarvisChildren from "./jarvis-children";
 import SchedulesPanel from "./schedules-panel";
 import ScheduledDock from "./scheduled-dock";
+import SchedulesView from "./schedules-view";
 import { IconClock } from "@tabler/icons-react";
 import OnboardingFlow from "./onboarding-flow";
 import ThemeButton from "./theme-button";
@@ -55,7 +56,7 @@ import {
   markThreadSeen,
   postAbort,
 } from "../lib/api";
-import { onOpenThreadMessage, takeThreadFromUrl, type OpenThreadRequest } from "../lib/push";
+import { onOpenScheduleMessage, onOpenThreadMessage, takeScheduleFromUrl, takeThreadFromUrl, type OpenThreadRequest } from "../lib/push";
 import { getAvatarPref, setAvatarPref, resolveAvatar, defaultMascotFor, type AvatarPref } from "../lib/avatar-prefs";
 import { JARVIS_BOT_ID, type Bot, type ThreadFull } from "../lib/gitbot";
 import { setupPrompt, type SetupRunKind } from "../lib/setup";
@@ -203,6 +204,10 @@ export default function V2() {
   // User profile: generic default until set; stored on this device only.
   const { user, saveUser: savedUser } = useUserProfile();
   const [userOpen, setUserOpen] = useState(false);
+  // The Schedules view over the tray: `focusId` is a deep link's card; `key`
+  // remounts it on each open (a new link scrolls again).
+  const [schedulesView, setSchedulesView] = useState<{ focusId?: string; key: number } | null>(null);
+  const schedulesTriggerRef = useRef<HTMLElement | null>(null);
   const { toast, view: toastView } = useToast();
   // Narrow screens (≤900px): the Bots and Threads columns become slide-in
   // panels, opened from the chat's header row. Never set on desktop.
@@ -343,6 +348,15 @@ export default function V2() {
     const fromUrl = takeThreadFromUrl();
     if (fromUrl) open(fromUrl);
     return onOpenThreadMessage(open);
+  }, []);
+  // The same for a schedule: `/?schedules`, `/?schedule=<id>` (a pause push
+  // with no thread to open), or that push clicked while this tab is open.
+  const openSchedulesRef = useRef(openSchedules);
+  openSchedulesRef.current = openSchedules;
+  useEffect(() => {
+    const fromUrl = takeScheduleFromUrl();
+    if (fromUrl) openSchedulesRef.current(fromUrl.scheduleId);
+    return onOpenScheduleMessage((link) => openSchedulesRef.current(link.scheduleId));
   }, []);
 
   /** Re-reads the installed agents. A failed read keeps what was known. */
@@ -681,7 +695,7 @@ export default function V2() {
   // (where opening a thread lands). Scrolled up in it, the latest is not
   // seen yet; leaving the thread for another (below) counts as seen.
   const [chatAtLatest, setChatAtLatest] = useState(true);
-  const chatCovered = !!(mobilePanel || threadPanel || editing || showProfile || userOpen || modal || learnMore);
+  const chatCovered = !!(mobilePanel || threadPanel || editing || showProfile || userOpen || modal || learnMore || schedulesView);
   const chatOnScreen = tabVisible && !chatCovered;
   // Where the user is, for the server's push decisions: the open thread,
   // unless something covers it (src/presence.ts; focus and idle are the hook's).
@@ -884,14 +898,14 @@ export default function V2() {
   // panel, modals) takes over from a panel. Focus left in the panel would
   // fall to the page, so it moves into the overlay; modals place their own.
   useEffect(() => {
-    if (!mobilePanel || !(threadPanel || editing || showProfile || userOpen || modal || learnMore)) return;
+    if (!mobilePanel || !(threadPanel || editing || showProfile || userOpen || modal || learnMore || schedulesView)) return;
     const panel = mobilePanel === "bots" ? sideRef.current : threadsAsideRef.current;
     const cover = threadPanel ? ".thread-overlay" : editing ? ".form-overlay" : showProfile ? ".profile-overlay" : userOpen ? ".tray .user-overlay" : null;
     if (cover && panel?.contains(document.activeElement)) {
       afterPanelClose.current = () => focusFirst(document.querySelector(`.page-body ${cover}`));
     }
     setMobilePanel(null);
-  }, [mobilePanel, threadPanel, editing, showProfile, userOpen, modal, learnMore]);
+  }, [mobilePanel, threadPanel, editing, showProfile, userOpen, modal, learnMore, schedulesView]);
 
   // Widening past the breakpoint puts the columns back in place.
   useEffect(() => {
@@ -969,6 +983,7 @@ export default function V2() {
     if (!userOpen) {
       setThreadPanel(false);
       setProfileId(null);
+      setSchedulesView(null);
     }
     setUserOpen((open) => !open);
   }
@@ -987,6 +1002,7 @@ export default function V2() {
     dismissLearnMore();
     setThreadPanel(false);
     setUserOpen(false);
+    setSchedulesView(null);
     setProfileId(id);
   }
 
@@ -994,6 +1010,7 @@ export default function V2() {
     dismissLearnMore();
     setThreadPanel(false);
     setUserOpen(false);
+    setSchedulesView(null);
     setEditing(target);
   }
 
@@ -1005,6 +1022,7 @@ export default function V2() {
     }
     setUserOpen(false);
     setProfileId(null);
+    setSchedulesView(null);
     // Jarvis has nothing to choose: a new thread is just its open composer.
     if (bot.builtin === "jarvis") {
       if (jarvisBlocked) return;
@@ -1292,19 +1310,41 @@ export default function V2() {
     storeDockOpen(true);
   }
 
-  /** The collapsed rail's clock: expand the rail, with the dock open. */
-  function expandToSchedules() {
-    if (!dockOpen) {
-      setDockOpen(true);
-      storeDockOpen(true);
+  /**
+   * Opens the Schedules view (one at a time with the other panes over the
+   * chat), at a schedule's card when given. Focus returns to what opened it.
+   */
+  function openSchedules(focusId?: string) {
+    dismissLearnMore();
+    setThreadPanel(false);
+    setUserOpen(false);
+    setProfileId(null);
+    const opener = document.activeElement;
+    if (opener instanceof HTMLElement && opener !== document.body && !opener.closest(".schedules-overlay")) {
+      schedulesTriggerRef.current = opener;
     }
-    toggleCollapse();
+    setSchedulesView((prev) => ({ focusId, key: (prev?.key ?? 0) + 1 }));
   }
+
+  /** Back or Escape: the view closes and focus goes back to its opener, if still on the page. */
+  const closeSchedules = useCallback(() => {
+    setSchedulesView(null);
+    // A guard: the tray itself never scrolls; if anything scrolled it while
+    // the view was open, the chat would stay shifted behind it.
+    const tray = document.querySelector<HTMLElement>(".page-body > .tray");
+    if (tray) tray.scrollTop = 0;
+    const opener = schedulesTriggerRef.current;
+    schedulesTriggerRef.current = null;
+    requestAnimationFrame(() => {
+      if (opener?.isConnected) opener.focus({ preventScroll: true });
+    });
+  }, []);
 
   /** Opens a thread under its own bot, as picking the bot and then the thread would. */
   function openThread(botId: string, threadId: string) {
     dismissLearnMore();
     setUserOpen(false);
+    setSchedulesView(null);
     setSelectedId(botId);
     setThreadByBot((prev) => ({ ...prev, [botId]: threadId }));
   }
@@ -1568,6 +1608,7 @@ export default function V2() {
               refreshKey={scheduleTick}
               attentionCount={threadSessions.schedules?.attentionCount}
               onOpen={openFromDock}
+              onShowAll={openSchedules}
               onAutoOpen={autoOpenDock}
               onError={toast}
             />
@@ -1576,7 +1617,7 @@ export default function V2() {
             <button
               type="button"
               className="collapse-btn collapsed-schedules fade-in-slow"
-              onClick={expandToSchedules}
+              onClick={() => openSchedules()}
               aria-label={scheduleAttention > 0 ? `Show schedules, ${scheduleAttentionText(scheduleAttention)}` : "Show schedules"}
               data-tip="Scheduled"
             >
@@ -1776,7 +1817,7 @@ export default function V2() {
               <button type="button" className="mobile-scrim" onClick={() => closeMobilePanel()} aria-label="Close threads" tabIndex={-1} />
             )}
             <div className={threadPanel ? "chat-col panel-open" : "chat-col"}>
-              <div className="mobile-chat-head" inert={!!(threadPanel || editing || showProfile || userOpen)}>
+              <div className="mobile-chat-head" inert={!!(threadPanel || editing || showProfile || userOpen || schedulesView)}>
                 <button
                   ref={botsToggleRef}
                   type="button"
@@ -1812,12 +1853,14 @@ export default function V2() {
                   threadId={activeThread.id}
                   version={threadSessions.schedules?.version}
                   onOpen={openThread}
+                  onShowAll={() => openSchedules()}
                   onChanged={quietRefresh}
                   onError={toast}
                 />
               )}
               <Chat
                 thread={activeThread}
+                covered={chatCovered}
                 serverStatus={activeThread ? threadSessions.statuses[activeThread.id] : undefined}
                 lock={chatLock}
                 approvals={chatApprovals}
@@ -1897,7 +1940,7 @@ export default function V2() {
             {editing && (
               <div className="form-pane">
                 <BotForm
-                  active={!modal && !userOpen && !learnMore}
+                  active={!modal && !userOpen && !learnMore && !schedulesView}
                   key={editing === "new" ? "new" : editing.id}
                   bot={editing === "new" ? null : editing}
                   onClose={() => {
@@ -1921,6 +1964,19 @@ export default function V2() {
                 user={user}
                 onBack={() => setUserOpen(false)}
                 onSaved={savedUser}
+              />
+            )}
+          </ProfilePanelOverlay>
+          <ProfilePanelOverlay open={!!schedulesView} className="schedules-overlay">
+            {schedulesView && (
+              <SchedulesView
+                key={schedulesView.key}
+                focusId={schedulesView.focusId}
+                active={!modal && !learnMore}
+                refreshKey={scheduleTick}
+                onBack={closeSchedules}
+                onOpen={openThread}
+                onError={toast}
               />
             )}
           </ProfilePanelOverlay>

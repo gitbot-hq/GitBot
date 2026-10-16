@@ -3,7 +3,7 @@
 // are tested without a browser. No model or effort anywhere: a schedule has
 // none, and a run's thread shows its own.
 
-import type { Schedule, ScheduleNotify, ScheduleRun, ThreadFull } from "./gitbot";
+import type { Schedule, ScheduleNotify, ScheduleRun, ScheduleView, ThreadFull } from "./gitbot";
 
 /** Runs the panel lists per schedule, newest first. */
 export const PANEL_RUNS = 5;
@@ -166,3 +166,50 @@ export function scheduleActions(s: Pick<Schedule, "enabled" | "pausedReason"> & 
 export function panelLabel(count: number): string {
   return count === 1 ? "1 schedule" : `${count} schedules`;
 }
+
+/** The card's next runs (the server's 3), in the viewer's zone; null when it won't fire. */
+export function nextRunsText(
+  s: Pick<ScheduleView, "nextRuns" | "state">,
+  now: number = Date.now(),
+  timeZone?: string,
+): string | null {
+  if (s.state !== "active" || !s.nextRuns?.length) return null;
+  return s.nextRuns.map((at) => shortTime(at, now, timeZone)).join(" · ");
+}
+
+export type CardLink = { botId: string; threadId: string };
+
+/**
+ * Where the card says it runs. `threadId`: the thread whose panel shows the
+ * card; a schedule running there says nothing.
+ */
+export function cardWhere(
+  s: Pick<ScheduleView, "where">,
+  threadId?: string,
+): { lead: string; title?: string; tail?: string; link?: CardLink } | null {
+  const w = s.where;
+  if (w.kind === "thread") {
+    if (w.threadId === threadId) return null;
+    return { lead: "runs on", title: w.title, tail: w.botName, link: { botId: w.botId, threadId: w.threadId } };
+  }
+  if (w.kind === "new-thread") return { lead: `a new thread each run in ${w.projectName} · ${w.botName}` };
+  return { lead: "its target is gone" };
+}
+
+/** Who made it: "Made by Jarvis in <thread>" (linked), "Made by you". */
+export function madeBy(
+  s: Pick<ScheduleView, "createdBy" | "createdIn">,
+  threadId?: string,
+): { lead: string; title?: string; link?: CardLink } {
+  const by = s.createdBy;
+  if (by?.kind === "jarvis") {
+    if (by.threadId === threadId) return { lead: "Made by Jarvis in this thread" };
+    const t = s.createdIn;
+    if (!t) return { lead: "Made by Jarvis (its thread is gone)" };
+    return { lead: "Made by Jarvis in", title: t.title, link: { botId: t.botId, threadId: t.threadId } };
+  }
+  return { lead: by?.remote ? `Made by you (${by.remote.replace(/^::ffff:/, "")})` : "Made by you" };
+}
+
+/** On a card Jarvis acts on as the user's own words (ownWords). */
+export const OWN_WORDS_HINT = "Jarvis acts on this as your request";

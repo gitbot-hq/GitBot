@@ -16,7 +16,10 @@ import {
   rowText,
   runGlyph,
   scheduleAttentionText,
+  scheduleLinkOf,
+  endedText,
   UP_NEXT_MAX,
+  viewGroups,
 } from "../ui/app/lib/schedule-dock";
 
 // The Scheduled dock (scheduled-dock.tsx) draws what these say.
@@ -181,4 +184,45 @@ test("row menu items: once shows keeps-time label, ended shows no resume", () =>
   // An unrun new-thread schedule has no thread to open.
   const fresh = view({ target: { kind: "new-thread", botId: "b", projectId: "p" } as any, where: { kind: "new-thread", botId: "b", botName: "B", projectId: "p", projectName: "P" } });
   assert.deepEqual(actions(fresh), ["run", "pause"]);
+});
+
+test("view groups: attention, active, paused, ended with counts", () => {
+  // Every schedule lands in exactly one group, each sorted as in the dock;
+  // the active one is uncapped.
+  const active = Array.from({ length: UP_NEXT_MAX + 2 }, (_, i) => view({ nextRunAt: at((UP_NEXT_MAX + 2 - i) * 60_000) }));
+  const waiting = view({ pending: { dueAt: at(-60_000) } });
+  const broken = view({
+    enabled: false, state: "paused", pausedReason: "paused after 3 failed runs: gone", canResume: true, nextRunAt: null,
+    attention: { kind: "paused", text: "Paused: paused after 3 failed runs: gone", at: at(-600_000) },
+  });
+  const failed = view({ attention: { kind: "failed", text: "Last run failed", at: at(-60_000) } });
+  const oldPause = view({ enabled: false, state: "paused", pausedReason: "paused by the user", canResume: true, nextRunAt: null, updatedAt: at(-7_200_000) });
+  const newPause = view({ enabled: false, state: "paused", pausedReason: "paused by the user", canResume: true, nextRunAt: null, updatedAt: at(-60_000) });
+  const ended = view({ enabled: false, state: "ended", nextRunAt: null });
+  const g = viewGroups([...active, waiting, broken, failed, oldPause, newPause, ended]);
+  assert.deepEqual(g.attention, [failed, broken], "newest attention first");
+  assert.equal(g.active.length, UP_NEXT_MAX + 3, "uncapped");
+  assert.equal(g.active[0], waiting, "a waiting fire first");
+  assert.deepEqual(g.active.slice(1), [...active].reverse(), "then the soonest next run");
+  assert.deepEqual(g.paused, [newPause, oldPause], "most recently paused first");
+  assert.deepEqual(g.ended, [ended]);
+  assert.equal(endedText(g.ended.length), "1 ended");
+  const total = g.attention.length + g.active.length + g.paused.length + g.ended.length;
+  assert.equal(total, active.length + 6);
+  assert.deepEqual(viewGroups([]), { attention: [], active: [], paused: [], ended: [] });
+});
+
+test("deep links: ?schedules opens the view, ?schedule=<id> one card", () => {
+  assert.deepEqual(scheduleLinkOf("?schedules"), {});
+  assert.deepEqual(scheduleLinkOf("?schedule=s-abc"), { scheduleId: "s-abc" });
+  assert.deepEqual(scheduleLinkOf("?schedule="), {}, "an empty id still opens the view");
+  assert.equal(scheduleLinkOf("?thread=t1&bot=b"), null);
+  assert.equal(scheduleLinkOf(""), null);
+});
+
+test("the dock links paused, more and unrun new-thread rows to the Schedules view", () => {
+  const src = readFileSync(join(__dirname, "..", "ui", "app", "components", "scheduled-dock.tsx"), "utf-8");
+  assert.match(src, /target \? go\(target\) : onShowAll\(s\.id\)/);
+  assert.match(src, /See all schedules →/);
+  assert.match(src, /\{groups\.pausedCount\} paused/);
 });

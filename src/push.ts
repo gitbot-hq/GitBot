@@ -408,6 +408,8 @@ export interface PushPayload {
   botId?: string;
   /** For "notify": the Jarvis thread that sent it, when the click opens another. */
   fromThreadId?: string;
+  /** A schedule's pause with no thread to open: the click opens its card (`/?schedule=<id>`). */
+  scheduleId?: string;
 }
 
 /** The send call. A seam: tests swap it to record instead of reaching a push service. */
@@ -450,7 +452,9 @@ export function sendToAll(payload: PushPayload): Promise<SendResult> {
 /** What a notification is, for the log: kind, title and the thread it opens. */
 export function pushLogLabel(payload: PushPayload): string {
   const where = payload.threadId ? `thread ${payload.threadId}` : payload.tag;
-  return `${payload.kind} "${capLabel(payload.title ?? "")}" (${where})`;
+  // No thread: where the click goes instead (a schedule's card), when not just the app.
+  const opens = !payload.threadId && payload.url && payload.url !== "/" ? ` ${payload.url}` : "";
+  return `${payload.kind} "${capLabel(payload.title ?? "")}" (${where})${opens}`;
 }
 
 /** A subscription for the log: no endpoint, no keys. */
@@ -889,7 +893,8 @@ let cancelHeldPush: (tag: string) => void = () => {};
 
 /**
  * The push for a schedule that paused itself (scheduler.ts): kind "failed",
- * titled with the schedule's name, opening its thread. Its tag is the
+ * titled with the schedule's name, opening its thread, or with no thread
+ * (left), its card: `/?schedule=<id>`. Its tag is the
  * thread's (`thread-<id>`), so it replaces any finished/failed push of that
  * thread, and the scheduled turn whose failure paused it sends no "failed"
  * push of its own (EndedTurn.schedulePaused): one notification for the turn,
@@ -902,14 +907,15 @@ let cancelHeldPush: (tag: string) => void = () => {};
  */
 export function sendSchedulePausedPush(pause: { id: string; name: string; threadId?: string; body: string }): void {
   const thread = pause.threadId ? getThread(pause.threadId) : undefined;
+  // No thread to open (a new-thread schedule that never made one, or its
+  // thread is gone): the click opens the schedule's card in the Schedules view.
   const payload: PushPayload = {
     title: pause.name,
     body: pause.body,
     tag: pause.threadId ? `thread-${pause.threadId}` : `schedule-${pause.id}`,
-    url: threadUrl(thread?.id, thread?.botId),
+    url: thread ? threadUrl(thread.id, thread.botId) : `/?${new URLSearchParams({ schedule: pause.id })}`,
     kind: "failed",
-    ...(pause.threadId ? { threadId: pause.threadId } : {}),
-    ...(thread ? { botId: thread.botId } : {}),
+    ...(thread ? { threadId: thread.id, botId: thread.botId } : { scheduleId: pause.id }),
   };
   if (!pushEnabled()) {
     logPushSkipped(payload, SKIP_PUSH_OFF);

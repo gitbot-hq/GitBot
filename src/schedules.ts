@@ -799,6 +799,8 @@ export type ScheduleView = ListedSchedule & {
   attention?: ScheduleAttention;
   /** madeByThisJarvis on its own target thread. */
   ownWords: boolean;
+  /** The Jarvis thread that made it, while that thread exists (the card links it). */
+  createdIn?: { threadId: string; title: string; botId: string };
   nextRuns: string[];
   history: (ScheduleRun & { botId?: string })[];
 };
@@ -882,6 +884,7 @@ export function viewSchedule(s: ListedSchedule, ctx: ViewContext): ScheduleView 
   }
 
   const threadId = targetThreadId(s);
+  const maker = s.createdBy?.kind === "jarvis" ? ctx.threads.get(s.createdBy.threadId) : undefined;
   return {
     ...s,
     describe: describeSchedule(s, ctx.tz),
@@ -890,6 +893,7 @@ export function viewSchedule(s: ListedSchedule, ctx: ViewContext): ScheduleView 
     where,
     ...(attention ? { attention } : {}),
     ownWords: !!threadId && madeByThisJarvis(s, threadId),
+    ...(maker ? { createdIn: { threadId: maker.id, title: maker.title, botId: maker.botId } } : {}),
     nextRuns: nextRunsOf(s, 3),
     history: (s.history ?? []).map((r) => {
       // Only from a run thread that still exists: a deleted one's link must not open some other thread.

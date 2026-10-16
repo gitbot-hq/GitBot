@@ -34,6 +34,7 @@ import {
   pushSender,
   removeSubscriptions,
   resetVapidCache,
+  sendSchedulePausedPush,
   watchPush,
   type PushPayload,
   validPushSubject,
@@ -1874,4 +1875,47 @@ test("a scheduled turn on a Jarvis thread that used notify gets no duplicate don
   assert.equal(sent.length, 1);
   await endTurn(store);
   assert.equal(sent.length, 1, "no ⏰ finished push after its own notification");
+});
+
+// --- A schedule's pause push (scheduler.ts calls it) ---
+
+test("a pause push with no thread links to /?schedule=<id>", async () => {
+  const lines: string[] = [];
+  const log = console.log;
+  const thread = plainThread("Sched");
+  console.log = (...args: unknown[]) => { lines.push(args.join(" ")); };
+  try {
+    // Nobody subscribed: skipped, and the log line says where it would open.
+    sendSchedulePausedPush({ id: "s-abc", name: "Audit", body: "⏰ Audit paused after 3 failed runs" });
+    assert.ok(
+      lines.some((l) => l.startsWith("[push] skipped") && l.includes("(schedule-s-abc) /?schedule=s-abc")),
+      lines.join("\n"),
+    );
+
+    await subscribe("a");
+    // A new-thread schedule that never made a thread.
+    sendSchedulePausedPush({ id: "s-abc", name: "Audit", body: "⏰ Audit paused after 3 failed runs" });
+    // Its thread is gone: the same.
+    sendSchedulePausedPush({ id: "s-def", name: "Gone", threadId: "no-such-thread", body: "⏰ Gone paused: its thread was deleted" });
+    // A thread that exists still opens it.
+    sendSchedulePausedPush({ id: "s-ghi", name: "Here", threadId: thread.id, body: "⏰ Here paused" });
+    await settle();
+  } finally {
+    console.log = log;
+  }
+  const by = (title: string) => sent.find((s) => s.payload.title === title)!.payload;
+  assert.deepEqual(by("Audit"), {
+    title: "Audit",
+    body: "⏰ Audit paused after 3 failed runs",
+    tag: "schedule-s-abc",
+    url: "/?schedule=s-abc",
+    kind: "failed",
+    scheduleId: "s-abc",
+  });
+  assert.equal(by("Gone").url, "/?schedule=s-def");
+  assert.equal(by("Gone").scheduleId, "s-def");
+  assert.equal(by("Gone").threadId, undefined, "no thread to open");
+  assert.equal(by("Here").url, `/?thread=${thread.id}&bot=${thread.botId}`);
+  assert.equal(by("Here").threadId, thread.id);
+  assert.equal(by("Here").scheduleId, undefined);
 });

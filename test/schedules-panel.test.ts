@@ -2,9 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "fs";
 import { join } from "path";
-import type { Schedule, ThreadFull } from "../ui/app/lib/gitbot";
+import type { Schedule, ScheduleView, ThreadFull } from "../ui/app/lib/gitbot";
 import {
+  cardWhere,
   createdByText,
+  madeBy,
+  nextRunsText,
+  OWN_WORDS_HINT,
   durationText,
   fullTime,
   lastRuns,
@@ -164,4 +168,86 @@ test("the server's state wins: a paused schedule that can't resume is Ended, wit
   assert.equal(scheduleState(dead), "ended");
   assert.equal(statusText(dead, NOW, TZ), "Ended");
   assert.deepEqual(scheduleActions(dead), { pause: false, resume: false, runNow: false, notify: false, delete: true });
+});
+
+test("card shows nextRuns and a where link", () => {
+  const v = (extra: Partial<ScheduleView> = {}): ScheduleView => ({
+    ...schedule(),
+    state: "active",
+    canResume: false,
+    where: { kind: "thread", threadId: "w", title: "Fix CI", botId: "builtin-claude-code", botName: "Claude Code", jarvis: false },
+    ownWords: false,
+    nextRuns: ["2026-10-17T08:00:00.000Z", "2026-10-18T08:00:00.000Z", "2026-10-19T08:00:00.000Z"],
+    describe: `every day at 09:00 ${TZ}`,
+    ...extra,
+  });
+  // The next 3 runs, in the viewer's zone; none once it won't fire.
+  assert.equal(nextRunsText(v(), NOW, TZ), "Sat 09:00 · Sun 09:00 · Mon 09:00");
+  assert.equal(nextRunsText(v({ state: "paused" }), NOW, TZ), null);
+  assert.equal(nextRunsText(v({ nextRuns: [] }), NOW, TZ), null);
+
+  // Where: a link to its thread, except in that thread's own panel.
+  assert.deepEqual(cardWhere(v()), {
+    lead: "runs on",
+    title: "Fix CI",
+    tail: "Claude Code",
+    link: { botId: "builtin-claude-code", threadId: "w" },
+  });
+  assert.equal(cardWhere(v(), "w"), null);
+  assert.deepEqual(cardWhere(v({ where: { kind: "new-thread", botId: "b", botName: "Claude Code", projectId: "p-1", projectName: "demo" } })), {
+    lead: "a new thread each run in demo · Claude Code",
+  });
+  assert.deepEqual(cardWhere(v({ where: { kind: "missing" } })), { lead: "its target is gone" });
+
+  // Made by: Jarvis in a linked thread, in this one, or you.
+  const jarvis = v({ createdBy: { kind: "jarvis", threadId: "j" }, createdIn: { threadId: "j", title: "Plans", botId: "builtin-jarvis" } });
+  assert.deepEqual(madeBy(jarvis), { lead: "Made by Jarvis in", title: "Plans", link: { botId: "builtin-jarvis", threadId: "j" } });
+  assert.deepEqual(madeBy(jarvis, "j"), { lead: "Made by Jarvis in this thread" });
+  assert.deepEqual(madeBy(v({ createdBy: { kind: "jarvis", threadId: "gone" } })), { lead: "Made by Jarvis (its thread is gone)" });
+  assert.deepEqual(madeBy(v()), { lead: "Made by you (127.0.0.1)" });
+  assert.deepEqual(madeBy(v({ createdBy: { kind: "user" } })), { lead: "Made by you" });
+  assert.equal(OWN_WORDS_HINT, "Jarvis acts on this as your request");
+
+  // The card is shared: the panel and the view draw it, and neither says model or effort.
+  const dir = join(__dirname, "..", "ui", "app", "components");
+  const card = readFileSync(join(dir, "schedule-card.tsx"), "utf-8");
+  const panel = readFileSync(join(dir, "schedules-panel.tsx"), "utf-8");
+  const view = readFileSync(join(dir, "schedules-view.tsx"), "utf-8");
+  assert.match(panel, /<ScheduleCard/);
+  assert.match(view, /<ScheduleCard/);
+  assert.match(card, /schedule\.nextRuns|nextRunsText\(s\)/);
+  for (const text of [card, view]) {
+    const code = text.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    assert.doesNotMatch(code, /\bmodel\b|\beffort\b/i);
+  }
+  // Delete asks first, in the card, not with confirm().
+  assert.doesNotMatch(card, /\bconfirm\(/);
+  assert.match(card, /setConfirming\(true\)/);
+});
+
+test("the Schedules view owns Escape over a running chat, and finds its own card", () => {
+  const dir = join(__dirname, "..", "ui", "app", "components");
+  const view = readFileSync(join(dir, "schedules-view.tsx"), "utf-8");
+  const card = readFileSync(join(dir, "schedule-card.tsx"), "utf-8");
+  const chat = readFileSync(join(dir, "chat.tsx"), "utf-8");
+  const shell = readFileSync(join(dir, "app-shell.tsx"), "utf-8");
+  // B1: caught on window in the capture phase and stopped, whatever ran before.
+  assert.match(view, /window\.addEventListener\("keydown", escape, true\)/);
+  assert.match(view, /event\.stopPropagation\(\)/);
+  assert.doesNotMatch(view, /defaultPrevented/);
+  // ...and the chat's stop-on-Escape is off while anything covers it.
+  assert.match(chat, /if \(!streaming \|\| activeMenu \|\| setup \|\| covered\)/);
+  assert.match(shell, /<Chat\s+thread=\{activeThread\}\s+covered=\{chatCovered\}/);
+  // B2: no DOM id on a card (the thread's panel draws the same one); the
+  // deep link looks the card up inside the view.
+  assert.doesNotMatch(card, /\sid=\{/);
+  assert.match(card, /data-schedule-id=\{s\.id\}/);
+  assert.match(view, /root\?\.querySelector<HTMLElement>\(`\[data-schedule-id=/);
+  assert.match(view, /centreCard\(rootRef\.current, s\.id\)/);
+  assert.doesNotMatch(view, /document\.getElementById/);
+  // The deep link scrolls only the view's own scroller: scrollIntoView also
+  // scrolled the tray mid-slide (browser 04), and closing resets the tray.
+  assert.doesNotMatch(view, /\.scrollIntoView\(/);
+  assert.match(view, /scroller\.scrollTop \+=/);
+  assert.match(shell, /tray\.scrollTop = 0/);
 });

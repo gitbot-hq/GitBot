@@ -138,6 +138,8 @@ export type ScheduleView = Omit<Schedule, "history"> & {
   where: ScheduleWhere;
   attention?: ScheduleAttention;
   ownWords: boolean;
+  /** The Jarvis thread that made it, while that thread exists. */
+  createdIn?: { threadId: string; title: string; botId: string };
   nextRuns: string[];
   history: (ScheduleRun & { botId?: string })[];
 };

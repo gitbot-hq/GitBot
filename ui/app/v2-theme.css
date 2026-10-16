@@ -1463,3 +1463,34 @@
   .v2 .dock-row { min-height: 44px; align-items: center; }
   .v2 .dock-head { min-height: 44px; }
 }
+
+/* The Schedules view (schedules-view.tsx): over the tray, like the user profile. */
+.v2 .schedules-pane .profile-pane-inner { max-width: 720px; }
+.v2 .schedules-view-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.v2 .schedules-view-head h2 { margin: 0; font-size: 22px; outline: none; }
+.v2 .schedules-view-count,
+.v2 .schedules-view-note { color: var(--muted); font-size: var(--text-sm); }
+.v2 .schedules-view-empty { padding: var(--space-8) 0; text-align: center; color: var(--muted); }
+.v2 .schedules-view-empty p:first-child { color: var(--text); font-size: 16px; }
+.v2 .schedules-group + .schedules-group { margin-top: var(--space-6); }
+.v2 .schedules-group .schedules-list {
+  padding: 0 var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: var(--text-sm);
+}
+.v2 .schedules-ended-toggle { font-size: var(--text-sm); margin-bottom: var(--space-2); }
+.v2 .dock-see-all { display: block; margin: var(--space-2) var(--space-2) 0; font-size: 12px; }
+.v2 .dock-note .schedule-link { color: inherit; text-decoration: underline; }
+
+@media (max-width: 900px) {
+  .v2 .schedules-pane { padding: var(--space-3) var(--space-3) var(--space-8); }
+  .v2 .schedules-group .schedules-list { padding: 0 var(--space-3); }
+  .v2 .schedules-pane .schedule-actions button { min-height: 36px; padding-inline: var(--space-3); }
+}

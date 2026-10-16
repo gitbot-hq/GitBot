@@ -13,6 +13,7 @@ import {
   type PushSubscriptionSummary,
 } from "./api";
 import { currentPushEnvironment, pushBlocker, type PushBlocker } from "./push-support";
+import { scheduleLinkOf, type ScheduleLink } from "./schedule-dock";
 
 export type PushState =
   /** This browser can't subscribe here; see PushBlocker for why. */
@@ -163,6 +164,34 @@ export function takeThreadFromUrl(): OpenThreadRequest | null {
   url.searchParams.delete("bot");
   window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
   return { threadId, botId };
+}
+
+/**
+ * The Schedules view the page was opened on (`/?schedules`, or
+ * `/?schedule=<id>` from a pause push with no thread), read once and removed
+ * from the address bar, so a reload does not reopen it.
+ */
+export function takeScheduleFromUrl(): ScheduleLink | null {
+  if (typeof window === "undefined") return null;
+  const url = new URL(window.location.href);
+  const link = scheduleLinkOf(url.search);
+  if (!link) return null;
+  url.searchParams.delete("schedule");
+  url.searchParams.delete("schedules");
+  window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+  return link;
+}
+
+/** Calls back when a notification click asks this already-open app to show a schedule's card. */
+export function onOpenScheduleMessage(callback: (link: ScheduleLink) => void): () => void {
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return () => {};
+  const listener = (event: MessageEvent) => {
+    const data = event.data as { type?: unknown; scheduleId?: unknown } | null;
+    if (data?.type !== "gitbot:open-schedule" || typeof data.scheduleId !== "string") return;
+    callback({ scheduleId: data.scheduleId });
+  };
+  navigator.serviceWorker.addEventListener("message", listener);
+  return () => navigator.serviceWorker.removeEventListener("message", listener);
 }
 
 /** Calls back when a notification click asks this already-open app to show a thread. */

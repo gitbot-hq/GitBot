@@ -51,7 +51,7 @@ function writeSeen(seen: Set<string>): void {
 /**
  * The Scheduled dock at the bottom of the bots rail: every schedule across
  * bots and threads, as Needs attention, Up next and Recent. A row opens the
- * thread it runs on; its ⋯ menu runs, pauses or resumes it (a schedules
+ * thread it runs on (or, with none yet, its card in the Schedules view); its ⋯ menu runs, pauses or resumes it (a schedules
  * event re-reads the list). No model or effort: a schedule has none.
  */
 export default function ScheduledDock({
@@ -60,6 +60,7 @@ export default function ScheduledDock({
   refreshKey,
   attentionCount,
   onOpen,
+  onShowAll,
   onAutoOpen,
   onError,
 }: {
@@ -75,6 +76,8 @@ export default function ScheduledDock({
   refreshKey: unknown;
   /** Opens a thread under its bot. */
   onOpen: (botId: string, threadId: string) => void;
+  /** Opens the Schedules view, at one schedule's card when given. */
+  onShowAll: (scheduleId?: string) => void;
 }) {
   const [list, setList] = useState<ScheduleView[] | null>(null);
   const [serverNow, setServerNow] = useState<number>(() => Date.now());
@@ -193,8 +196,7 @@ export default function ScheduledDock({
           className={`dock-row${attention ? " attention" : ""}`}
           title={text.tooltip}
           aria-label={text.tooltip}
-          aria-disabled={target ? undefined : true}
-          onClick={() => go(target)}
+          onClick={() => (target ? go(target) : onShowAll(s.id))}
         >
           <Icon size={14} aria-hidden="true" className="dock-row-icon" />
           <span className="dock-row-copy">
@@ -277,9 +279,17 @@ export default function ScheduledDock({
               <ul className="dock-list">{groups.upNext.map((s) => row(s, false))}</ul>
               {(groups.more > 0 || groups.pausedCount > 0) && (
                 <p className="dock-note">
-                  {[groups.more > 0 ? `+${groups.more} more` : "", groups.pausedCount > 0 ? `${groups.pausedCount} paused` : ""]
-                    .filter(Boolean)
-                    .join(" · ")}
+                  {groups.more > 0 && (
+                    <button type="button" className="schedule-link" onClick={() => onShowAll()}>
+                      +{groups.more} more
+                    </button>
+                  )}
+                  {groups.more > 0 && groups.pausedCount > 0 && " · "}
+                  {groups.pausedCount > 0 && (
+                    <button type="button" className="schedule-link" onClick={() => onShowAll()}>
+                      {groups.pausedCount} paused
+                    </button>
+                  )}
                 </p>
               )}
             </div>
@@ -315,6 +325,11 @@ export default function ScheduledDock({
                 })}
               </ul>
             </div>
+          )}
+          {list && list.length > 0 && (
+            <button type="button" className="schedule-link dock-see-all" onClick={() => onShowAll()}>
+              See all schedules →
+            </button>
           )}
         </div>
       )}

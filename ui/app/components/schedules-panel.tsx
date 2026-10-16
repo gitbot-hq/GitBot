@@ -4,22 +4,11 @@ import AnimatedActionIcon from "./animated-action-icon";
 import { ChevronDownIcon } from "@animateicons/react/lucide/chevron-down-icon";
 import { IconClock } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { deleteSchedule, listSchedules, patchSchedule, runScheduleNow } from "../lib/api";
-import { JARVIS_BOT_ID, type ScheduleNotify, type ScheduleView } from "../lib/gitbot";
-import {
-  createdByText,
-  fullTime,
-  lastRuns,
-  NOTIFY_OPTIONS,
-  panelLabel,
-  runText,
-  scheduleActions,
-  scheduleState,
-  shortTime,
-  statusText,
-  targetText,
-} from "../lib/schedules";
+import { listSchedules } from "../lib/api";
+import type { ScheduleView } from "../lib/gitbot";
+import { panelLabel } from "../lib/schedules";
 import { useTabVisible } from "../lib/use-tab-visible";
+import ScheduleCard, { scheduleCall, type CardAction } from "./schedule-card";
 
 /**
  * The schedules on the open thread (and, on a Jarvis thread, the ones whose
@@ -33,6 +22,7 @@ export default function SchedulesPanel({
   threadId,
   version,
   onOpen,
+  onShowAll,
   onChanged,
   onError,
 }: {
@@ -41,6 +31,8 @@ export default function SchedulesPanel({
   version: number | undefined;
   /** Switches the hub to a thread, under its own bot. */
   onOpen: (botId: string, threadId: string) => void;
+  /** Opens the Schedules view (offered when there is more than one card). */
+  onShowAll?: () => void;
   /** A schedule changed here: the thread list's badges are re-read. */
   onChanged?: () => void;
   onError?: (message: string) => void;
@@ -82,9 +74,9 @@ export default function SchedulesPanel({
     load();
   }, [version, load]);
 
-  function act(id: string, action: () => Promise<unknown>) {
+  function act(id: string, action: CardAction) {
     setBusy(id);
-    action()
+    scheduleCall(id, action)
       .catch((e) => onError?.(e instanceof Error ? e.message : String(e)))
       .then(() => load())
       .finally(() => {
@@ -103,117 +95,25 @@ export default function SchedulesPanel({
         <AnimatedActionIcon icon={ChevronDownIcon} size={14} aria-hidden="true" />
       </button>
       {open && (
-        <ul className="schedules-list">
-          {schedules.map((s) => {
-            const state = scheduleState(s);
-            const can = scheduleActions(s);
-            const target = s.where;
-            const where = target.kind === "thread" && target.threadId === threadId ? null : targetText(s, threadId);
-            const runs = lastRuns(s);
-            const by = s.createdBy;
-            const disabled = busy === s.id;
-            return (
-              <li key={s.id} className={`schedule schedule-${state}`}>
-                <div className="schedule-head">
-                  <b className="schedule-name">{s.name}</b>
-                  <span className="schedule-when">{s.describe ?? s.when.kind}</span>
-                </div>
-                <div
-                  className="schedule-status"
-                  title={s.nextRunAt && state === "active" ? fullTime(s.nextRunAt) : undefined}
-                >
-                  {statusText(s)}
-                </div>
-                <div className="schedule-meta">
-                  {target.kind === "thread" && target.threadId !== threadId ? (
-                    <span>
-                      runs on{" "}
-                      <button type="button" className="schedule-link" onClick={() => onOpen(target.botId, target.threadId)}>
-                        <b>{target.title}</b> · {target.botName}
-                      </button>
-                    </span>
-                  ) : target.kind === "new-thread" ? (
-                    <span>a new thread each run in {target.projectName} · {target.botName}</span>
-                  ) : target.kind === "missing" ? (
-                    <span>its target is gone</span>
-                  ) : (
-                    where && <span>{where}</span>
-                  )}
-                  {by?.kind === "jarvis" && by.threadId !== threadId ? (
-                    <button type="button" className="schedule-link" onClick={() => onOpen(JARVIS_BOT_ID, by.threadId)}>
-                      {createdByText(s)}
-                    </button>
-                  ) : (
-                    <span>{createdByText(s)}{by?.kind === "jarvis" ? " in this thread" : ""}</span>
-                  )}
-                  {can.notify ? (
-                    <label className="schedule-notify">
-                      notify{" "}
-                      <select
-                        value={s.notify}
-                        disabled={disabled}
-                        onChange={(e) => {
-                          const notify = e.target.value as ScheduleNotify;
-                          act(s.id, () => patchSchedule(s.id, { notify }));
-                        }}
-                      >
-                        {NOTIFY_OPTIONS.map((o) => (
-                          <option key={o.value} value={o.value}>{o.label}</option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : (
-                    <span>notify {s.notify}</span>
-                  )}
-                </div>
-                {runs.length > 0 && (
-                  <ol className="schedule-runs" aria-label={`Last runs of ${s.name}`}>
-                    {runs.map((r, i) => (
-                      <li key={`${r.at}-${i}`}>
-                        <span className="schedule-run-at" title={fullTime(r.at)}>{shortTime(r.at)}</span>{" "}
-                        {r.threadId && r.botId && r.threadId !== threadId ? (
-                          <button type="button" className="schedule-link" onClick={() => onOpen(r.botId!, r.threadId!)}>
-                            {runText(r)}
-                          </button>
-                        ) : (
-                          <span>{runText(r)}</span>
-                        )}
-                      </li>
-                    ))}
-                  </ol>
-                )}
-                <div className="schedule-actions">
-                  {can.pause && (
-                    <button type="button" disabled={disabled} onClick={() => act(s.id, () => patchSchedule(s.id, { enabled: false }))}>
-                      Pause
-                    </button>
-                  )}
-                  {can.resume && (
-                    <button type="button" disabled={disabled} onClick={() => act(s.id, () => patchSchedule(s.id, { enabled: true }))}>
-                      Resume
-                    </button>
-                  )}
-                  {can.runNow && (
-                    <button type="button" disabled={disabled} onClick={() => act(s.id, () => runScheduleNow(s.id))}>
-                      Run now
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="schedule-delete"
-                    disabled={disabled}
-                    onClick={() => {
-                      if (!confirm(`Delete the schedule "${s.name}"? Its runs' threads are kept.`)) return;
-                      act(s.id, () => deleteSchedule(s.id));
-                    }}
-                  >
-                    Delete
-                  </button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+        <div className="schedules-body">
+          <ul className="schedules-list">
+            {schedules.map((s) => (
+              <ScheduleCard
+                key={s.id}
+                s={s}
+                threadId={threadId}
+                busy={busy === s.id}
+                onAction={(action) => act(s.id, action)}
+                onOpen={onOpen}
+              />
+            ))}
+          </ul>
+          {schedules.length > 1 && onShowAll && (
+            <button type="button" className="schedule-link schedules-open-all" onClick={onShowAll}>
+              Open in Schedules
+            </button>
+          )}
+        </div>
       )}
     </section>
   );

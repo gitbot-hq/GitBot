@@ -30,9 +30,14 @@ export type DockGroups = {
 
 const time = (iso: string | null | undefined) => (iso ? Date.parse(iso) : NaN);
 
-export function dockGroups(list: readonly ScheduleView[], now: number = Date.now()): DockGroups {
-  const attention = list.filter((s) => s.attention).sort((a, b) => time(b.attention!.at) - time(a.attention!.at));
-  const active = list
+/** Newest attention first. */
+function attentionOf(list: readonly ScheduleView[]): ScheduleView[] {
+  return list.filter((s) => s.attention).sort((a, b) => time(b.attention!.at) - time(a.attention!.at));
+}
+
+/** Active and not needing attention: a waiting fire first, then the soonest next run. */
+function activeOf(list: readonly ScheduleView[]): ScheduleView[] {
+  return list
     .filter((s) => s.state === "active" && !s.attention)
     .sort((a, b) => {
       if (!!a.pending !== !!b.pending) return a.pending ? -1 : 1;
@@ -42,6 +47,11 @@ export function dockGroups(list: readonly ScheduleView[], now: number = Date.now
       if (Number.isNaN(an) !== Number.isNaN(bn)) return Number.isNaN(an) ? 1 : -1;
       return (an || 0) - (bn || 0);
     });
+}
+
+export function dockGroups(list: readonly ScheduleView[], now: number = Date.now()): DockGroups {
+  const attention = attentionOf(list);
+  const active = activeOf(list);
   const recent: RecentRun[] = [];
   for (const s of list) {
     for (const run of s.history ?? []) {
@@ -197,3 +207,45 @@ export function rowMenuItems(s: ScheduleView, timeZone?: string, now: number = D
   if (rowTarget(s)) items.push({ action: "open", label: "Open thread" });
   return items;
 }
+
+/** The Schedules view's groups: every schedule, in exactly one. */
+export type ViewGroups = {
+  /** As the dock's Needs attention: newest first. */
+  attention: ScheduleView[];
+  /** As the dock's Up next, uncapped. */
+  active: ScheduleView[];
+  /** Paused by the user: most recently changed first. */
+  paused: ScheduleView[];
+  /** Will never fire again: most recently changed first. Shown collapsed. */
+  ended: ScheduleView[];
+};
+
+export function viewGroups(list: readonly ScheduleView[]): ViewGroups {
+  const recentFirst = (a: ScheduleView, b: ScheduleView) => time(b.updatedAt) - time(a.updatedAt);
+  return {
+    attention: attentionOf(list),
+    active: activeOf(list),
+    paused: list.filter((s) => s.state === "paused" && !s.attention).sort(recentFirst),
+    ended: list.filter((s) => s.state === "ended" && !s.attention).sort(recentFirst),
+  };
+}
+
+/** The collapsed Ended group's toggle. */
+export function endedText(count: number): string {
+  return `${count} ended`;
+}
+
+/** What a deep link asks for: `?schedules` (the view) or `?schedule=<id>` (one card in it). */
+export type ScheduleLink = { scheduleId?: string };
+
+/** The Schedules view a URL's query opens, or null. */
+export function scheduleLinkOf(search: string): ScheduleLink | null {
+  const params = new URLSearchParams(search);
+  const id = params.get("schedule");
+  if (id) return { scheduleId: id };
+  if (params.has("schedules") || params.has("schedule")) return {};
+  return null;
+}
+
+/** The toast for a deep link to a schedule that is not in the list. */
+export const SCHEDULE_GONE = "That schedule no longer exists";

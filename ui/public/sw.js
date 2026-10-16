@@ -38,7 +38,7 @@ self.addEventListener("push", (event) => {
       // Chrome throws on renotify without a tag, hence the guard.
       renotify: Boolean(data.tag),
       requireInteraction: data.kind === "approval" || data.kind === "question",
-      data: { url: data.url || "/", threadId: data.threadId, botId: data.botId },
+      data: { url: data.url || "/", threadId: data.threadId, botId: data.botId, scheduleId: data.scheduleId },
     }),
   );
 });
@@ -58,11 +58,13 @@ self.addEventListener("notificationclick", (event) => {
     (async () => {
       const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       const ours = windows.filter((c) => new URL(c.url).origin === self.location.origin);
-      // An open app tab switches to the thread in place, keeping its state.
+      // An open app tab switches to the thread (or schedule) in place, keeping its state.
       const app = ours.find((c) => c.focused && isAppPage(c)) || ours.find(isAppPage);
       if (app) {
         await app.focus();
         if (data.threadId) app.postMessage({ type: "gitbot:open-thread", threadId: data.threadId, botId: data.botId });
+        // A schedule's pause with no thread: its card in the Schedules view.
+        else if (data.scheduleId) app.postMessage({ type: "gitbot:open-schedule", scheduleId: data.scheduleId });
         return;
       }
       // Another gitbot page (the marketplace, say): take it to the thread.

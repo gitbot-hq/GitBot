@@ -2617,7 +2617,8 @@ test("a missing thread or bot pauses the schedule at once", async (t) => {
   assert.equal(got.enabled, false);
   assert.equal(got.nextRunAt, null);
   assert.equal(got.pausedReason, "its thread was deleted");
-  assert.equal(pushLines(logs).filter((l) => l.includes(`failed "Tick" (thread ${thread.id})`)).length, 1);
+  // Its thread is gone, so the push opens the schedule's card instead (slice 04).
+  assert.equal(pushLines(logs).filter((l) => l.includes(`failed "Tick" (thread-${thread.id}) /?schedule=${s.id}`)).length, 1);
 
   // The thread is there, its bot is not.
   const bot = createBot({ name: "Gone Bot" });
@@ -4126,6 +4127,9 @@ test("ownWords only for a Jarvis-made schedule on its own thread without changed
   assert.equal(by(own.id).where.botName, "Jarvis");
   assert.equal(by(other.id).ownWords, false);
   assert.equal(by(user.body.id).ownWords, false);
+  // The card's "Made by Jarvis in <thread>": the making thread, named.
+  assert.deepEqual(by(other.id).createdIn, { threadId: jarvis.id, title: jarvis.title, botId: jarvis.botId });
+  assert.equal(by(user.body.id).createdIn, undefined);
   assert.equal(madeByThisJarvis(getSchedule(own.id)!, jarvis.id), true);
   assert.equal((await serve("PATCH", `/schedules/${own.id}`, { name: "Renamed" })).status, 200);
   list = (await serve("GET", "/schedules")).body.schedules;
