@@ -1,6 +1,8 @@
+import { EventEmitter } from "events";
+import { onThreadDeleted, onThreadSeen } from "./bot-store";
 import { jsonError, jsonOk, parseQuery, readBody, type IRequest, type IResponse } from "./server-common";
 import { findProject } from "./project-index";
-import { createSchedule, deleteSchedule, editSchedule, getSchedule, listSchedulesFor, nextRunsOf, viewContext, viewSchedule } from "./schedules";
+import { createSchedule, deleteSchedule, editSchedule, getSchedule, listSchedules, listSchedulesFor, nextRunsOf, onSchedulesWritten, targetThreadId, viewContext, viewSchedule } from "./schedules";
 import { canonicalTimeZone, defaultTimeZone } from "./schedule-time";
 import { rearmScheduler, runScheduleNow, scheduleChanged, schedulerClock } from "./scheduler";
 
@@ -34,6 +36,79 @@ function logWrite(verb: string, id: string, req: IRequest): void {
   console.log(`[schedules] ${verb} ${id} from ${remoteOf(req) ?? "unknown"}${via}`);
 }
 
+/** How many of the listed schedules need attention: GET /schedules and the live event agree. */
+function attentionCountOf(views: { attention?: unknown }[]): number {
+  return views.filter((s) => s.attention).length;
+}
+
+/** The whole list's attention count now (the zone only changes `describe`, not attention). */
+export function scheduleAttentionCount(): number {
+  const ctx = viewContext(defaultTimeZone().tz, schedulerClock.now());
+  return attentionCountOf(listSchedulesFor().map((s) => viewSchedule(s, ctx)));
+}
+
+// --- Live hint: the `schedules` event on /permissions/events ---
+// Every write of schedules.json (and a view of a thread a schedule ran on,
+// which can clear a failed run's attention) bumps `version`; one event goes
+// out per burst, SCHEDULES_EVENT_DEBOUNCE_MS after its first change. The UI
+// re-reads GET /schedules on it: the event carries no schedules.
+
+export const SCHEDULES_EVENT_DEBOUNCE_MS = 250;
+export type SchedulesEvent = { version: number; attentionCount: number };
+/** Emits "update" with a SchedulesEvent, once per burst. */
+export const schedulesEmitter = new EventEmitter();
+schedulesEmitter.setMaxListeners(0);
+let schedulesVersion = 0;
+let schedulesTimer: ReturnType<typeof setTimeout> | null = null;
+let unwatchSchedules: (() => void) | null = null;
+
+/** The event as it stands, for a stream that just connected. */
+export function currentSchedulesEvent(): SchedulesEvent {
+  let attentionCount = 0;
+  try {
+    attentionCount = scheduleAttentionCount();
+  } catch (err: any) {
+    console.error(`[schedules] attention count: ${err?.message ?? err}`);
+  }
+  return { version: schedulesVersion, attentionCount };
+}
+
+function bumpSchedules(): void {
+  schedulesVersion += 1;
+  if (schedulesTimer) return;
+  schedulesTimer = setTimeout(() => {
+    schedulesTimer = null;
+    schedulesEmitter.emit("update", currentSchedulesEvent());
+  }, SCHEDULES_EVENT_DEBOUNCE_MS);
+  schedulesTimer.unref?.();
+}
+
+/** Subscribes once (start, or a test): later calls do nothing. Returns the unsubscribe. */
+export function watchScheduleEvents(): () => void {
+  if (!unwatchSchedules) {
+    const offWrites = onSchedulesWritten(bumpSchedules);
+    // A thread a schedule targets or ran on: viewing it can clear a failed
+    // run's attention; deleting it unlinks its Recent row even when nothing
+    // in schedules.json changes (a new-thread schedule's run thread).
+    const touched = (thread: { id: string }) => {
+      const touches = listSchedules().some((s) =>
+        targetThreadId(s) === thread.id || s.history?.some((run) => run.threadId === thread.id));
+      if (touches) bumpSchedules();
+    };
+    const offSeen = onThreadSeen(touched);
+    const offDeleted = onThreadDeleted(touched);
+    unwatchSchedules = () => {
+      offWrites();
+      offSeen();
+      offDeleted();
+      if (schedulesTimer) clearTimeout(schedulesTimer);
+      schedulesTimer = null;
+      unwatchSchedules = null;
+    };
+  }
+  return unwatchSchedules;
+}
+
 export async function handleScheduleRoutes(
   req: IRequest,
   res: IResponse,
@@ -60,7 +135,7 @@ export async function handleScheduleRoutes(
       .map((s) => viewSchedule(s, ctx));
     jsonOk(res, {
       schedules,
-      attentionCount: schedules.filter((s) => s.attention).length,
+      attentionCount: attentionCountOf(schedules),
       now: new Date(now).toISOString(),
       // Fixed for now: one gitbot per data dir runs every schedule.
       owner: { pid: process.pid, thisProcess: true },

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "fs";
 import { join } from "path";
 import type { ScheduleView } from "../ui/app/lib/gitbot";
+import { nextSchedulesHint } from "../ui/app/lib/use-thread-sessions";
 import { dockGroups, recentText, rowTarget, rowText, runGlyph, UP_NEXT_MAX } from "../ui/app/lib/schedule-dock";
 
 // The Scheduled dock (scheduled-dock.tsx) draws what these say.
@@ -115,4 +116,18 @@ test("dock has no model or effort words", () => {
   // Mounted in the bots rail, after its scroll region.
   const shell = readFileSync(join(ui, "components", "app-shell.tsx"), "utf-8");
   assert.match(shell, /side-scroll-edge-bottom[\s\S]*?<ScheduledDock[\s\S]*?className="side-handle"/);
+});
+
+test("schedules hint: the first event on a connection records, a new version or a reconnect bumps", () => {
+  let r = nextSchedulesHint(null, null, { version: 7, attentionCount: 1 });
+  assert.deepEqual(r, { hint: { version: 0, attentionCount: 1 }, seen: 7 });
+  r = nextSchedulesHint(r.hint, r.seen, { version: 7, attentionCount: 1 });
+  assert.equal(r.hint.version, 0, "same server version: no bump");
+  r = nextSchedulesHint(r.hint, r.seen, { version: 9, attentionCount: 0 });
+  assert.deepEqual(r.hint, { version: 1, attentionCount: 0 });
+  // The server restarts (its version resets): the reconnect bumps, its connect event records.
+  r = nextSchedulesHint(r.hint, r.seen, null);
+  assert.deepEqual(r, { hint: { version: 2, attentionCount: 0 }, seen: null });
+  r = nextSchedulesHint(r.hint, r.seen, { version: 0, attentionCount: 0 });
+  assert.equal(r.hint.version, 2);
 });

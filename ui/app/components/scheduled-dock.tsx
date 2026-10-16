@@ -17,7 +17,6 @@ import {
   runTarget,
   type RowTarget,
 } from "../lib/schedule-dock";
-import { useTabVisible } from "../lib/use-tab-visible";
 
 /**
  * The Scheduled dock at the bottom of the bots rail: every schedule across
@@ -32,7 +31,8 @@ export default function ScheduledDock({
 }: {
   open: boolean;
   onToggle: () => void;
-  /** Bumped on the thread list's quiet refreshes (and thread switches): re-read. */
+  /** Bumped on the thread list's quiet refreshes (a schedules event, tab
+   *  return, a turn starting or ending): re-read. */
   refreshKey: unknown;
   /** Opens a thread under its bot. */
   onOpen: (botId: string, threadId: string) => void;
@@ -60,10 +60,11 @@ export default function ScheduledDock({
       live.current = false;
     };
   }, []);
+  // On mount and on each quiet refresh. A tab return is one of those
+  // (app-shell's useTabVisible), so the dock has no listener of its own.
   useEffect(() => {
     load();
   }, [load, refreshKey]);
-  useTabVisible(load);
 
   const now = serverNow;
   const groups = list ? dockGroups(list, now) : null;

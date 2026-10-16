@@ -218,5 +218,8 @@ Events carry a `seq` field and an SSE `id:`, so a client that reconnects with `L
 | Event | Payload | Meaning |
 |---|---|---|
 | `permissions` | `permissions[]` | Full snapshot of pending approvals |
+| `schedules` | `version`, `attentionCount` | A hint that schedules changed: re-read `GET /schedules` |
 
 Each entry has `sessionId`, `agent`, `repoPath`, `repoName`, `toolUseID`, `toolName` and `input`. The same event carries `sessions[]`, every session gitbot holds (ended ones too, until it restarts): `gitbotId`, `sessionId`, `status`, `threadId`, `reportTo`, `botId`, `stopped`, `scheduled` and `quietEnd` (its last turn was a scheduled run its schedule's `notify` did not tell: not news, so the thread list shows the thread's stored `lastOutcome` rather than this session's ending; `false` while a turn runs).
+
+`schedules` is sent once on connect, then once per burst of changes (about 250 ms after the first): any write of `schedules.json` (created, edited, paused, deleted, fired, a run's outcome recorded, a thread deletion's clean-up), and a thread being viewed that a schedule targets or ran on (which can clear a failed run's attention). `version` counts changes since gitbot started (it resets on restart); `attentionCount` is `GET /schedules`' own. It carries no schedules: a client re-reads them.

@@ -21,9 +21,6 @@ import {
 } from "../lib/schedules";
 import { useTabVisible } from "../lib/use-tab-visible";
 
-/** How often the list is re-read while the thread's turn runs. */
-const POLL_MS = 3000;
-
 /**
  * The schedules on the open thread (and, on a Jarvis thread, the ones whose
  * notes go there: those it made on other threads, and its new-thread ones),
@@ -34,14 +31,14 @@ const POLL_MS = 3000;
  */
 export default function SchedulesPanel({
   threadId,
-  working,
+  version,
   onOpen,
   onChanged,
   onError,
 }: {
   threadId: string;
-  /** True while the open thread's turn is running. */
-  working: boolean;
+  /** The stream's schedules version (use-thread-sessions): a change re-reads. */
+  version: number | undefined;
   /** Switches the hub to a thread, under its own bot. */
   onOpen: (botId: string, threadId: string) => void;
   /** A schedule changed here: the thread list's badges are re-read. */
@@ -73,16 +70,17 @@ export default function SchedulesPanel({
   }, [load]);
   useTabVisible(load);
 
-  // A run starts and ends with the thread's turn: poll while it runs, and
-  // read once more when it ends.
+  // Any schedule written anywhere (a run starting or ending, Jarvis or curl
+  // changing one) is a schedules event: re-read, not on mount (read above).
+  // A hidden tab skips it, and its return reads instead.
+  const lastVersion = useRef(version);
   useEffect(() => {
-    if (!working) return;
-    const timer = setInterval(load, POLL_MS);
-    return () => {
-      clearInterval(timer);
-      load();
-    };
-  }, [working, load]);
+    const before = lastVersion.current;
+    lastVersion.current = version;
+    // undefined → a number is the stream connecting, not a change.
+    if (before === undefined || before === version) return;
+    load();
+  }, [version, load]);
 
   function act(id: string, action: () => Promise<unknown>) {
     setBusy(id);

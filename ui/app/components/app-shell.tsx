@@ -658,6 +658,17 @@ export default function V2() {
     if (!attentionKey || !before || before === attentionKey) return;
     quietRefresh();
   }, [attentionKey, quietRefresh]);
+  // A schedule changed somewhere (the stream's schedules hint): the dock and
+  // the thread rows' clock badges re-read, in the same quiet refresh. Not on
+  // the first hint: that is the stream connecting, and both just loaded.
+  const scheduleVersion = threadSessions.schedules?.version;
+  const lastScheduleVersion = useRef(scheduleVersion);
+  useEffect(() => {
+    const before = lastScheduleVersion.current;
+    lastScheduleVersion.current = scheduleVersion;
+    if (before === undefined || before === scheduleVersion) return;
+    quietRefresh();
+  }, [scheduleVersion, quietRefresh]);
   // Seen, which clears a thread's news on every device: the open thread,
   // while the tab is shown and focused, nothing covers the chat (the mobile
   // drawers, the bot profile or studio, the new-thread panel, the user
@@ -1543,7 +1554,7 @@ export default function V2() {
             <ScheduledDock
               open={dockOpen}
               onToggle={toggleDock}
-              refreshKey={`${scheduleTick}:${activeThread?.id ?? ""}`}
+              refreshKey={scheduleTick}
               onOpen={openFromDock}
             />
           )}
@@ -1784,7 +1795,7 @@ export default function V2() {
                 <SchedulesPanel
                   key={`schedules-${activeThread.id}`}
                   threadId={activeThread.id}
-                  working={chatWorking}
+                  version={threadSessions.schedules?.version}
                   onOpen={openThread}
                   onChanged={quietRefresh}
                   onError={toast}

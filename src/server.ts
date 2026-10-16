@@ -37,7 +37,7 @@ import { flattenAskAnswers, isAskUserQuestion, type AskAnswers } from "./ask-use
 import { abortInterruptedOpencode, recoverInterruptedChildren, watchRunningMarks } from "./restart-recovery";
 import { watchThreadActivity } from "./attention";
 import { handlePushRoutes, watchPush } from "./push";
-import { handleScheduleRoutes } from "./schedule-routes";
+import { currentSchedulesEvent, handleScheduleRoutes, schedulesEmitter, watchScheduleEvents, type SchedulesEvent } from "./schedule-routes";
 import { startScheduler } from "./scheduler";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
 import { uiFileFor } from "./static-ui";
@@ -542,11 +542,20 @@ Output only the cleaned text.`;
         res.write(`event: permissions\ndata: ${JSON.stringify({ permissions, sessions })}\n\n`);
       };
 
+      // A hint that schedules changed: the UI re-reads GET /schedules.
+      const sendSchedules = (event: SchedulesEvent) => {
+        if (res.writableEnded) return;
+        res.write(`event: schedules\ndata: ${JSON.stringify(event)}\n\n`);
+      };
+
       sendDump(buildPermissionsDump(), buildSessionsDump());
+      sendSchedules(currentSchedulesEvent());
 
       permissionsEmitter.on("update", sendDump);
+      schedulesEmitter.on("update", sendSchedules);
       req.on("close", () => {
         permissionsEmitter.off("update", sendDump);
+        schedulesEmitter.off("update", sendSchedules);
       });
 
       return;
@@ -667,6 +676,8 @@ export async function start(network: string = "local", portOverride?: number, ca
   // the report watcher's and before push's (test/push.test.ts pins this).
   // Never throws: a broken schedules.json is logged, and gitbot boots.
   startScheduler(availableAgents);
+  // Any schedules.json write is a `schedules` event on /permissions/events.
+  watchScheduleEvents();
   // A turn ending, or an agent waiting on you, is a push to subscribed browsers (GITBOT_PUSH=0: off).
   // After watchChildReports: push reads the reportDelivered flag it sets on
   // the same turn, to stay quiet about a child whose report Jarvis has

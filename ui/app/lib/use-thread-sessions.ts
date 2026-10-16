@@ -45,7 +45,31 @@ export type ThreadSessions = {
   /** By bot id: "awaiting_permissions" if any of its threads waits on an
    *  approval, else "running" if any runs. Bots with nothing live are absent. */
   liveBots: Record<string, BotLiveStatus>;
+  /** The stream's schedules hint: `version` changes whenever any schedule
+   *  may have (a write anywhere, or a reconnect), so consumers re-read
+   *  GET /schedules. Null until the stream is first heard from. */
+  schedules: SchedulesHint | null;
 };
+
+/** `version` is local (it survives a server restart's reset), `attentionCount` the server's. */
+export type SchedulesHint = { version: number; attentionCount: number };
+
+/**
+ * Folds one schedules event (or a reconnect: `event` null) into the hint.
+ * `seen` is the last server version heard on this connection, null after a
+ * (re)connect: the first event on a connection only records it, and a
+ * reconnect itself bumps, since writes may have been missed meanwhile.
+ */
+export function nextSchedulesHint(
+  prev: SchedulesHint | null,
+  seen: number | null,
+  event: { version: number; attentionCount: number } | null,
+): { hint: SchedulesHint; seen: number | null } {
+  const base = prev ?? { version: 0, attentionCount: 0 };
+  if (!event) return { hint: { ...base, version: base.version + 1 }, seen: null };
+  const changed = seen !== null && event.version !== seen;
+  return { hint: { version: base.version + (changed ? 1 : 0), attentionCount: event.attentionCount }, seen: event.version };
+}
 
 export type BotLiveStatus = "running" | "awaiting_permissions";
 
@@ -151,10 +175,38 @@ export function rowLabel(
  * report turn it starts land in one render.
  */
 export function useThreadSessions(): ThreadSessions {
-  const [state, setState] = useState<ThreadSessions>({ statuses: {}, states: {}, runningChildren: {}, pendingApprovals: null, liveBots: {} });
+  const [state, setState] = useState<ThreadSessions>({ statuses: {}, states: {}, runningChildren: {}, pendingApprovals: null, liveBots: {}, schedules: null });
   useEffect(() => {
     const es = new EventSource(sessionsStreamUrl());
     let last = "";
+    let hint: SchedulesHint | null = null;
+    let seen: number | null = null;
+    let broken = false;
+    const setHint = (event: SchedulesHint | null) => {
+      const next = nextSchedulesHint(hint, seen, event);
+      seen = next.seen;
+      if (hint && next.hint.version === hint.version && next.hint.attentionCount === hint.attentionCount) return;
+      hint = next.hint;
+      const h = hint;
+      setState((prev) => ({ ...prev, schedules: h }));
+    };
+    es.addEventListener("schedules", (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data ?? "{}");
+        if (typeof data.version === "number") setHint({ version: data.version, attentionCount: Number(data.attentionCount) || 0 });
+      } catch {
+        // a bad event is skipped
+      }
+    });
+    // EventSource reconnects by itself; once back, schedules may have changed unseen.
+    es.addEventListener("error", () => {
+      broken = true;
+    });
+    es.addEventListener("open", () => {
+      if (!broken) return;
+      broken = false;
+      setHint(null);
+    });
     es.addEventListener("permissions", (ev) => {
       let snapshot: { sessions?: SessionSummary[]; permissions?: { sessionId: string; toolUseID: string }[] } = {};
       try {
@@ -169,7 +221,7 @@ export function useThreadSessions(): ThreadSessions {
       // do (only a Jarvis-owned child's approvals are kept).
       if (key === last) return;
       last = key;
-      setState(next);
+      setState((prev) => ({ ...prev, ...next }));
     });
     return () => es.close();
   }, []);

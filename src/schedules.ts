@@ -161,6 +161,31 @@ function file(): string {
 
 const now = () => new Date().toISOString();
 
+// --- Write hook ---
+// The server tells open UIs that schedules changed (an SSE hint) by
+// registering here, so this module never imports the server.
+
+type SchedulesWrittenListener = () => void;
+const schedulesWrittenListeners = new Set<SchedulesWrittenListener>();
+
+/** Calls the listener after every write of schedules.json. Returns the unsubscribe. */
+export function onSchedulesWritten(listener: SchedulesWrittenListener): () => void {
+  schedulesWrittenListeners.add(listener);
+  return () => { schedulesWrittenListeners.delete(listener); };
+}
+
+/** The one write of schedules.json; then the listeners, none of which can throw into the writer. */
+function saveAll(all: Schedule[]): void {
+  writeCollection(file(), all);
+  for (const listener of [...schedulesWrittenListeners]) {
+    try {
+      listener();
+    } catch (err: any) {
+      console.error(`[schedules] write listener: ${err?.message ?? err}`);
+    }
+  }
+}
+
 /** Every schedule, or those targeting one thread. */
 export function listSchedules(filter: { threadId?: string } = {}): Schedule[] {
   const all = readCollection<Schedule>(file(), "schedules");
@@ -267,7 +292,7 @@ export function updateSchedule(id: string, edit: (s: Schedule) => void | false):
   if (edit(s) === false) return s;
   s.history = trimHistory(s.history);
   s.updatedAt = now();
-  writeCollection(file(), all);
+  saveAll(all);
   return s;
 }
 
@@ -292,7 +317,7 @@ export function deleteSchedule(id: string): boolean {
   const all = listForWrite();
   const remaining = all.filter((s) => s.id !== id);
   if (remaining.length === all.length) return false;
-  writeCollection(file(), remaining);
+  saveAll(remaining);
   return true;
 }
 
@@ -483,7 +508,7 @@ export function forgetDeletedThread(threadId: string, at: number = Date.now()): 
     }
     out.detached.push(s);
   }
-  writeCollection(file(), kept);
+  saveAll(kept);
   return out;
 }
 
@@ -1056,6 +1081,6 @@ export function createSchedule(
     createdAt: stamp,
     updatedAt: stamp,
   };
-  writeCollection(file(), [...all, schedule]);
+  saveAll([...all, schedule]);
   return { ok: true, schedule };
 }

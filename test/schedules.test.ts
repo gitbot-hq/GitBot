@@ -6,7 +6,7 @@ import { EventEmitter } from "events";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { bindSession, createBot, createThread, dataDir, getThread, JARVIS_BOT_ID, jarvisDir, listThreads, markThreadSeen, setThreadActivity, updateThread } from "../src/bot-store";
+import { bindSession, createBot, createThread, dataDir, deleteThread, getThread, JARVIS_BOT_ID, jarvisDir, listThreads, markThreadSeen, setThreadActivity, updateThread } from "../src/bot-store";
 import { runningChildOf } from "../src/child-lock";
 import { watchDeferredTurns } from "../src/deferred-turns";
 import { startChildThread } from "../src/jarvis";
@@ -18,7 +18,7 @@ import { watchChildReports } from "../src/reports";
 import { Cron } from "croner";
 import { clipAtWord, ERROR_BACKOFF_MS, LATE_GRACE_MS, MIN_REARM_MS, RATE_CAP_STARTS, RATE_RETRY_MS, RATE_WINDOW_MS, schedulerClock, startScheduler, stopScheduler, TIMER_CAP_MS } from "../src/scheduler";
 import { countOccurrences, defaultTimeZone, localShort, minGapMinutes, nextOccurrence } from "../src/schedule-time";
-import { createSchedule, getSchedule, listSchedules, madeByThisJarvis, nextRunsOf, SCHEDULES_MAX, SCHEDULES_PER_THREAD_MAX, updateSchedule, type Schedule } from "../src/schedules";
+import { createSchedule, getSchedule, listSchedules, madeByThisJarvis, nextRunsOf, onSchedulesWritten, SCHEDULES_MAX, SCHEDULES_PER_THREAD_MAX, updateSchedule, type Schedule } from "../src/schedules";
 import {
   buildSessionsDump,
   emitEvent,
@@ -32,6 +32,7 @@ import {
   type SessionSummaryItem,
 } from "../src/server-common";
 import { handleRequest } from "../src/server";
+import { SCHEDULES_EVENT_DEBOUNCE_MS, watchScheduleEvents } from "../src/schedule-routes";
 import { claudeQuery, runAgent } from "../src/start-claude-code";
 import { opencodeLifecycleEvent } from "../src/start-opencode";
 import { readThreadTail, threadStatus, transcriptLoaders, type TranscriptMessage } from "../src/thread-tools";
@@ -4151,4 +4152,145 @@ test("attention for a failed run is tied to the run: a failed start on a read th
   assert.equal((await list()).attention?.text, "Last run failed");
   markThreadSeen(w.id, atIso(now + 20_000));
   assert.equal((await list()).attention, undefined);
+});
+
+// --- Live refresh: the schedules write hook and event ---
+
+test("onSchedulesWritten fires after create, edit, delete, fire and outcome", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const thread = plainThread("Live");
+  // Each call sees the write already made: the count of schedules then.
+  const calls: number[] = [];
+  const off = onSchedulesWritten(() => calls.push(listSchedules().length));
+  t.after(off);
+  const step = async (what: string, act: () => Promise<unknown>) => {
+    const before = calls.length;
+    await act();
+    assert.ok(calls.length > before, `${what} called the listeners`);
+  };
+  let id = "";
+  await step("create", async () => { id = (await scheduleOnce(thread.id, 3_600_000)).id; });
+  assert.equal(calls.at(-1), 1, "after the write");
+  await step("edit", () => serve("PATCH", `/schedules/${id}`, { name: "Renamed" }));
+  await step("fire", () => serve("POST", `/schedules/${id}/run`));
+  await step("outcome", () => endTurn(runs[0], "done"));
+  assert.equal(getSchedule(id)!.history[0].turnOutcome, "done");
+  await step("delete", () => serve("DELETE", `/schedules/${id}`));
+  assert.equal(calls.at(-1), 0, "after the delete's write");
+  off();
+  const before = calls.length;
+  await scheduleOnce(thread.id);
+  assert.equal(calls.length, before, "unsubscribed");
+});
+
+test("a throwing listener does not break a write", async (t) => {
+  const errors = t.mock.method(console, "error", () => {});
+  t.mock.method(console, "log", () => {});
+  const thread = plainThread("Throws");
+  let after = 0;
+  const offBad = onSchedulesWritten(() => { throw new Error("listener broke"); });
+  const offGood = onSchedulesWritten(() => { after += 1; });
+  t.after(() => { offBad(); offGood(); });
+  const s = await scheduleOnce(thread.id);
+  assert.ok(getSchedule(s.id), "the write landed");
+  assert.equal(after, 1, "later listeners still run");
+  assert.ok(errors.mock.calls.some((c) => String(c.arguments[0]).includes("listener broke")));
+});
+
+test("/permissions/events sends a schedules event on connect and after a change, debounced", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const unwatch = watchScheduleEvents();
+  t.after(unwatch);
+  assert.equal(watchScheduleEvents(), unwatch, "subscribes once");
+  const w = plainThread("W");
+  const other = plainThread("Other");
+  const s = await scheduleOnce(w.id, 3_600_000);
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  await wait(SCHEDULES_EVENT_DEBOUNCE_MS + 100); // the create's event goes before the stream opens
+
+  const req = Object.assign(new EventEmitter(), { method: "GET", url: "/permissions/events", headers: {} }) as unknown as IRequest;
+  const chunks: string[] = [];
+  const res: IResponse = {
+    headersSent: false,
+    writableEnded: false,
+    writeHead() {},
+    write(chunk: string) { chunks.push(chunk); return true; },
+    end() {},
+  } as IResponse;
+  await handleRequest(req, res, ALL_AGENTS, tmpdir());
+  t.after(() => (req as unknown as EventEmitter).emit("close"));
+  const events = () => chunks
+    .filter((c) => c.startsWith("event: schedules\n"))
+    .map((c) => JSON.parse(c.slice(c.indexOf("data: ") + 6)) as { version: number; attentionCount: number });
+
+  assert.equal(events().length, 1, "one on connect");
+  const first = events()[0];
+  assert.equal(first.attentionCount, 0);
+
+  // A burst: three writes, one event.
+  for (const name of ["A", "B", "C"]) await serve("PATCH", `/schedules/${s.id}`, { name });
+  assert.equal(events().length, 1, "not before the debounce");
+  await wait(SCHEDULES_EVENT_DEBOUNCE_MS + 100);
+  assert.equal(events().length, 2, "one for the burst");
+  assert.ok(events()[1].version >= first.version + 3);
+
+  // A failed start: the count is GET /schedules' own.
+  markThreadSeen(w.id, atIso(now - 60_000));
+  updateSchedule(s.id, (x) => { x.history.push({ at: atIso(now - 1000), outcome: "failed-to-start", threadId: w.id, error: "agent missing" }); });
+  await wait(SCHEDULES_EVENT_DEBOUNCE_MS + 100);
+  const listed = await serve("GET", "/schedules");
+  assert.equal(listed.body.attentionCount, 1);
+  assert.equal(events().at(-1)!.attentionCount, 1);
+
+  // Viewing a thread a schedule runs on is an event (it may clear attention); another thread's is not.
+  const n = events().length;
+  markThreadSeen(other.id);
+  await wait(SCHEDULES_EVENT_DEBOUNCE_MS + 100);
+  assert.equal(events().length, n, "an unrelated thread seen: nothing");
+  markThreadSeen(w.id, atIso(now));
+  await wait(SCHEDULES_EVENT_DEBOUNCE_MS + 100);
+  assert.equal(events().length, n + 1);
+  assert.equal(events().at(-1)!.attentionCount, 0, "cleared without waiting");
+
+  // Closed: the stream gets no more.
+  (req as unknown as EventEmitter).emit("close");
+  await serve("PATCH", `/schedules/${s.id}`, { name: "D" });
+  await wait(SCHEDULES_EVENT_DEBOUNCE_MS + 100);
+  assert.equal(events().length, n + 1);
+});
+
+test("deleting a thread a schedule only ran on is a schedules event (its Recent row unlinks); an unrelated one is not", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const unwatch = watchScheduleEvents();
+  t.after(unwatch);
+  const w = plainThread("W");
+  const run = plainThread("Run thread");
+  const other = plainThread("Other");
+  const s = await scheduleOnce(w.id, 3_600_000);
+  // A run on a thread the schedule doesn't target, as a new-thread schedule's run thread.
+  updateSchedule(s.id, (x) => { x.history.push({ at: atIso(now - 1000), outcome: "started", threadId: run.id, turnOutcome: "done" }); });
+  const wait = () => new Promise((r) => setTimeout(r, SCHEDULES_EVENT_DEBOUNCE_MS + 100));
+  await wait();
+
+  const req = Object.assign(new EventEmitter(), { method: "GET", url: "/permissions/events", headers: {} }) as unknown as IRequest;
+  let count = 0;
+  const res = {
+    headersSent: false,
+    writableEnded: false,
+    writeHead() {},
+    write(chunk: string) { if (chunk.startsWith("event: schedules\n")) count += 1; return true; },
+    end() {},
+  } as IResponse;
+  await handleRequest(req, res, ALL_AGENTS, tmpdir());
+  t.after(() => (req as unknown as EventEmitter).emit("close"));
+  assert.equal(count, 1, "one on connect");
+
+  const before = readFileSync(join(dataDir(), "schedules.json"), "utf-8");
+  assert.ok(deleteThread(other.id));
+  await wait();
+  assert.equal(count, 1, "an unrelated thread deleted: nothing");
+  assert.ok(deleteThread(run.id));
+  assert.equal(readFileSync(join(dataDir(), "schedules.json"), "utf-8"), before, "no schedules.json write");
+  await wait();
+  assert.equal(count, 2, "the run thread deleted: one event");
 });

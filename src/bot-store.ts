@@ -667,7 +667,25 @@ export function markThreadSeen(id: string, at: string = now()): Thread | undefin
   if (!thread) return undefined;
   thread.lastSeenAt = at;
   writeCollection(THREADS_FILE, threads);
+  for (const listener of [...threadSeenListeners]) {
+    try {
+      listener(thread);
+    } catch (err: any) {
+      console.error(`[thread-seen] thread ${thread.id}: ${err?.message ?? err}`);
+    }
+  }
   return thread;
+}
+
+// A thread being viewed can clear a schedule's "needs attention" (a failed
+// run's thread read): the server listens here, so this store imports nothing.
+type ThreadSeenListener = (thread: Thread) => void;
+const threadSeenListeners = new Set<ThreadSeenListener>();
+
+/** Calls the listener after each markThreadSeen write. Returns the unsubscribe. */
+export function onThreadSeen(listener: ThreadSeenListener): () => void {
+  threadSeenListeners.add(listener);
+  return () => { threadSeenListeners.delete(listener); };
 }
 
 /**
