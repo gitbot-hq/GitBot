@@ -14,8 +14,8 @@ import ScheduleCard, { scheduleCall, type CardAction } from "./schedule-card";
  * The schedules on the open thread (and, on a Jarvis thread, the ones whose
  * notes go there: those it made on other threads, and its new-thread ones),
  * with pause or resume, run now, notify and delete. Renders nothing until
- * there is at least one. Creating and editing a schedule's words and times is
- * Jarvis's or the API's, not this panel's. No model or effort: a schedule
+ * there is at least one (the dock's + still makes one for this thread). + Add
+ * opens the new-schedule form for this thread. No model or effort: a schedule
  * has none, and a run's own thread shows what ran.
  */
 export default function SchedulesPanel({
@@ -23,9 +23,12 @@ export default function SchedulesPanel({
   version,
   onOpen,
   onShowAll,
+  onAdd,
   onChanged,
   onError,
 }: {
+  /** Opens the new-schedule form for this thread. */
+  onAdd?: () => void;
   threadId: string;
   /** The stream's schedules version (use-thread-sessions): a change re-reads. */
   version: number | undefined;
@@ -94,6 +97,11 @@ export default function SchedulesPanel({
         {panelLabel(schedules.length)}
         <AnimatedActionIcon icon={ChevronDownIcon} size={14} aria-hidden="true" />
       </button>
+      {onAdd && (
+        <button type="button" className="schedule-link schedules-add" onClick={onAdd}>
+          + Add
+        </button>
+      )}
       {open && (
         <div className="schedules-body">
           <ul className="schedules-list">

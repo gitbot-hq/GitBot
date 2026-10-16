@@ -82,6 +82,12 @@ export type ScheduleRun = {
 
 export type ScheduleNotify = "always" | "on-failure" | "never";
 
+/** A schedule's times (src/schedule-time.ts, When). A new interval's anchor defaults to now. */
+export type ScheduleWhen =
+  | { kind: "once"; at: string }
+  | { kind: "cron"; expr: string; tz: string }
+  | { kind: "interval"; everyMinutes: number; anchor?: string };
+
 /**
  * A schedule as GET /schedules lists it (src/schedules.ts, Schedule). No
  * model or effort: a run uses its thread's own, or the bot's.
@@ -90,10 +96,7 @@ export type Schedule = {
   id: string;
   name: string;
   prompt: string;
-  when:
-    | { kind: "once"; at: string }
-    | { kind: "cron"; expr: string; tz: string }
-    | { kind: "interval"; everyMinutes: number; anchor: string };
+  when: ScheduleWhen;
   target: { kind: "thread"; threadId: string } | { kind: "new-thread"; botId: string; projectId: string };
   notesTo?: string;
   createdBy: { kind: "jarvis"; threadId: string } | { kind: "user"; remote?: string };

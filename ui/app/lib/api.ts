@@ -249,6 +249,36 @@ export function listSchedules(filter: { threadId?: string; projectId?: string; t
   }>(`/schedules${qs ? `?${qs}` : ""}`);
 }
 
+/** What POST /schedules/preview says a new schedule's times would be. */
+export type SchedulePreview = {
+  describe: string;
+  nextRuns: string[];
+  defaultNotify: import("./gitbot").ScheduleNotify;
+  minGapMinutes: number | null;
+  warning?: string;
+};
+
+/** A new schedule's times in words and its first runs, or its error (a 400). Writes nothing. */
+export function previewSchedule(body: { when: import("./gitbot").ScheduleWhen; maxRuns?: number; endsAt?: string; tz: string }, signal?: AbortSignal) {
+  return req<SchedulePreview>("/schedules/preview", { method: "POST", body: JSON.stringify(body), signal });
+}
+
+/** The body the form sends: no createdBy or notesTo (the server records the user). */
+export type NewScheduleBody = {
+  name: string;
+  prompt: string;
+  when: import("./gitbot").ScheduleWhen;
+  target: { kind: "thread"; threadId: string };
+  notify?: import("./gitbot").ScheduleNotify;
+  overlap?: "queue" | "skip";
+  maxRuns?: number;
+  endsAt?: string;
+};
+
+export function createSchedule(body: NewScheduleBody) {
+  return req<import("./gitbot").Schedule & { nextRuns: string[] }>("/schedules", { method: "POST", body: JSON.stringify(body) });
+}
+
 /** Pause or resume (`enabled`), or change `notify`. */
 export function patchSchedule(id: string, patch: { enabled?: boolean; notify?: import("./gitbot").ScheduleNotify }) {
   return req<import("./gitbot").Schedule>(`/schedules/${encodeURIComponent(id)}`, {

@@ -1144,6 +1144,92 @@ test("POST /schedules validates name, prompt, time, target and limits", async (t
   await refused({ ...good, target: { kind: "thread", threadId: plainThread().id } }, /at most 100 schedules/);
 });
 
+// --- POST /schedules/preview (sidebar slice 05) ---
+
+test("POST /schedules/preview returns describe, nextRuns and defaultNotify", async () => {
+  const daily = await serve("POST", "/schedules/preview", { when: { kind: "cron", expr: "0 9 * * 1-5", tz: "Europe/London" }, tz: "America/New_York" });
+  assert.equal(daily.status, 200, JSON.stringify(daily.body));
+  assert.equal(daily.body.describe, "every weekday at 09:00 Europe/London");
+  assert.equal(daily.body.nextRuns.length, 5);
+  for (const at of daily.body.nextRuns) {
+    const day = new Date(at).getUTCDay();
+    assert.ok(day >= 1 && day <= 5, `${at} is a weekday`);
+  }
+  assert.equal(daily.body.defaultNotify, "always");
+  assert.equal(daily.body.warning, undefined);
+  assert.ok(daily.body.minGapMinutes >= 15);
+
+  // A once reads in the body's tz, has one run and no gap.
+  const at = atIso(Date.UTC(2099, 0, 1, 14, 0));
+  const once = await serve("POST", "/schedules/preview", { when: { kind: "once", at }, tz: "UTC" });
+  assert.equal(once.status, 200);
+  assert.match(once.body.describe, /^once at .* UTC$/);
+  assert.deepEqual(once.body.nextRuns, [new Date(at).toISOString()]);
+  assert.equal(once.body.minGapMinutes, null);
+  assert.equal(once.body.defaultNotify, "always");
+
+  // maxRuns caps the runs and is in the words.
+  const capped = await serve("POST", "/schedules/preview", { when: { kind: "interval", everyMinutes: 60 }, maxRuns: 2, tz: "UTC" });
+  assert.equal(capped.status, 200);
+  assert.equal(capped.body.nextRuns.length, 2);
+  assert.equal(capped.body.describe, "every hour, at most 2 runs");
+
+  // A bad tz is refused.
+  const badTz = await serve("POST", "/schedules/preview", { when: { kind: "interval", everyMinutes: 60 }, tz: "Mars/Olympus" });
+  assert.equal(badTz.status, 400);
+});
+
+test("preview returns the same errors as create", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const thread = plainThread("Demo");
+  const bodies: Record<string, unknown>[] = [
+    { when: { kind: "once", at: atIso(now - 60_000) } },
+    { when: { kind: "once", at: "tomorrow" } },
+    { when: { kind: "cron", expr: "0 9 * * * *" } },
+    { when: { kind: "cron", expr: "99 9 * * *" } },
+    { when: { kind: "interval", everyMinutes: 0 } },
+    { when: { kind: "weekly" } },
+    {},
+    { when: { kind: "once", at: atIso(now + 60_000) }, maxRuns: 3 },
+    { when: { kind: "interval", everyMinutes: 5 }, maxRuns: 0 },
+    { when: { kind: "interval", everyMinutes: 5 }, endsAt: "soon" },
+    { when: { kind: "interval", everyMinutes: 5 }, endsAt: atIso(now + 60_000) },
+  ];
+  for (const timing of bodies) {
+    const created = await serve("POST", "/schedules", { name: "Ping", prompt: "Reply: ok", target: { kind: "thread", threadId: thread.id }, ...timing });
+    const previewed = await serve("POST", "/schedules/preview", { ...timing, tz: "UTC" });
+    assert.equal(created.status, 400, JSON.stringify(timing));
+    assert.equal(previewed.status, 400, JSON.stringify(timing));
+    assert.equal(previewed.body.error, created.body.error);
+  }
+  const fields = await serve("POST", "/schedules/preview", { when: { kind: "cron", expr: "0 9 * * * *" }, tz: "UTC" });
+  assert.match(fields.body.error, /use a 5-field cron pattern/);
+  assert.equal(listSchedules().length, 0);
+});
+
+test("preview warns under 5 minutes and writes nothing", async (t) => {
+  const logs = t.mock.method(console, "log", () => {});
+  let writes = 0;
+  const off = onSchedulesWritten(() => { writes += 1; });
+  try {
+    const every = await serve("POST", "/schedules/preview", { when: { kind: "interval", everyMinutes: 1 }, tz: "UTC" });
+    assert.equal(every.status, 200);
+    assert.equal(every.body.warning, "Runs more often than every 5 minutes: each run is a full agent turn and uses tokens");
+    assert.equal(every.body.defaultNotify, "on-failure");
+    assert.equal(every.body.minGapMinutes, 1);
+    const cron = await serve("POST", "/schedules/preview", { when: { kind: "cron", expr: "*/2 * * * *" }, tz: "UTC" });
+    assert.ok(cron.body.warning);
+    const five = await serve("POST", "/schedules/preview", { when: { kind: "interval", everyMinutes: 5 }, tz: "UTC" });
+    assert.equal(five.body.warning, undefined);
+    assert.equal(five.body.defaultNotify, "on-failure");
+  } finally {
+    off();
+  }
+  assert.equal(writes, 0);
+  assert.equal(listSchedules().length, 0);
+  assert.ok(!logs.mock.calls.some((c) => String(c.arguments[0]).startsWith("[schedules]")));
+});
+
 test("POST /schedules/:id/run fires now and counts as a run", async (t) => {
   const logs = t.mock.method(console, "log", () => {});
   const thread = plainThread("Demo");

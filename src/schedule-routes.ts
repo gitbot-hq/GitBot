@@ -2,7 +2,7 @@ import { EventEmitter } from "events";
 import { onThreadDeleted, onThreadSeen } from "./bot-store";
 import { jsonError, jsonOk, parseQuery, readBody, type IRequest, type IResponse } from "./server-common";
 import { findProject } from "./project-index";
-import { createSchedule, deleteSchedule, editSchedule, getSchedule, listSchedules, listSchedulesFor, nextRunsOf, onSchedulesWritten, targetThreadId, viewContext, viewSchedule } from "./schedules";
+import { createSchedule, deleteSchedule, editSchedule, getSchedule, listSchedules, listSchedulesFor, nextRunsOf, onSchedulesWritten, previewTiming, targetThreadId, viewContext, viewSchedule } from "./schedules";
 import { canonicalTimeZone, defaultTimeZone } from "./schedule-time";
 import { rearmScheduler, runScheduleNow, scheduleChanged, schedulerClock } from "./scheduler";
 
@@ -152,6 +152,19 @@ export async function handleScheduleRoutes(
     rearmScheduler();
     // The next 3 run times, to check the maths against.
     jsonOk(res, { ...created.schedule, nextRuns: nextRunsOf(created.schedule, 3) });
+    return true;
+  }
+
+  // POST /schedules/preview {when, maxRuns?, endsAt?, tz}: the times a new
+  // schedule would get, or the 400 POST /schedules would give. Writes
+  // nothing, so it is not logged.
+  if (method === "POST" && path === "/schedules/preview") {
+    const body = await readBody(req);
+    const zone = body?.tz === undefined ? defaultTimeZone() : canonicalTimeZone(body.tz);
+    if (!zone.ok) { jsonError(res, 400, zone.error); return true; }
+    const preview = previewTiming(body, zone.tz, schedulerClock.now());
+    if (!preview.ok) { jsonError(res, 400, preview.error); return true; }
+    jsonOk(res, preview.preview);
     return true;
   }
 

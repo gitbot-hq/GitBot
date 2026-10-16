@@ -2,7 +2,7 @@
 
 import AnimatedActionIcon from "./animated-action-icon";
 import { ChevronDownIcon } from "@animateicons/react/lucide/chevron-down-icon";
-import { IconAlertTriangle, IconClock, IconDots } from "@tabler/icons-react";
+import { IconAlertTriangle, IconClock, IconDots, IconPlus } from "@tabler/icons-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { listSchedules, patchSchedule, runScheduleNow } from "../lib/api";
@@ -61,9 +61,12 @@ export default function ScheduledDock({
   attentionCount,
   onOpen,
   onShowAll,
+  onNew,
   onAutoOpen,
   onError,
 }: {
+  /** Opens the new-schedule form (for the open thread, if any). */
+  onNew: () => void;
   open: boolean;
   onToggle: () => void;
   /** The stream's count (use-thread-sessions); the list's own when absent. */
@@ -249,21 +252,27 @@ export default function ScheduledDock({
 
   return (
     <section className={`scheduled-dock${open ? " open" : ""}`} aria-label="Scheduled">
-      <button type="button" className="dock-head" aria-expanded={open} onClick={onToggle}>
-        <IconClock size={16} aria-hidden="true" />
-        <span className="dock-head-title">Scheduled</span>
-        {chip && (
-          <span className={`dock-count ${chip.tone}`} role="img" aria-label={chip.text}>
-            {chip.count}
-          </span>
-        )}
-        <AnimatedActionIcon icon={ChevronDownIcon} size={14} aria-hidden="true" />
-      </button>
+      <div className="dock-head-row">
+        <button type="button" className="dock-head" aria-expanded={open} onClick={onToggle}>
+          <IconClock size={16} aria-hidden="true" />
+          <span className="dock-head-title">Scheduled</span>
+          {chip && (
+            <span className={`dock-count ${chip.tone}`} role="img" aria-label={chip.text}>
+              {chip.count}
+            </span>
+          )}
+          <AnimatedActionIcon icon={ChevronDownIcon} size={14} aria-hidden="true" />
+        </button>
+        <button type="button" className="dock-new" onClick={onNew} aria-label="New schedule" data-tip="New schedule">
+          <IconPlus size={14} aria-hidden="true" />
+        </button>
+      </div>
       {open && (
         <div className="dock-body">
           {empty && (
             <div className="dock-empty">
               <p>{DOCK_EMPTY}</p>
+              <button type="button" className="schedule-link" onClick={onNew}>New schedule</button>
               <p className="dock-hint">{DOCK_HINT}</p>
             </div>
           )}

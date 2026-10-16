@@ -611,6 +611,8 @@ export default function Chat({
   approvals,
   onReviewApproval,
   covered = false,
+  prefill,
+  onPrefilled,
 }: {
   thread: ThreadFull | null;
   /** Jarvis threads: its children's approvals, each a row placed among the
@@ -671,6 +673,11 @@ export default function Chat({
   /** Something covers the chat (a pane, a drawer, a modal): its Escape is
    *  theirs, never "stop the turn". */
   covered?: boolean;
+  /** Text to put in a thread's composer once that thread is open (the
+   *  schedule form's "Ask Jarvis instead"). It is only a draft: never sent. */
+  prefill?: { threadId: string; text: string } | null;
+  /** The prefill is in the composer. */
+  onPrefilled?: () => void;
 }) {
   // An explicit thread choice wins over the bot's, matching the server.
   const agent = thread?.agent ?? botAgent ?? "claude-code";
@@ -1206,6 +1213,22 @@ export default function Chat({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewKey]);
+
+  // A draft handed in for a thread (after the switch above restored that
+  // thread's own, which stays below it). Typed into the composer, not sent.
+  useEffect(() => {
+    if (!prefill || viewKey !== prefill.threadId) return;
+    const merged = mergeQueued(prefill.text, draftRef.current);
+    draftRef.current = merged;
+    drafts.current[viewKey] = merged;
+    setDraft(merged);
+    onPrefilled?.();
+    requestAnimationFrame(() => {
+      fitBox();
+      boxRef.current?.focus({ preventScroll: true });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewKey, prefill]);
 
   /**
    * Joins the thread's running turn, if it has one. `awaitStatus`: history is

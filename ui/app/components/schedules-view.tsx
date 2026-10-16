@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listSchedules } from "../lib/api";
-import type { ScheduleView } from "../lib/gitbot";
+import type { Bot, Schedule, ScheduleView } from "../lib/gitbot";
+import type { FormTarget } from "../lib/schedule-when";
 import { DOCK_EMPTY, DOCK_HINT, endedText, SCHEDULE_GONE, viewGroups } from "../lib/schedule-dock";
 import { panelLabel } from "../lib/schedules";
 import { PanelBack } from "./panel-controls";
 import ScheduleCard, { scheduleCall, type CardAction } from "./schedule-card";
+import ScheduleForm from "./schedule-form";
 
 /**
  * Centres a card in the view's own scroller (the overlay around the pane),
@@ -37,12 +39,23 @@ const HIGHLIGHT_MS = 4000;
  */
 export default function SchedulesView({
   focusId,
+  form: formAtOpen,
+  bots,
   active,
   refreshKey,
   onBack,
   onOpen,
   onError,
+  onCreated,
+  onAskJarvis,
 }: {
+  /** Opened on the new-schedule form (the dock's +, a panel's + Add), for that thread when given. */
+  form?: { target?: FormTarget };
+  bots: readonly Bot[];
+  /** A schedule was made: the shell toasts and reopens the view at its card. */
+  onCreated: (schedule: Schedule & { nextRuns: string[] }) => void;
+  /** The form's "Ask Jarvis instead": close the view, open that thread with a draft. */
+  onAskJarvis: (target: FormTarget, draft: string) => void;
   /** The card a deep link asked for. */
   focusId?: string;
   /** Nothing else (a modal, Learn more) is on top: Escape is ours. */
@@ -57,6 +70,11 @@ export default function SchedulesView({
   const [busy, setBusy] = useState<string | null>(null);
   const [showEnded, setShowEnded] = useState(false);
   const [highlight, setHighlight] = useState<string | null>(null);
+  // The form, over the list: `inView` when opened from the view's own
+  // button (Cancel and Escape go back to the list; else they close the view).
+  const [form, setForm] = useState<{ target?: FormTarget; inView: boolean } | null>(
+    formAtOpen ? { target: formAtOpen.target, inView: false } : null,
+  );
   const live = useRef(true);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -85,25 +103,32 @@ export default function SchedulesView({
   }, [load, refreshKey]);
 
   // The heading takes focus on open, so the keyboard starts in the view.
+  // Opened on the form, its message box has focus instead.
   useEffect(() => {
+    if (formAtOpen) return;
     const frame = requestAnimationFrame(() => headingRef.current?.focus({ preventScroll: true }));
     return () => cancelAnimationFrame(frame);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Escape closes the view. Caught first (window, capture) and stopped, as
   // the mobile drawer does, so nothing behind it (the chat's stop-the-turn,
   // a dock menu) also takes it. A modal or Learn more on top keeps its own.
+  const back = useCallback(() => {
+    if (form?.inView) setForm(null);
+    else onBack();
+  }, [form, onBack]);
   useEffect(() => {
     if (!active) return;
     function escape(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
-      onBack();
+      back();
     }
     window.addEventListener("keydown", escape, true);
     return () => window.removeEventListener("keydown", escape, true);
-  }, [active, onBack]);
+  }, [active, back]);
 
   // A deep link: once the list is in, scroll to its card and draw it out,
   // or say it is gone. Ended ones open their group first.
@@ -157,20 +182,34 @@ export default function SchedulesView({
 
   return (
     <div ref={rootRef} className="profile-pane schedules-pane" aria-label="Schedules">
-      <PanelBack onClick={onBack} />
+      <PanelBack onClick={back} />
       <div className="profile-pane-inner">
         <header className="schedules-view-head">
           <h2 ref={headingRef} tabIndex={-1}>Schedules</h2>
           {list && list.length > 0 && <span className="schedules-view-count">{panelLabel(list.length)}</span>}
+          {!form && (
+            <button type="button" className="btn-primary schedules-new" onClick={() => setForm({ inView: true })}>
+              New schedule
+            </button>
+          )}
         </header>
-        {list === null && <p className="schedules-view-note">Loading…</p>}
-        {list?.length === 0 && (
+        {form && (
+          <ScheduleForm
+            target={form.target}
+            bots={bots}
+            onCancel={back}
+            onSaved={onCreated}
+            onAskJarvis={onAskJarvis}
+          />
+        )}
+        {!form && list === null && <p className="schedules-view-note">Loading…</p>}
+        {!form && list?.length === 0 && (
           <div className="schedules-view-empty">
             <p>{DOCK_EMPTY}</p>
             <p className="dock-hint">{DOCK_HINT}</p>
           </div>
         )}
-        {groups && (
+        {!form && groups && (
           <>
             {group("Needs attention", groups.attention)}
             {group("Active", groups.active)}

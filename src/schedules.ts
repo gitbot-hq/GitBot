@@ -989,6 +989,82 @@ export function isFolder(path: string): boolean {
   }
 }
 
+export type TimingResult =
+  | { ok: true; when: When; first: number; maxRuns?: number; endsAt?: string }
+  | { ok: false; error: string };
+
+/**
+ * A new schedule's times from a body ({when, maxRuns?, endsAt?}), checked
+ * as of `at`: the `when` parsed, its first run, and how it ends. Shared by
+ * createSchedule and POST /schedules/preview, so their messages agree.
+ */
+export function checkTiming(body: any, at: number): TimingResult {
+  if (!body || typeof body !== "object") return { ok: false, error: "body must be a JSON object" };
+  const parsed = parseWhen(body.when, at);
+  if (!parsed.ok) return parsed;
+  const first = nextOccurrence(parsed.when, at);
+  if (first == null) return { ok: false, error: "when never comes due" };
+  // How it ends: for a cron or interval only (a once ends after its run).
+  const { maxRuns, endsAt } = body;
+  if (parsed.when.kind === "once" && (maxRuns !== undefined || endsAt !== undefined)) {
+    return { ok: false, error: "maxRuns and endsAt are for cron and interval schedules: a once runs one time" };
+  }
+  if (maxRuns !== undefined && (!Number.isInteger(maxRuns) || maxRuns < 1 || maxRuns > MAX_RUNS_MAX)) {
+    return { ok: false, error: `maxRuns must be a whole number from 1 to ${MAX_RUNS_MAX}` };
+  }
+  if (endsAt !== undefined) {
+    if (!isIsoInstant(endsAt)) return { ok: false, error: "endsAt must be an ISO 8601 time with a zone, e.g. 2026-10-14T17:00:00Z" };
+    if (Date.parse(endsAt) <= first) return { ok: false, error: `endsAt must be after the first run (${iso(first)})` };
+  }
+  return {
+    ok: true,
+    when: parsed.when,
+    first,
+    ...(maxRuns !== undefined ? { maxRuns } : {}),
+    ...(endsAt !== undefined ? { endsAt } : {}),
+  };
+}
+
+/** Runs closer together than this get the preview's token warning. */
+export const PREVIEW_WARN_GAP_MINUTES = 5;
+export const PREVIEW_WARNING = "Runs more often than every 5 minutes: each run is a full agent turn and uses tokens";
+
+export interface SchedulePreview {
+  describe: string;
+  nextRuns: string[];
+  defaultNotify: Notify;
+  /** null when there is no second run (a once): JSON has no Infinity. */
+  minGapMinutes: number | null;
+  warning?: string;
+}
+
+/**
+ * What a new schedule's times would be (POST /schedules/preview): in words
+ * (a once read in `tz`), its first 5 runs, the notify it would default to,
+ * and a warning under PREVIEW_WARN_GAP_MINUTES. Writes nothing.
+ */
+export function previewTiming(body: any, tz: string, at: number): { ok: true; preview: SchedulePreview } | { ok: false; error: string } {
+  const timing = checkTiming(body, at);
+  if (!timing.ok) return timing;
+  const shape = { when: timing.when, maxRuns: timing.maxRuns, endsAt: timing.endsAt };
+  const gap = minGapMinutes(timing.when, at);
+  // Runs that would follow the first, as nextRunsOf counts them.
+  const runs = upcomingRuns(timing.when, timing.first, 5, {
+    endsAt: timing.endsAt ? Date.parse(timing.endsAt) : undefined,
+    runsLeft: timing.maxRuns ?? Infinity,
+  });
+  return {
+    ok: true,
+    preview: {
+      describe: describeSchedule(shape, tz),
+      nextRuns: runs.map(iso),
+      defaultNotify: defaultNotify(timing.when, at),
+      minGapMinutes: Number.isFinite(gap) ? gap : null,
+      ...(gap < PREVIEW_WARN_GAP_MINUTES ? { warning: PREVIEW_WARNING } : {}),
+    },
+  };
+}
+
 /**
  * Checks a new schedule from a request body and stores it. Only what this
  * build runs is accepted: a once, cron or interval on an existing thread, or
@@ -1003,7 +1079,7 @@ export function createSchedule(
   availableAgents?: readonly string[],
 ): NewScheduleResult {
   if (!body || typeof body !== "object") return { ok: false, error: "body must be a JSON object" };
-  const { name, prompt, when, target } = body;
+  const { name, prompt, target } = body;
 
   const badName = nameError(name);
   if (badName) return { ok: false, error: badName };
@@ -1011,23 +1087,9 @@ export function createSchedule(
   if (badPrompt) return { ok: false, error: badPrompt };
   if (body.attachments !== undefined) return { ok: false, error: "a schedule's prompt is text only: attachments are not supported" };
 
-  const parsed = parseWhen(when, at);
-  if (!parsed.ok) return parsed;
-  const first = nextOccurrence(parsed.when, at);
-  if (first == null) return { ok: false, error: "when never comes due" };
-
-  // How it ends: for a cron or interval only (a once ends after its run).
-  const { maxRuns, endsAt } = body;
-  if (parsed.when.kind === "once" && (maxRuns !== undefined || endsAt !== undefined)) {
-    return { ok: false, error: "maxRuns and endsAt are for cron and interval schedules: a once runs one time" };
-  }
-  if (maxRuns !== undefined && (!Number.isInteger(maxRuns) || maxRuns < 1 || maxRuns > MAX_RUNS_MAX)) {
-    return { ok: false, error: `maxRuns must be a whole number from 1 to ${MAX_RUNS_MAX}` };
-  }
-  if (endsAt !== undefined) {
-    if (!isIsoInstant(endsAt)) return { ok: false, error: "endsAt must be an ISO 8601 time with a zone, e.g. 2026-10-14T17:00:00Z" };
-    if (Date.parse(endsAt) <= first) return { ok: false, error: `endsAt must be after the first run (${iso(first)})` };
-  }
+  const timing = checkTiming(body, at);
+  if (!timing.ok) return timing;
+  const { when, first, maxRuns, endsAt } = timing;
 
   const { overlap, notify } = body;
   if (overlap !== undefined && overlap !== "queue" && overlap !== "skip") {
@@ -1067,20 +1129,20 @@ export function createSchedule(
     id: randomUUID(),
     name: name.trim(),
     prompt,
-    when: parsed.when,
+    when: when,
     target: stored,
     // A schedule Jarvis made reports its notes to that Jarvis thread.
     ...(createdBy.kind === "jarvis" ? { notesTo: createdBy.threadId } : {}),
     createdBy,
     enabled: true,
     overlap: overlap ?? "queue",
-    notify: notify ?? defaultNotify(parsed.when, at),
+    notify: notify ?? defaultNotify(when, at),
     ...(maxRuns !== undefined ? { maxRuns } : {}),
     ...(endsAt !== undefined ? { endsAt } : {}),
     runCount: 0,
     consecutiveFailures: 0,
     // A once keeps `at` exactly as sent; a cron or interval its first run.
-    nextRunAt: parsed.when.kind === "once" ? parsed.when.at : iso(first),
+    nextRunAt: when.kind === "once" ? when.at : iso(first),
     history: [],
     createdAt: stamp,
     updatedAt: stamp,

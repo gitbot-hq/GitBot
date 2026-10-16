@@ -70,7 +70,8 @@ import { useAttentionTitle } from "../lib/tab-title";
 import { useTabVisible } from "../lib/use-tab-visible";
 import { closeThreadNotifications, usePresence } from "../lib/presence";
 import { coalesce } from "../lib/coalesce";
-import { threadBadge } from "../lib/schedules";
+import { shortTime, threadBadge } from "../lib/schedules";
+import type { FormTarget } from "../lib/schedule-when";
 import "../v2-theme.css";
 import "../onboarding/onboarding.css";
 
@@ -206,7 +207,9 @@ export default function V2() {
   const [userOpen, setUserOpen] = useState(false);
   // The Schedules view over the tray: `focusId` is a deep link's card; `key`
   // remounts it on each open (a new link scrolls again).
-  const [schedulesView, setSchedulesView] = useState<{ focusId?: string; key: number } | null>(null);
+  const [schedulesView, setSchedulesView] = useState<{ focusId?: string; key: number; form?: { target?: FormTarget } } | null>(null);
+  // A draft for a thread's composer (the schedule form's "Ask Jarvis instead"), until it lands.
+  const [chatPrefill, setChatPrefill] = useState<{ threadId: string; text: string } | null>(null);
   const schedulesTriggerRef = useRef<HTMLElement | null>(null);
   const { toast, view: toastView } = useToast();
   // Narrow screens (≤900px): the Bots and Threads columns become slide-in
@@ -1314,7 +1317,7 @@ export default function V2() {
    * Opens the Schedules view (one at a time with the other panes over the
    * chat), at a schedule's card when given. Focus returns to what opened it.
    */
-  function openSchedules(focusId?: string) {
+  function openSchedules(focusId?: string, form?: { target?: FormTarget }) {
     dismissLearnMore();
     setThreadPanel(false);
     setUserOpen(false);
@@ -1323,7 +1326,33 @@ export default function V2() {
     if (opener instanceof HTMLElement && opener !== document.body && !opener.closest(".schedules-overlay")) {
       schedulesTriggerRef.current = opener;
     }
-    setSchedulesView((prev) => ({ focusId, key: (prev?.key ?? 0) + 1 }));
+    setSchedulesView((prev) => ({ focusId, key: (prev?.key ?? 0) + 1, ...(form ? { form } : {}) }));
+  }
+
+  /** The open thread as a schedule form's "This thread", unless it is a setup thread. */
+  function openThreadTarget(): FormTarget | undefined {
+    if (!activeThread || activeThread.kind === "setup" || !bot || activeThread.botId !== bot.id) return undefined;
+    return { threadId: activeThread.id, title: activeThread.title, botId: bot.id, botName: bot.name, jarvis: bot.id === JARVIS_BOT_ID };
+  }
+
+  /** The new-schedule form, in the Schedules view, for the open thread when there is one. */
+  function openScheduleForm() {
+    openSchedules(undefined, { target: openThreadTarget() });
+  }
+
+  /** Made from the form: say when it runs, and show its card in the view. */
+  function scheduleCreated(created: { id: string; nextRunAt: string | null; nextRuns: string[] }) {
+    const next = created.nextRuns[0] ?? created.nextRunAt;
+    toast(next ? `Scheduled · next ${shortTime(next)}` : "Scheduled");
+    setSchedulesView((prev) => ({ focusId: created.id, key: (prev?.key ?? 0) + 1 }));
+    quietRefresh();
+  }
+
+  /** "Ask Jarvis instead": that Jarvis thread opens with the request in its composer, unsent. */
+  function askJarvisInstead(target: FormTarget, draft: string) {
+    schedulesTriggerRef.current = null;
+    openThread(target.botId, target.threadId);
+    setChatPrefill({ threadId: target.threadId, text: draft });
   }
 
   /** Back or Escape: the view closes and focus goes back to its opener, if still on the page. */
@@ -1609,6 +1638,7 @@ export default function V2() {
               attentionCount={threadSessions.schedules?.attentionCount}
               onOpen={openFromDock}
               onShowAll={openSchedules}
+              onNew={openScheduleForm}
               onAutoOpen={autoOpenDock}
               onError={toast}
             />
@@ -1854,6 +1884,7 @@ export default function V2() {
                   version={threadSessions.schedules?.version}
                   onOpen={openThread}
                   onShowAll={() => openSchedules()}
+                  onAdd={openScheduleForm}
                   onChanged={quietRefresh}
                   onError={toast}
                 />
@@ -1861,6 +1892,8 @@ export default function V2() {
               <Chat
                 thread={activeThread}
                 covered={chatCovered}
+                prefill={chatPrefill}
+                onPrefilled={() => setChatPrefill(null)}
                 serverStatus={activeThread ? threadSessions.statuses[activeThread.id] : undefined}
                 lock={chatLock}
                 approvals={chatApprovals}
@@ -1972,6 +2005,10 @@ export default function V2() {
               <SchedulesView
                 key={schedulesView.key}
                 focusId={schedulesView.focusId}
+                form={schedulesView.form}
+                bots={bots}
+                onCreated={scheduleCreated}
+                onAskJarvis={askJarvisInstead}
                 active={!modal && !learnMore}
                 refreshKey={scheduleTick}
                 onBack={closeSchedules}
