@@ -62,11 +62,14 @@ export default function ScheduledDock({
   onOpen,
   onShowAll,
   onNew,
+  onEdit,
   onAutoOpen,
   onError,
 }: {
   /** Opens the new-schedule form (for the open thread, if any). */
   onNew: () => void;
+  /** Opens the edit form for a schedule. */
+  onEdit: (s: ScheduleView) => void;
   open: boolean;
   onToggle: () => void;
   /** The stream's count (use-thread-sessions); the list's own when absent. */
@@ -175,6 +178,7 @@ export default function ScheduledDock({
   function choose(s: ScheduleView, item: RowMenuItem) {
     closeMenu();
     if (item.action === "open") return go(rowTarget(s));
+    if (item.action === "edit") return onEdit(s);
     const action =
       item.action === "run" ? () => runScheduleNow(s.id)
       : () => patchSchedule(s.id, { enabled: item.action === "resume" });

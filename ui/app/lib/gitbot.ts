@@ -121,6 +121,18 @@ export type Schedule = {
   describe?: string;
 };
 
+/** What PATCH /schedules/:id takes (src/schedules.ts EDITABLE_FIELDS); null clears a limit. */
+export type SchedulePatch = {
+  enabled?: boolean;
+  name?: string;
+  prompt?: string;
+  when?: ScheduleWhen;
+  overlap?: "queue" | "skip";
+  notify?: ScheduleNotify;
+  maxRuns?: number | null;
+  endsAt?: string | null;
+};
+
 /** Where a schedule runs, named (GET /schedules). */
 export type ScheduleWhere =
   | { kind: "thread"; threadId: string; title: string; botId: string; botName: string; jarvis: boolean }

@@ -2,7 +2,21 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { askJarvisDraft, fromWhen, pickerGroups, suggestName, tomorrowAt, toWhen, zonedToIso } from "../ui/app/lib/schedule-when";
+import {
+  askJarvisDraft,
+  diffSchedule,
+  editInit,
+  fromWhen,
+  isReadableWhen,
+  notifySuggestion,
+  patchDemotes,
+  pickerGroups,
+  suggestName,
+  tomorrowAt,
+  toWhen,
+  zonedToIso,
+  type WhenChoice,
+} from "../ui/app/lib/schedule-when";
 
 const NOW = Date.UTC(2026, 9, 16, 12, 0); // Fri 16 Oct 2026, 12:00Z
 
@@ -97,6 +111,115 @@ test("Enter in a form field never saves: only the Save button does", () => {
   assert.ok(!form.includes('type="submit"'), "no submit button: Enter in Name, a time or the search can't submit");
   assert.match(form, /onSubmit=\{\(e\) => e\.preventDefault\(\)\}/);
   assert.match(form, /<button type="button" className="btn-primary"[^>]*onClick=\{\(\) => ready && !saving && save\(\)\}/);
+  // Edit's Save and Save and resume are plain buttons too.
+  assert.match(form, /<button type="button" className="btn-primary"[^>]*onClick=\{\(\) => ready && changed && !saving && saveEdit\(false\)\}/);
+  assert.match(form, /<button type="button" className="btn-secondary"[^>]*onClick=\{\(\) => ready && !saving && saveEdit\(true\)\}/);
+  assert.ok(!read("own-words-confirm.tsx").includes('type="submit"'));
   const picker = read("thread-picker.tsx");
   assert.match(picker, /if \(e\.key !== "Enter"\) return;\s*e\.preventDefault\(\);/);
+});
+
+const STORED = {
+  name: "Morning",
+  prompt: "Reply: ready",
+  when: { kind: "cron", expr: "0 9 * * 1-5", tz: "Europe/London" },
+  notify: "always",
+  overlap: "queue",
+  maxRuns: 5,
+  endsAt: "2026-12-01T17:00:30Z",
+} as const;
+
+test("diffSchedule sends only changed fields and null for cleared limits", () => {
+  const same = { name: "Morning", prompt: "Reply: ready", notify: "always", overlap: "queue", maxRuns: 5, endsAt: STORED.endsAt } as const;
+  // Nothing touched: nothing to send (a cron with other spacing is the same times).
+  assert.deepEqual(diffSchedule(STORED, same), {});
+  assert.deepEqual(diffSchedule(STORED, { ...same, when: { kind: "cron", expr: " 0  9 * * 1-5", tz: "Europe/London" } }), {});
+  assert.deepEqual(diffSchedule(STORED, { ...same, prompt: "Reply: edited ok" }), { prompt: "Reply: edited ok" });
+  assert.deepEqual(diffSchedule(STORED, { ...same, name: " Morning " }), {}, "the name is trimmed");
+  assert.deepEqual(diffSchedule(STORED, { ...same, maxRuns: undefined, endsAt: undefined }), { maxRuns: null, endsAt: null });
+  assert.deepEqual(diffSchedule(STORED, { ...same, maxRuns: 3, notify: "on-failure", overlap: "skip" }), { maxRuns: 3, notify: "on-failure", overlap: "skip" });
+  // The same zone's cron in another zone is a change.
+  assert.deepEqual(diffSchedule(STORED, { ...same, when: { kind: "cron", expr: "0 9 * * 1-5", tz: "UTC" } }), { when: { kind: "cron", expr: "0 9 * * 1-5", tz: "UTC" } });
+  // Into a once: no limits are sent (the server drops them).
+  const once = { kind: "once", at: "2026-10-20T08:00:00.000Z" } as const;
+  assert.deepEqual(diffSchedule(STORED, { ...same, when: once, maxRuns: undefined, endsAt: undefined }), { when: once });
+  // A once's instant compares by time, not by text.
+  assert.deepEqual(diffSchedule({ ...STORED, when: { kind: "once", at: "2026-10-20T08:00:00Z" }, maxRuns: undefined, endsAt: undefined }, { ...same, when: once, maxRuns: undefined, endsAt: undefined }), {});
+});
+
+test("diffSchedule flags demoting fields for own-words", () => {
+  const same = { name: "Morning", prompt: "Reply: ready", notify: "always", overlap: "queue", maxRuns: 5, endsAt: STORED.endsAt } as const;
+  for (const [edit, demotes] of [
+    [{ prompt: "x" }, true],
+    [{ name: "Evening" }, true],
+    [{ when: { kind: "interval", everyMinutes: 1 } }, true],
+    [{ maxRuns: undefined }, true],
+    [{ endsAt: undefined }, true],
+    [{ notify: "never" }, false],
+    [{ overlap: "skip" }, false],
+    [{ notify: "never", overlap: "skip" }, false],
+  ] as const) {
+    assert.equal(patchDemotes(diffSchedule(STORED, { ...same, ...edit } as any)), demotes, JSON.stringify(edit));
+  }
+  // A resume alone doesn't (D3).
+  assert.equal(patchDemotes({ enabled: true }), false);
+  assert.equal(patchDemotes({}), false);
+});
+
+test("fromWhen round-trips every preset toWhen makes", () => {
+  const tz = "America/New_York";
+  const choices: WhenChoice[] = [
+    { preset: "once", localDateTime: "2026-11-01T01:30" },
+    { preset: "daily", time: "00:00" },
+    { preset: "weekdays", time: "09:00" },
+    { preset: "weekly", days: [1, 3, 5], time: "12:30" },
+    { preset: "weekly", days: [0, 6], time: "08:15" },
+    { preset: "monthly", day: 31, time: "06:45" },
+    { preset: "every", amount: 1, unit: "minutes" },
+    { preset: "every", amount: 45, unit: "minutes" },
+    { preset: "every", amount: 2, unit: "hours" },
+    { preset: "cron", expr: "*/7 9-17 * * 1-5" },
+  ];
+  for (const choice of choices) {
+    const when = toWhen(choice, tz, NOW)!;
+    assert.deepEqual(fromWhen(when, tz), choice, JSON.stringify(choice));
+    assert.deepEqual(toWhen(fromWhen(when, tz), tz, NOW), when);
+  }
+  // Edit's prefill: a cron in another zone sets the form's zone to the cron's.
+  const init = editInit({ when: { kind: "cron", expr: "0 9 * * 1-5", tz: "Europe/London" }, endsAt: "2026-12-01T17:00:00Z" }, "Asia/Tokyo");
+  assert.deepEqual(init, { choice: { preset: "weekdays", time: "09:00" }, tz: "Europe/London", endsLocal: "2026-12-01T17:00" });
+  assert.equal(editInit({ when: { kind: "interval", everyMinutes: 60 } }, "Asia/Tokyo").tz, "Asia/Tokyo");
+});
+
+test("the notify suggestion shows only when the times changed and the default differs", () => {
+  const p = { describe: "every minute", defaultNotify: "on-failure" } as const;
+  assert.deepEqual(notifySuggestion(true, p, "always"), { text: "Suggested for every minute: only if it fails", notify: "on-failure" });
+  assert.equal(notifySuggestion(true, p, "on-failure"), null);
+  assert.equal(notifySuggestion(false, p, "always"), null);
+  assert.equal(notifySuggestion(true, null, "always"), null);
+});
+
+test("fromWhen and editInit fall back on a when this build can't read, and it isn't readable", () => {
+  const tz = "Europe/London";
+  const bad = [
+    { kind: "once", at: "not a time" },
+    { kind: "once" },
+    { kind: "cron", tz },
+    { kind: "cron", expr: 42, tz },
+    { kind: "cron", expr: "0 9 * * *", tz: "Not/AZone" },
+    { kind: "interval", everyMinutes: "5" },
+    { kind: "solar", at: "sunrise" },
+    null,
+  ];
+  for (const when of bad) {
+    assert.equal(isReadableWhen(when), false, JSON.stringify(when));
+    assert.doesNotThrow(() => fromWhen(when as any, tz), JSON.stringify(when));
+    assert.deepEqual(fromWhen(when as any, tz), { preset: "cron", expr: "" }, JSON.stringify(when));
+    assert.doesNotThrow(() => editInit({ when: when as any, endsAt: "garbage" }, tz), JSON.stringify(when));
+  }
+  assert.equal(editInit({ when: { kind: "cron", expr: "0 9 * * *", tz: "Not/AZone" } }, tz).tz, tz, "an unknown zone falls back to the viewer's");
+  assert.equal(editInit({ when: { kind: "interval", everyMinutes: 5 }, endsAt: "garbage" }, tz).endsLocal, "");
+  for (const when of [{ kind: "once", at: "2026-10-20T08:00:00Z" }, { kind: "cron", expr: "0 9 * * 1-5", tz }, { kind: "interval", everyMinutes: 5 }]) {
+    assert.equal(isReadableWhen(when), true, JSON.stringify(when));
+  }
 });

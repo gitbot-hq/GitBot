@@ -18,7 +18,8 @@ import { watchChildReports } from "../src/reports";
 import { Cron } from "croner";
 import { clipAtWord, ERROR_BACKOFF_MS, LATE_GRACE_MS, MIN_REARM_MS, RATE_CAP_STARTS, RATE_RETRY_MS, RATE_WINDOW_MS, schedulerClock, startScheduler, stopScheduler, TIMER_CAP_MS } from "../src/scheduler";
 import { countOccurrences, defaultTimeZone, localShort, minGapMinutes, nextOccurrence } from "../src/schedule-time";
-import { createSchedule, getSchedule, listSchedules, madeByThisJarvis, nextRunsOf, onSchedulesWritten, SCHEDULES_MAX, SCHEDULES_PER_THREAD_MAX, updateSchedule, type Schedule } from "../src/schedules";
+import { DEMOTING_FIELDS } from "../ui/app/lib/schedule-when";
+import { createSchedule, getSchedule, listSchedules, madeByThisJarvis, nextRunsOf, onSchedulesWritten, REARMING_FIELDS, SCHEDULES_MAX, SCHEDULES_PER_THREAD_MAX, updateSchedule, type Schedule } from "../src/schedules";
 import {
   buildSessionsDump,
   emitEvent,
@@ -4220,6 +4221,30 @@ test("ownWords only for a Jarvis-made schedule on its own thread without changed
   assert.equal((await serve("PATCH", `/schedules/${own.id}`, { name: "Renamed" })).status, 200);
   list = (await serve("GET", "/schedules")).body.schedules;
   assert.equal(by(own.id).ownWords, false);
+});
+
+test("PATCH from a route on an own-words schedule sets changedByOther, notify-only does not", async (t) => {
+  t.mock.method(console, "log", () => {});
+  // The UI asks before exactly these fields (06's confirmation): the same list as the server's.
+  assert.deepEqual([...DEMOTING_FIELDS], [...REARMING_FIELDS]);
+  const jarvis = jarvisThread();
+  const make = () => {
+    const r = createScheduleForJarvis(jarvis.id, { name: "Tick", prompt: "Say the time.", when: { every_minutes: 5 }, target: "this_thread" });
+    assert.ok(r.ok);
+    return r.id;
+  };
+  const ownWords = async (id: string) =>
+    (await serve("GET", `/schedules?threadId=${jarvis.id}`)).body.schedules.find((x: any) => x.id === id).ownWords;
+  const quiet = make();
+  for (const body of [{ notify: "never" }, { overlap: "skip" }, { notify: "always", overlap: "queue" }]) {
+    assert.equal((await serve("PATCH", `/schedules/${quiet}`, body)).status, 200, JSON.stringify(body));
+    assert.equal(getSchedule(quiet)!.changedByOther, undefined, JSON.stringify(body));
+  }
+  assert.equal(await ownWords(quiet), true);
+  const edited = make();
+  assert.equal((await serve("PATCH", `/schedules/${edited}`, { prompt: "Reply: edited ok" })).status, 200);
+  assert.equal(getSchedule(edited)!.changedByOther, true);
+  assert.equal(await ownWords(edited), false);
 });
 
 test("one paused schedule with an unreadable when doesn't break the list: it is ended", async (t) => {

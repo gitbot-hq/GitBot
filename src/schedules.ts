@@ -569,7 +569,7 @@ function isCreator(s: Pick<Schedule, "createdBy">, by: Schedule["createdBy"]): b
  * name, or more runs. A resume or pause (`enabled`), notify and overlap
  * change neither: a resume only lets the same words run again.
  */
-const REARMING_FIELDS = ["name", "prompt", "when", "maxRuns", "endsAt"] as const;
+export const REARMING_FIELDS = ["name", "prompt", "when", "maxRuns", "endsAt"] as const;
 
 /**
  * Someone changed the schedule's words or re-armed it: unless that is the

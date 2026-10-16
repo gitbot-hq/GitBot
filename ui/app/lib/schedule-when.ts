@@ -4,7 +4,7 @@
 // message. No cron is checked or worked out here: the server's preview
 // (POST /schedules/preview) says what a `when` means and when it runs.
 
-import type { ScheduleWhen } from "./gitbot";
+import type { Schedule, ScheduleNotify, SchedulePatch, ScheduleWhen } from "./gitbot";
 
 export type WhenChoice =
   | { preset: "in"; minutes: number }
@@ -136,7 +136,13 @@ export function toWhen(choice: WhenChoice, tz: string, now: number = Date.now())
  * toWhen writes map back; anything else is "cron". A once reads in `tz`.
  */
 export function fromWhen(when: ScheduleWhen, tz: string): WhenChoice {
-  if (when.kind === "once") return { preset: "once", localDateTime: localDateTimeIn(Date.parse(when.at), tz) };
+  // One this build can't read (hand-edited, or a later build's kind): an
+  // empty custom cron, for the user to fill in, rather than a throw.
+  if (!isReadableWhen(when)) return { preset: "cron", expr: "" };
+  if (when.kind === "once") {
+    const local = safeLocal(when.at, tz);
+    return { preset: "once", localDateTime: local };
+  }
   if (when.kind === "interval") {
     const n = when.everyMinutes;
     return n % 60 === 0 ? { preset: "every", amount: n / 60, unit: "hours" } : { preset: "every", amount: n, unit: "minutes" };
@@ -250,3 +256,141 @@ export function pickerGroups(
   }
   return [...groups.values()].sort((a, b) => b.newest - a.newest).map((e) => e.group);
 }
+
+// ---- Editing (06) ----------------------------------------------------------
+
+export type { SchedulePatch };
+
+/**
+ * The fields whose change takes a Jarvis "own-words" schedule out of
+ * Jarvis's hands for good: the server's REARMING_FIELDS (src/schedules.ts),
+ * kept equal by a test. `enabled` is not one (D3: a resume doesn't demote).
+ */
+export const DEMOTING_FIELDS = ["name", "prompt", "when", "maxRuns", "endsAt"] as const;
+
+/** True when saving `patch` would demote an own-words schedule. */
+export function patchDemotes(patch: SchedulePatch): boolean {
+  return DEMOTING_FIELDS.some((k) => patch[k] !== undefined);
+}
+
+/** Whether two `when`s are the same times (a once to the second's instant, a cron's spacing ignored). */
+export function sameWhen(a: ScheduleWhen, b: ScheduleWhen): boolean {
+  if (a.kind === "once" && b.kind === "once") return Date.parse(a.at) === Date.parse(b.at);
+  if (a.kind === "interval" && b.kind === "interval") return a.everyMinutes === b.everyMinutes;
+  if (a.kind === "cron" && b.kind === "cron") {
+    const norm = (e: string) => e.trim().replace(/\s+/g, " ");
+    return norm(a.expr) === norm(b.expr) && a.tz === b.tz;
+  }
+  return false;
+}
+
+/** The form's values after an edit. `when` undefined: the times weren't touched. */
+export type EditedSchedule = {
+  name: string;
+  prompt: string;
+  when?: ScheduleWhen;
+  notify: ScheduleNotify;
+  overlap: "queue" | "skip";
+  maxRuns?: number;
+  endsAt?: string;
+};
+
+type Editable = Pick<Schedule, "name" | "prompt" | "when" | "notify" | "overlap" | "maxRuns" | "endsAt">;
+
+/**
+ * The PATCH body for an edit: only the fields that changed, so nothing
+ * untouched is sent (and nothing demotes by accident). A cleared limit is
+ * null. A schedule that is (or becomes) a once sends no limits: it has none.
+ * Empty when nothing changed.
+ */
+export function diffSchedule(s: Editable, e: EditedSchedule): SchedulePatch {
+  const out: SchedulePatch = {};
+  if (e.name.trim() !== s.name) out.name = e.name.trim();
+  if (e.prompt !== s.prompt) out.prompt = e.prompt;
+  if (e.when && !sameWhen(s.when, e.when)) out.when = e.when;
+  if (e.notify !== s.notify) out.notify = e.notify;
+  if (e.overlap !== (s.overlap ?? "queue")) out.overlap = e.overlap;
+  if ((out.when ?? s.when).kind !== "once") {
+    if ((e.maxRuns ?? null) !== (s.maxRuns ?? null)) out.maxRuns = e.maxRuns ?? null;
+    const at = (x: string | undefined) => (x ? Date.parse(x) : null);
+    if (at(e.endsAt) !== at(s.endsAt)) out.endsAt = e.endsAt ?? null;
+  }
+  return out;
+}
+
+/** The form's fields, prefilled from a schedule being edited. */
+export type EditInit = {
+  choice: WhenChoice;
+  /** A cron's own zone; else the viewer's. */
+  tz: string;
+  /** The end date as a wall time in `tz`, or "". */
+  endsLocal: string;
+};
+
+export function editInit(s: Pick<Schedule, "when" | "endsAt">, viewerTz: string): EditInit {
+  const cronTz = s.when?.kind === "cron" && typeof s.when.tz === "string" ? s.when.tz : "";
+  const tz = cronTz && isZone(cronTz) ? cronTz : viewerTz;
+  return {
+    choice: fromWhen(s.when, tz),
+    tz,
+    endsLocal: s.endsAt ? safeLocal(s.endsAt, tz) : "",
+  };
+}
+
+/**
+ * True when this build can read a stored `when` (a once with a real instant,
+ * a cron with a pattern and a zone it knows, an interval of whole minutes).
+ * Edit isn't offered otherwise: the form would have nothing to start from.
+ */
+export function isReadableWhen(when: unknown): when is ScheduleWhen {
+  if (!when || typeof when !== "object") return false;
+  const w = when as Record<string, unknown>;
+  if (w.kind === "once") return typeof w.at === "string" && Number.isFinite(Date.parse(w.at));
+  if (w.kind === "cron") return typeof w.expr === "string" && !!w.expr.trim() && (w.tz === undefined || (typeof w.tz === "string" && isZone(w.tz)));
+  if (w.kind === "interval") return typeof w.everyMinutes === "number" && Number.isInteger(w.everyMinutes) && w.everyMinutes > 0;
+  return false;
+}
+
+function isZone(tz: string): boolean {
+  try {
+    formatter(tz);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** An instant as a wall time in `tz`, or "" when either can't be read. */
+function safeLocal(at: string, tz: string): string {
+  const t = Date.parse(at);
+  if (!Number.isFinite(t)) return "";
+  try {
+    return localDateTimeIn(t, tz);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * "Suggested for <describe>: <label>", when the times changed and the
+ * default for the new gap isn't what is picked. Null otherwise. It is only
+ * a suggestion: the form never changes notify by itself.
+ */
+export function notifySuggestion(
+  whenChanged: boolean,
+  preview: { describe: string; defaultNotify: ScheduleNotify } | null,
+  notify: ScheduleNotify,
+): { text: string; notify: ScheduleNotify } | null {
+  if (!whenChanged || !preview || preview.defaultNotify === notify) return null;
+  return { text: `Suggested for ${preview.describe}: ${NOTIFY_LABELS[preview.defaultNotify]}`, notify: preview.defaultNotify };
+}
+
+export const NOTIFY_LABELS: Record<ScheduleNotify, string> = {
+  always: "every run",
+  "on-failure": "only if it fails",
+  never: "never",
+};
+
+/** The own-words confirmation (plan §5). */
+export const OWN_WORDS_CONFIRM =
+  "Jarvis made this schedule from your request. If you change it here, Jarvis will treat its message as information, not as your instruction, from now on. To keep Jarvis acting on it, ask Jarvis to change it instead.";

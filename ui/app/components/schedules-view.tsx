@@ -47,10 +47,13 @@ export default function SchedulesView({
   onOpen,
   onError,
   onCreated,
+  onEdited,
   onAskJarvis,
 }: {
-  /** Opened on the new-schedule form (the dock's +, a panel's + Add), for that thread when given. */
-  form?: { target?: FormTarget };
+  /** Opened on the form: new (the dock's +, a panel's + Add, for that thread when given), or editing a schedule (`edit`). */
+  form?: { target?: FormTarget; edit?: ScheduleView };
+  /** A schedule was edited: the shell toasts and reopens the view at its card. */
+  onEdited: (schedule: Schedule & { nextRuns: string[] }, resumed: boolean) => void;
   bots: readonly Bot[];
   /** A schedule was made: the shell toasts and reopens the view at its card. */
   onCreated: (schedule: Schedule & { nextRuns: string[] }) => void;
@@ -72,8 +75,8 @@ export default function SchedulesView({
   const [highlight, setHighlight] = useState<string | null>(null);
   // The form, over the list: `inView` when opened from the view's own
   // button (Cancel and Escape go back to the list; else they close the view).
-  const [form, setForm] = useState<{ target?: FormTarget; inView: boolean } | null>(
-    formAtOpen ? { target: formAtOpen.target, inView: false } : null,
+  const [form, setForm] = useState<{ target?: FormTarget; edit?: ScheduleView; inView: boolean } | null>(
+    formAtOpen ? { ...formAtOpen, inView: false } : null,
   );
   const live = useRef(true);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -173,6 +176,7 @@ export default function SchedulesView({
               highlight={highlight === s.id}
               onAction={(action) => act(s.id, action)}
               onOpen={onOpen}
+              onEdit={() => setForm({ edit: s, inView: true })}
             />
           ))}
         </ul>
@@ -195,6 +199,10 @@ export default function SchedulesView({
         </header>
         {form && (
           <ScheduleForm
+            key={form.edit?.id ?? "new"}
+            edit={form.edit}
+            onEdited={onEdited}
+            onOpen={onOpen}
             target={form.target}
             bots={bots}
             onCancel={back}
@@ -234,6 +242,7 @@ export default function SchedulesView({
                         highlight={highlight === s.id}
                         onAction={(action) => act(s.id, action)}
                         onOpen={onOpen}
+                        onEdit={() => setForm({ edit: s, inView: true })}
                       />
                     ))}
                   </ul>

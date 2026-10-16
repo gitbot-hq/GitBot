@@ -4,6 +4,7 @@
 
 import type { ScheduleRun, ScheduleView } from "./gitbot";
 import { fullTime, runText, scheduleActions, shortTime } from "./schedules";
+import { isReadableWhen } from "./schedule-when";
 
 /** Up next rows in the rail; the rest are a "+N more". */
 export const UP_NEXT_MAX = 5;
@@ -192,7 +193,7 @@ export function newAttentionIds(current: readonly string[], seen: ReadonlySet<st
   return current.filter((k) => !seen.has(k));
 }
 
-export type RowMenuItem = { action: "run" | "pause" | "resume" | "open"; label: string };
+export type RowMenuItem = { action: "run" | "pause" | "resume" | "edit" | "open"; label: string };
 
 /** A dock row's ⋯ menu. A once's Run now runs it now and keeps its own time. */
 export function rowMenuItems(s: ScheduleView, timeZone?: string, now: number = Date.now()): RowMenuItem[] {
@@ -204,6 +205,7 @@ export function rowMenuItems(s: ScheduleView, timeZone?: string, now: number = D
   }
   if (can.pause) items.push({ action: "pause", label: "Pause" });
   if (can.resume) items.push({ action: "resume", label: "Resume" });
+  if (s.state !== "ended" && isReadableWhen(s.when)) items.push({ action: "edit", label: "Edit" });
   if (rowTarget(s)) items.push({ action: "open", label: "Open thread" });
   return items;
 }

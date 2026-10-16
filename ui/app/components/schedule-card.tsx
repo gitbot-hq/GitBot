@@ -17,6 +17,12 @@ import {
   shortTime,
   statusText,
 } from "../lib/schedules";
+import { isReadableWhen } from "../lib/schedule-when";
+
+/** An ended schedule's disabled Edit says why. */
+export const ENDED_EDIT_TIP = "Ended: make a new one";
+/** A `when` this build can't read (hand-edited, or a later build's) can't be edited here. */
+export const UNREADABLE_EDIT_TIP = "This build can't read its times: delete it and make a new one";
 
 /** What a card's buttons ask for. The parent runs it (scheduleCall) and re-reads. */
 export type CardAction =
@@ -53,7 +59,10 @@ export default function ScheduleCard({
   highlight,
   onAction,
   onOpen,
+  onEdit,
 }: {
+  /** Opens the edit form for this schedule (not offered once it has ended). */
+  onEdit?: () => void;
   s: ScheduleView;
   /** The thread whose panel shows the card, if any. */
   threadId?: string;
@@ -186,6 +195,16 @@ export default function ScheduleCard({
                 Run now
               </button>
             )}
+            {onEdit &&
+              (state === "ended" || !isReadableWhen(s.when) ? (
+                <span title={state === "ended" ? ENDED_EDIT_TIP : UNREADABLE_EDIT_TIP}>
+                  <button type="button" disabled>Edit</button>
+                </span>
+              ) : (
+                <button type="button" disabled={busy} onClick={onEdit}>
+                  Edit
+                </button>
+              ))}
             <button type="button" className="schedule-delete" disabled={busy} onClick={() => setConfirming(true)}>
               Delete
             </button>

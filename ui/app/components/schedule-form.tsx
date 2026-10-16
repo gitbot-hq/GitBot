@@ -1,14 +1,19 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { createSchedule, previewSchedule, type NewScheduleBody, type SchedulePreview } from "../lib/api";
-import type { Bot, Schedule, ScheduleNotify } from "../lib/gitbot";
+import { createSchedule, patchSchedule, previewSchedule, type NewScheduleBody, type SchedulePreview } from "../lib/api";
+import type { Bot, Schedule, ScheduleNotify, SchedulePatch, ScheduleView } from "../lib/gitbot";
 import { fullTime } from "../lib/schedules";
 import {
   askJarvisDraft,
   browserTimeZone,
+  diffSchedule,
+  editInit,
   IN_CHIPS,
   JARVIS_TARGET_NOTE,
+  notifySuggestion,
+  patchDemotes,
+  sameWhen,
   suggestName,
   timeZoneOptions,
   tomorrowAt,
@@ -18,6 +23,7 @@ import {
   type FormTarget,
   type WhenChoice,
 } from "../lib/schedule-when";
+import OwnWordsConfirm from "./own-words-confirm";
 import ThreadPicker from "./thread-picker";
 
 const PROMPT_MAX = 4000;
@@ -42,8 +48,49 @@ const REPEATS: { value: RepeatKind; label: string }[] = [
   { value: "every", label: "Every N min/hours" },
 ];
 
+/** The form's when fields for a choice (edit's prefill); the rest keep their defaults. */
+function whenFields(c: WhenChoice) {
+  const f = {
+    mode: "once" as "once" | "repeats",
+    onceChip: "tomorrow" as OnceChip,
+    picked: "",
+    repeat: "daily" as RepeatKind,
+    time: "09:00",
+    days: [1],
+    monthDay: 1,
+    amount: 30,
+    unit: "minutes" as "minutes" | "hours",
+    cron: "",
+  };
+  switch (c.preset) {
+    case "in":
+      return { ...f, onceChip: (c.minutes === 15 ? "in15" : "in60") as OnceChip };
+    case "once":
+      return { ...f, onceChip: "pick" as OnceChip, picked: c.localDateTime };
+    case "daily":
+    case "weekdays":
+      return { ...f, mode: "repeats" as const, repeat: c.preset, time: c.time };
+    case "weekly":
+      return { ...f, mode: "repeats" as const, repeat: "weekly" as RepeatKind, time: c.time, days: c.days };
+    case "monthly":
+      return { ...f, mode: "repeats" as const, repeat: "monthly" as RepeatKind, time: c.time, monthDay: c.day };
+    case "every":
+      return { ...f, mode: "repeats" as const, repeat: "every" as RepeatKind, amount: c.amount, unit: c.unit };
+    case "cron":
+      return { ...f, mode: "repeats" as const, repeat: "cron" as RepeatKind, cron: c.expr };
+  }
+}
+
+/** Where an edited schedule runs, in words (the target can't change here). */
+function runsOn(s: ScheduleView): string {
+  const w = s.where;
+  if (w.kind === "thread") return `${w.title} · ${w.botName}`;
+  if (w.kind === "new-thread") return `a new thread each run · ${w.botName} · ${w.projectName}`;
+  return "a thread that is gone";
+}
+
 /**
- * A new schedule on a thread: message, name (suggested), when (presets, or a
+ * A new schedule on a thread, or (`edit`) a change to one: message, name (suggested), when (presets, or a
  * cron under Advanced), where, and who hears of runs. The server says what
  * the times mean (POST /schedules/preview, debounced) and checks the save
  * (POST /schedules); the form works out no cron itself. Nothing here sets
@@ -55,7 +102,16 @@ export default function ScheduleForm({
   onCancel,
   onSaved,
   onAskJarvis,
+  edit,
+  onEdited,
+  onOpen,
 }: {
+  /** Edit this schedule: prefilled, saved as a PATCH of only what changed. */
+  edit?: ScheduleView;
+  /** Saved (and resumed, with Save and resume). */
+  onEdited?: (schedule: Schedule & { nextRuns: string[] }, resumed: boolean) => void;
+  /** Opens a thread under its bot: the own-words confirmation's Open Jarvis thread. */
+  onOpen?: (botId: string, threadId: string) => void;
   /** The thread it was opened from, if any: "This thread". */
   target?: FormTarget;
   bots: readonly Bot[];
@@ -65,32 +121,42 @@ export default function ScheduleForm({
   onAskJarvis: (target: FormTarget, draft: string) => void;
 }) {
   const id = useId();
-  const [prompt, setPrompt] = useState("");
-  const [name, setName] = useState("");
-  const [nameEdited, setNameEdited] = useState(false);
-  const [mode, setMode] = useState<"once" | "repeats">("once");
-  const [onceChip, setOnceChip] = useState<OnceChip>("tomorrow");
-  const [picked, setPicked] = useState("");
-  const [repeat, setRepeat] = useState<RepeatKind>("daily");
-  const [time, setTime] = useState("09:00");
-  const [days, setDays] = useState<number[]>([1]);
-  const [monthDay, setMonthDay] = useState(1);
-  const [amount, setAmount] = useState(30);
-  const [unit, setUnit] = useState<"minutes" | "hours">("minutes");
-  const [cron, setCron] = useState("");
+  // Edit: the schedule's own values, read once (a re-read of the list
+  // while the form is open doesn't overwrite what is being typed).
+  const [init] = useState(() => {
+    const at = edit ? editInit(edit, browserTimeZone()) : null;
+    return { at, fields: whenFields(at?.choice ?? { preset: "once", localDateTime: "" }) };
+  });
+  const base = init.at;
+  const start = edit ? init.fields : whenFields({ preset: "in", minutes: 0 });
+  const [prompt, setPrompt] = useState(edit?.prompt ?? "");
+  const [name, setName] = useState(edit?.name ?? "");
+  const [nameEdited, setNameEdited] = useState(!!edit);
+  const [mode, setMode] = useState<"once" | "repeats">(start.mode);
+  const [onceChip, setOnceChip] = useState<OnceChip>(edit ? start.onceChip : "tomorrow");
+  const [picked, setPicked] = useState(start.picked);
+  const [repeat, setRepeat] = useState<RepeatKind>(start.repeat);
+  const [time, setTime] = useState(start.time);
+  const [days, setDays] = useState<number[]>(start.days);
+  const [monthDay, setMonthDay] = useState(start.monthDay);
+  const [amount, setAmount] = useState(start.amount);
+  const [unit, setUnit] = useState<"minutes" | "hours">(start.unit);
+  const [cron, setCron] = useState(start.cron);
   const [target, setTarget] = useState<FormTarget | null>(preset ?? null);
-  const [picking, setPicking] = useState(!preset);
-  const [notify, setNotify] = useState<ScheduleNotify | null>(null);
-  const [advanced, setAdvanced] = useState(false);
-  const [maxRuns, setMaxRuns] = useState("");
-  const [endsLocal, setEndsLocal] = useState("");
-  const [overlap, setOverlap] = useState<"queue" | "skip">("queue");
-  const [tz, setTz] = useState(browserTimeZone);
+  const [picking, setPicking] = useState(!preset && !edit);
+  const [notify, setNotify] = useState<ScheduleNotify | null>(edit?.notify ?? null);
+  const [advanced, setAdvanced] = useState(!!edit && (edit.maxRuns != null || !!edit.endsAt || edit.overlap === "skip" || edit.when.kind === "cron"));
+  const [maxRuns, setMaxRuns] = useState(edit?.maxRuns != null ? String(edit.maxRuns) : "");
+  const [endsLocal, setEndsLocal] = useState(base?.endsLocal ?? "");
+  const [overlap, setOverlap] = useState<"queue" | "skip">(edit?.overlap ?? "queue");
+  const [tz, setTz] = useState(() => base?.tz ?? browserTimeZone());
   const zones = useMemo(() => timeZoneOptions(tz), [tz]);
   const [preview, setPreview] = useState<SchedulePreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // The own-words confirmation, holding the save it asks about.
+  const [confirming, setConfirming] = useState<{ resume: boolean } | null>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -164,7 +230,55 @@ export default function ScheduleForm({
   }
 
   const effectiveNotify = notify ?? preview?.defaultNotify ?? null;
-  const ready = !!prompt.trim() && !!name.trim() && !!target && !previewError && !!toWhen(choice, tz) && !!limits;
+  const ready = !!prompt.trim() && !!name.trim() && (!!target || !!edit) && !previewError && !!toWhen(choice, tz) && !!limits;
+
+  // Edit: the times count as changed only when they differ from the
+  // prefill's (so a cron in another zone, or a once's seconds, is never
+  // re-sent by an edit that didn't touch them). The same for the end date.
+  const baseWhen = base ? toWhen(base.choice, base.tz) : null;
+  const nowWhen = toWhen(choice, tz);
+  const whenChanged = !!edit && !!nowWhen && !(baseWhen && sameWhen(baseWhen, nowWhen));
+  function editPatch(): SchedulePatch | null {
+    if (!edit || !limits) return null;
+    const baseEnds = base?.endsLocal ? zonedToIso(base.endsLocal, base.tz) : undefined;
+    const endsAt = limits.endsAt && limits.endsAt === baseEnds ? edit.endsAt : limits.endsAt;
+    return diffSchedule(edit, {
+      name,
+      prompt,
+      when: whenChanged ? toWhen(choice, tz, Date.now()) ?? undefined : undefined,
+      notify: notify ?? edit.notify,
+      overlap,
+      maxRuns: limits.maxRuns,
+      endsAt,
+    });
+  }
+  const patch = edit ? editPatch() : null;
+  const changed = !!patch && Object.keys(patch).length > 0;
+  const suggestion = edit ? notifySuggestion(whenChanged, preview, notify ?? edit.notify) : null;
+  // Save and resume: a paused schedule that can run again after the edit.
+  const canSaveResume = !!edit && edit.state === "paused" && (preview?.nextRuns.length ?? 0) > 0;
+
+  /** Edit: PATCH only what changed (with enabled for Save and resume), asking first if it demotes an own-words schedule. */
+  function saveEdit(resume: boolean, confirmed = false) {
+    const body = editPatch();
+    if (!edit || !body) return;
+    if (resume) body.enabled = true;
+    if (Object.keys(body).length === 0) return;
+    if (edit.ownWords && patchDemotes(body) && !confirmed) {
+      setConfirming({ resume });
+      return;
+    }
+    setSaving(true);
+    setSaveError(null);
+    patchSchedule(edit.id, body).then(
+      (saved) => onEdited?.(saved, resume),
+      (e) => {
+        setConfirming(null);
+        setSaveError(e instanceof Error ? e.message : String(e));
+        setSaving(false);
+      },
+    );
+  }
 
   function save() {
     const when = toWhen(choice, tz, Date.now());
@@ -198,12 +312,12 @@ export default function ScheduleForm({
   return (
     <form
       className="schedule-form"
-      aria-label="New schedule"
+      aria-label={edit ? "Edit schedule" : "New schedule"}
       // Only the Save button saves: Enter in a field (Name, the thread
       // search, a time) must never create the schedule.
       onSubmit={(e) => e.preventDefault()}
     >
-      <h3 className="schedule-form-title">New schedule</h3>
+      <h3 className="schedule-form-title">{edit ? `Edit “${edit.name}”` : "New schedule"}</h3>
 
       <label className="schedule-field" htmlFor={`${id}-prompt`}>
         <span className="schedule-field-label">Message</span>
@@ -305,7 +419,9 @@ export default function ScheduleForm({
 
       <fieldset className="schedule-field">
         <legend className="schedule-field-label">Where</legend>
-        {!picking && target ? (
+        {edit ? (
+          <p className="schedule-where">Runs on <b>{runsOn(edit)}</b></p>
+        ) : !picking && target ? (
           <p className="schedule-where">
             This thread: <b>{target.title}</b> · {target.botName}{" "}
             <button type="button" className="schedule-link" onClick={() => setPicking(true)}>Change</button>
@@ -313,7 +429,7 @@ export default function ScheduleForm({
         ) : (
           <ThreadPicker bots={bots} value={target} onChange={setTarget} />
         )}
-        {target?.jarvis && (
+        {!edit && target?.jarvis && (
           <div className="schedule-jarvis-note" role="note">
             <p>{JARVIS_TARGET_NOTE}</p>
             <button
@@ -343,6 +459,12 @@ export default function ScheduleForm({
             </label>
           ))}
         </div>
+        {suggestion && (
+          <p className="schedule-suggest">
+            {suggestion.text} ·{" "}
+            <button type="button" className="schedule-link" onClick={() => setNotify(suggestion.notify)}>Use it</button>
+          </p>
+        )}
       </fieldset>
 
       <details className="schedule-advanced" open={advanced} onToggle={(e) => setAdvanced((e.target as HTMLDetailsElement).open)}>
@@ -386,10 +508,27 @@ export default function ScheduleForm({
       </details>
 
       {saveError && <p className="schedule-form-error" role="alert">{saveError}</p>}
-      <div className="schedule-form-actions">
-        <button type="button" className="btn-secondary" onClick={onCancel}>Cancel</button>
-        <button type="button" className="btn-primary" disabled={!ready || saving} onClick={() => ready && !saving && save()}>{saving ? "Saving…" : "Save"}</button>
-      </div>
+      {edit && confirming ? (
+        <OwnWordsConfirm
+          busy={saving}
+          onConfirm={() => saveEdit(confirming.resume, true)}
+          onOpenJarvis={edit.createdIn && onOpen ? () => onOpen(edit.createdIn!.botId, edit.createdIn!.threadId) : undefined}
+          onCancel={() => setConfirming(null)}
+        />
+      ) : edit ? (
+        <div className="schedule-form-actions">
+          <button type="button" className="btn-secondary" onClick={onCancel}>Cancel</button>
+          {canSaveResume && (
+            <button type="button" className="btn-secondary" disabled={!ready || saving} onClick={() => ready && !saving && saveEdit(true)}>Save and resume</button>
+          )}
+          <button type="button" className="btn-primary" disabled={!ready || !changed || saving} onClick={() => ready && changed && !saving && saveEdit(false)}>{saving ? "Saving…" : "Save"}</button>
+        </div>
+      ) : (
+        <div className="schedule-form-actions">
+          <button type="button" className="btn-secondary" onClick={onCancel}>Cancel</button>
+          <button type="button" className="btn-primary" disabled={!ready || saving} onClick={() => ready && !saving && save()}>{saving ? "Saving…" : "Save"}</button>
+        </div>
+      )}
     </form>
   );
 }

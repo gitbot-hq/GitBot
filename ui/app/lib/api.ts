@@ -279,9 +279,9 @@ export function createSchedule(body: NewScheduleBody) {
   return req<import("./gitbot").Schedule & { nextRuns: string[] }>("/schedules", { method: "POST", body: JSON.stringify(body) });
 }
 
-/** Pause or resume (`enabled`), or change `notify`. */
-export function patchSchedule(id: string, patch: { enabled?: boolean; notify?: import("./gitbot").ScheduleNotify }) {
-  return req<import("./gitbot").Schedule>(`/schedules/${encodeURIComponent(id)}`, {
+/** Pause or resume (`enabled`), or edit any field PATCH takes (only the changed ones: schedule-when diffSchedule). */
+export function patchSchedule(id: string, patch: import("./gitbot").SchedulePatch) {
+  return req<import("./gitbot").Schedule & { nextRuns: string[] }>(`/schedules/${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: JSON.stringify(patch),
   });

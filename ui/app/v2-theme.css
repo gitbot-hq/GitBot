@@ -1602,7 +1602,17 @@
 .v2 .schedule-advanced summary { cursor: pointer; font-weight: 650; }
 .v2 .schedule-advanced .schedule-inline { display: flex; }
 .v2 .schedule-advanced select { max-width: 100%; }
-.v2 .schedule-form-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
+.v2 .schedule-form-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-2); }
+.v2 .schedule-suggest { margin: var(--space-2) 0 0; color: var(--muted); }
+.v2 .schedule-own-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+.v2 .schedule-own-confirm p { margin: 0; }
 .v2 .thread-picker { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .v2 .thread-picker-list {
   max-height: 240px;

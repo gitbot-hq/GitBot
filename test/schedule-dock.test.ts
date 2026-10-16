@@ -174,16 +174,19 @@ test("newAttentionIds reports only ids not seen before", () => {
   assert.deepEqual(newAttentionIds(again, new Set(keys)), again);
 });
 
-test("row menu items: once shows keeps-time label, ended shows no resume", () => {
+test("row menu items: once shows keeps-time label, ended shows no resume or edit", () => {
   const actions = (s: ScheduleView) => rowMenuItems(s, TZ, NOW).map((i) => i.action);
-  assert.deepEqual(actions(view()), ["run", "pause", "open"]);
+  assert.deepEqual(actions(view()), ["run", "pause", "edit", "open"]);
   const once = view({ when: { kind: "once", at: at(3_600_000) } });
   assert.equal(rowMenuItems(once, TZ, NOW)[0].label, "Run now (keeps 11:00)");
-  assert.deepEqual(actions(view({ enabled: false, state: "paused", canResume: true })), ["run", "resume", "open"]);
+  assert.deepEqual(actions(view({ enabled: false, state: "paused", canResume: true })), ["run", "resume", "edit", "open"]);
   assert.deepEqual(actions(view({ enabled: false, state: "ended", canResume: false })), ["open"]);
   // An unrun new-thread schedule has no thread to open.
   const fresh = view({ target: { kind: "new-thread", botId: "b", projectId: "p" } as any, where: { kind: "new-thread", botId: "b", botName: "B", projectId: "p", projectName: "P" } });
-  assert.deepEqual(actions(fresh), ["run", "pause"]);
+  assert.deepEqual(actions(fresh), ["run", "pause", "edit"]);
+  // A when this build can't read (hand-edited bad once, a later build's kind) offers no Edit.
+  assert.deepEqual(actions(view({ when: { kind: "once", at: "not a time" } })), ["run", "pause", "open"]);
+  assert.deepEqual(actions(view({ when: { kind: "solar" } as any })), ["run", "pause", "open"]);
 });
 
 test("view groups: attention, active, paused, ended with counts", () => {

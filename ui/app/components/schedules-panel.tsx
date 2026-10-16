@@ -24,11 +24,14 @@ export default function SchedulesPanel({
   onOpen,
   onShowAll,
   onAdd,
+  onEdit,
   onChanged,
   onError,
 }: {
   /** Opens the new-schedule form for this thread. */
   onAdd?: () => void;
+  /** Opens the edit form for a schedule. */
+  onEdit?: (s: ScheduleView) => void;
   threadId: string;
   /** The stream's schedules version (use-thread-sessions): a change re-reads. */
   version: number | undefined;
@@ -113,6 +116,7 @@ export default function SchedulesPanel({
                 busy={busy === s.id}
                 onAction={(action) => act(s.id, action)}
                 onOpen={onOpen}
+                onEdit={onEdit ? () => onEdit(s) : undefined}
               />
             ))}
           </ul>
