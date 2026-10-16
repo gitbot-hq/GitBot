@@ -4,7 +4,20 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import type { ScheduleView } from "../ui/app/lib/gitbot";
 import { nextSchedulesHint } from "../ui/app/lib/use-thread-sessions";
-import { dockGroups, recentText, rowTarget, rowText, runGlyph, UP_NEXT_MAX } from "../ui/app/lib/schedule-dock";
+import {
+  attentionCounts,
+  attentionKeys,
+  attentionLabel,
+  dockGroups,
+  newAttentionIds,
+  recentText,
+  rowMenuItems,
+  rowTarget,
+  rowText,
+  runGlyph,
+  scheduleAttentionText,
+  UP_NEXT_MAX,
+} from "../ui/app/lib/schedule-dock";
 
 // The Scheduled dock (scheduled-dock.tsx) draws what these say.
 
@@ -130,4 +143,42 @@ test("schedules hint: the first event on a connection records, a new version or 
   assert.deepEqual(r, { hint: { version: 2, attentionCount: 0 }, seen: null });
   r = nextSchedulesHint(r.hint, r.seen, { version: 0, attentionCount: 0 });
   assert.equal(r.hint.version, 2);
+});
+
+test("attentionLabel combines paused and failed counts", () => {
+  assert.equal(attentionLabel({ paused: 0, failed: 0 }), null);
+  assert.deepEqual(attentionLabel({ paused: 1, failed: 0 }), { count: 1, tone: "honey", text: "1 schedule needs attention" });
+  assert.deepEqual(attentionLabel({ paused: 2, failed: 1 }), { count: 3, tone: "danger", text: "3 schedules need attention" });
+  const list = [
+    view({ attention: { kind: "paused", text: "Paused: x", at: at(0) } }),
+    view({ attention: { kind: "failed", text: "Last run failed", at: at(0) } }),
+    view(),
+  ];
+  assert.deepEqual(attentionCounts(list), { paused: 1, failed: 1 });
+  assert.equal(scheduleAttentionText(0), null);
+});
+
+test("newAttentionIds reports only ids not seen before", () => {
+  const a = view({ attention: { kind: "paused", text: "Paused: x", at: at(0) } });
+  const b = view({ attention: { kind: "failed", text: "Last run failed", at: at(0) } });
+  const keys = attentionKeys([a, b, view()]);
+  assert.equal(keys.length, 2);
+  assert.deepEqual(newAttentionIds(keys, new Set()), keys);
+  assert.deepEqual(newAttentionIds(keys, new Set([keys[0]])), [keys[1]]);
+  assert.deepEqual(newAttentionIds(keys, new Set(keys)), []);
+  // The same schedule needing attention again later is a new item.
+  const again = attentionKeys([{ ...a, attention: { ...a.attention!, at: at(60_000) } }]);
+  assert.deepEqual(newAttentionIds(again, new Set(keys)), again);
+});
+
+test("row menu items: once shows keeps-time label, ended shows no resume", () => {
+  const actions = (s: ScheduleView) => rowMenuItems(s, TZ, NOW).map((i) => i.action);
+  assert.deepEqual(actions(view()), ["run", "pause", "open"]);
+  const once = view({ when: { kind: "once", at: at(3_600_000) } });
+  assert.equal(rowMenuItems(once, TZ, NOW)[0].label, "Run now (keeps 11:00)");
+  assert.deepEqual(actions(view({ enabled: false, state: "paused", canResume: true })), ["run", "resume", "open"]);
+  assert.deepEqual(actions(view({ enabled: false, state: "ended", canResume: false })), ["open"]);
+  // An unrun new-thread schedule has no thread to open.
+  const fresh = view({ target: { kind: "new-thread", botId: "b", projectId: "p" } as any, where: { kind: "new-thread", botId: "b", botName: "B", projectId: "p", projectName: "P" } });
+  assert.deepEqual(actions(fresh), ["run", "pause"]);
 });

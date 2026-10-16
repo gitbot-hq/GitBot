@@ -1393,6 +1393,72 @@
   margin: 0 auto var(--space-2);
 }
 
+/* The header's attention count: honey for paused, danger if any failed. */
+.v2 .dock-count {
+  flex: none;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--brand-honey);
+  color: var(--surface);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.v2 .dock-count.danger { background: var(--danger); }
+
+/* A row and its ⋯: the ⋯ shows on hover and focus (always on touch). */
+.v2 .dock-item { position: relative; display: flex; align-items: stretch; }
+.v2 .dock-item > .dock-row { flex: 1; }
+.v2 .dock-row-more {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: var(--surface-2);
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+}
+.v2 .dock-item:hover .dock-row-more,
+.v2 .dock-item:focus-within .dock-row-more,
+.v2 .dock-item.menu-open .dock-row-more { opacity: 1; }
+.v2 .dock-row-more:hover { color: var(--text); }
+.v2 .dock-row-more:disabled { cursor: default; opacity: 0.5; }
+.dock-menu { min-width: 200px; }
+
+/* The collapsed rail's clock: the attention count on its corner. */
+.v2 .side > .collapsed-schedules { position: relative; }
+.v2 .rail-attn-count {
+  position: absolute;
+  top: -2px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--brand-honey);
+  color: var(--surface);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+@media (hover: none) {
+  .v2 .dock-row-more { position: static; flex: none; align-self: center; width: 44px; height: 44px; background: none; opacity: 1; }
+}
+
 @media (max-width: 900px) {
   .v2 .dock-row { min-height: 44px; align-items: center; }
   .v2 .dock-head { min-height: 44px; }

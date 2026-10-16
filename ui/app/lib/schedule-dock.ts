@@ -3,7 +3,7 @@
 // words are tested without a browser. No model or effort: a schedule has none.
 
 import type { ScheduleRun, ScheduleView } from "./gitbot";
-import { fullTime, runText, shortTime } from "./schedules";
+import { fullTime, runText, scheduleActions, shortTime } from "./schedules";
 
 /** Up next rows in the rail; the rest are a "+N more". */
 export const UP_NEXT_MAX = 5;
@@ -145,3 +145,55 @@ export function recentText(r: RecentRun, now: number = Date.now(), timeZone?: st
 /** The empty dock's words. */
 export const DOCK_EMPTY = "No schedules yet.";
 export const DOCK_HINT = 'Or ask Jarvis: "every weekday at 9, check my open PRs".';
+
+/** "1 schedule needs attention", "3 schedules need attention"; null for none. */
+export function scheduleAttentionText(count: number): string | null {
+  if (count <= 0) return null;
+  return count === 1 ? "1 schedule needs attention" : `${count} schedules need attention`;
+}
+
+/** The dock header's chip: the count, danger if any failed, else honey. */
+export function attentionLabel(counts: { paused: number; failed: number }): { count: number; tone: "danger" | "honey"; text: string } | null {
+  const count = counts.paused + counts.failed;
+  if (count <= 0) return null;
+  return { count, tone: counts.failed > 0 ? "danger" : "honey", text: scheduleAttentionText(count)! };
+}
+
+export function attentionCounts(list: readonly Pick<ScheduleView, "attention">[]): { paused: number; failed: number } {
+  let paused = 0;
+  let failed = 0;
+  for (const s of list) {
+    if (s.attention?.kind === "failed") failed++;
+    else if (s.attention) paused++;
+  }
+  return { paused, failed };
+}
+
+/**
+ * One attention item: the schedule, what kind and since when. A schedule that
+ * needs attention again later (paused anew, another failed run) is a new one.
+ */
+export function attentionKeys(list: readonly Pick<ScheduleView, "id" | "attention">[]): string[] {
+  return list.filter((s) => s.attention).map((s) => `${s.id}:${s.attention!.kind}:${s.attention!.at}`);
+}
+
+/** The keys in `current` not in `seen`. */
+export function newAttentionIds(current: readonly string[], seen: ReadonlySet<string>): string[] {
+  return current.filter((k) => !seen.has(k));
+}
+
+export type RowMenuItem = { action: "run" | "pause" | "resume" | "open"; label: string };
+
+/** A dock row's ⋯ menu. A once's Run now runs it now and keeps its own time. */
+export function rowMenuItems(s: ScheduleView, timeZone?: string, now: number = Date.now()): RowMenuItem[] {
+  const can = scheduleActions(s);
+  const items: RowMenuItem[] = [];
+  if (can.runNow) {
+    const at = s.when.kind === "once" ? shortTime(s.when.at, now, timeZone) : "";
+    items.push({ action: "run", label: at ? `Run now (keeps ${at})` : "Run now" });
+  }
+  if (can.pause) items.push({ action: "pause", label: "Pause" });
+  if (can.resume) items.push({ action: "resume", label: "Resume" });
+  if (rowTarget(s)) items.push({ action: "open", label: "Open thread" });
+  return items;
+}

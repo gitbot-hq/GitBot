@@ -64,6 +64,7 @@ import { rowLabel, threadIndicator, useThreadSessions } from "../lib/use-thread-
 import ThreadStatus from "./thread-status";
 import { approvalRows, type ChildApproval } from "../lib/approvals";
 import { attentionRows, hasNews, keepLaterSeen, needsYouCount, needsYouLabel } from "../lib/attention";
+import { scheduleAttentionText } from "../lib/schedule-dock";
 import { useAttentionTitle } from "../lib/tab-title";
 import { useTabVisible } from "../lib/use-tab-visible";
 import { closeThreadNotifications, usePresence } from "../lib/presence";
@@ -631,6 +632,10 @@ export default function V2() {
   // comes back to the tab (another device may have viewed a thread meanwhile).
   const needsYou = needsYouCount(threadSessions.pendingApprovals);
   useAttentionTitle(needsYou);
+  // Schedules that need you: shown on the dock, the collapsed rail and the
+  // mobile Bots button; not in the tab title or favicon (those are needs-you).
+  const scheduleAttention = threadSessions.schedules?.attentionCount ?? 0;
+  const botsAttnLabel = [needsYouLabel(needsYou), scheduleAttentionText(scheduleAttention)].filter(Boolean).join(", ");
   // One quiet re-read at a time, however many reasons arrive together.
   const [quietRefresh] = useState(() =>
     coalesce(() => {
@@ -1281,6 +1286,12 @@ export default function V2() {
     });
   }
 
+  /** A new schedule needs attention: open the dock (it never closes itself). */
+  function autoOpenDock() {
+    setDockOpen(true);
+    storeDockOpen(true);
+  }
+
   /** The collapsed rail's clock: expand the rail, with the dock open. */
   function expandToSchedules() {
     if (!dockOpen) {
@@ -1555,7 +1566,10 @@ export default function V2() {
               open={dockOpen}
               onToggle={toggleDock}
               refreshKey={scheduleTick}
+              attentionCount={threadSessions.schedules?.attentionCount}
               onOpen={openFromDock}
+              onAutoOpen={autoOpenDock}
+              onError={toast}
             />
           )}
           {railCollapsed && railSettled && (
@@ -1563,10 +1577,11 @@ export default function V2() {
               type="button"
               className="collapse-btn collapsed-schedules fade-in-slow"
               onClick={expandToSchedules}
-              aria-label="Show schedules"
+              aria-label={scheduleAttention > 0 ? `Show schedules, ${scheduleAttentionText(scheduleAttention)}` : "Show schedules"}
               data-tip="Scheduled"
             >
               <IconClock size={18} aria-hidden="true" />
+              {scheduleAttention > 0 && <span className="rail-attn-count" aria-hidden="true">{scheduleAttention}</span>}
             </button>
           )}
           {railCollapsed && railSettled && (
@@ -1772,7 +1787,7 @@ export default function V2() {
                 >
                   <AnimatedActionIcon icon={UsersRoundIcon} size={16} aria-hidden="true" />
                   <span>Bots</span>
-                  {needsYou > 0 && <span className="mobile-attn" role="img" aria-label={needsYouLabel(needsYou) ?? undefined} />}
+                  {botsAttnLabel && <span className="mobile-attn" role="img" aria-label={botsAttnLabel} />}
                 </button>
                 <b className="mobile-chat-bot">{bot?.name ?? ""}</b>
                 <button

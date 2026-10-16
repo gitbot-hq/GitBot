@@ -393,6 +393,27 @@ test("a route PATCH of a Jarvis-made schedule's prompt drops by=\"you\" for good
   assert.equal(runs[0].scheduled!.createdHere, undefined);
 });
 
+test("resume keeps a Jarvis-made schedule its own words", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const jarvis = jarvisThread();
+  const other = jarvisThread();
+  const r = createScheduleForJarvis(jarvis.id, { name: "Hourly", prompt: "Check in.", when: { every_minutes: 60 }, target: "this_thread" });
+  assert.ok(r.ok);
+  // Paused and resumed through the routes (the UI), then by another Jarvis thread.
+  assert.equal((await serve("PATCH", `/schedules/${r.id}`, { enabled: false })).status, 200);
+  assert.equal((await serve("PATCH", `/schedules/${r.id}`, { enabled: true })).status, 200);
+  assert.equal(getSchedule(r.id)!.changedByOther, undefined);
+  assert.ok(updateScheduleForJarvis(other.id, { id: r.id, enabled: false }).ok);
+  assert.ok(updateScheduleForJarvis(other.id, { id: r.id, enabled: true }).ok);
+  assert.equal(getSchedule(r.id)!.changedByOther, undefined);
+  const listed = await serve("GET", `/schedules?threadId=${jarvis.id}`);
+  assert.equal(listed.body.schedules.find((x: any) => x.id === r.id).ownWords, true);
+  // Its next run is still the user's own.
+  advanceTo(now + 60 * 60_000);
+  assert.equal(runs.length, 1);
+  assert.match(await agentPrompt(runs[0]), /run="1" by="you"\/>/);
+});
+
 test("another Jarvis thread's update drops by=\"you\" for good, its run now for that run only; the creator's own keeps it", async (t) => {
   t.mock.method(console, "log", () => {});
   const jarvis = jarvisThread();
@@ -436,7 +457,7 @@ test("another Jarvis thread's update drops by=\"you\" for good, its run now for 
   assert.match(sent, /not the user's word: someone else made or changed/);
 });
 
-test("re-arming a Jarvis-made schedule through the routes (resume, new when) drops by=\"you\"; a route run now drops it for that run only", async (t) => {
+test("re-arming a Jarvis-made schedule through the routes (new when) drops by=\"you\"; a route run now drops it for that run only", async (t) => {
   t.mock.method(console, "log", () => {});
   const jarvis = jarvisThread();
   const r = createScheduleForJarvis(jarvis.id, { name: "Stretch", prompt: "Remind the user to stretch.", when: { in_minutes: 1.5 }, target: "this_thread" });
@@ -457,12 +478,10 @@ test("re-arming a Jarvis-made schedule through the routes (resume, new when) dro
   assert.equal(sent.split("\n")[0], `<gitbot-schedule id="${r.id}" name="Stretch" run="2"/>`);
   assert.match(sent, /not the user's word: someone else made or changed/);
 
-  // Resume alone, and maxRuns/endsAt, count as re-arming too.
-  for (const body of [{ enabled: true }, { maxRuns: 50 }, { endsAt: atIso(now + 86_400_000 * 30) }]) {
+  // maxRuns and endsAt count as re-arming too (a resume alone does not: D3).
+  for (const body of [{ maxRuns: 50 }, { endsAt: atIso(now + 86_400_000 * 30) }]) {
     const s = createScheduleForJarvis(jarvis.id, { name: "Hourly", prompt: "Check in.", when: { every_minutes: 60 }, target: "this_thread" });
     assert.ok(s.ok);
-    assert.ok(updateScheduleForJarvis(jarvis.id, { id: s.id, enabled: false }).ok);
-    if (!("enabled" in body)) assert.ok(updateScheduleForJarvis(jarvis.id, { id: s.id, enabled: true }).ok);
     assert.equal((await serve("PATCH", `/schedules/${s.id}`, body)).status, 200, JSON.stringify(body));
     assert.equal(getSchedule(s.id)!.changedByOther, true, JSON.stringify(body));
   }

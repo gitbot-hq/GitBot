@@ -48,7 +48,7 @@ export interface Schedule {
   /**
    * Set for good once anyone but the Jarvis thread that made it (a route,
    * another Jarvis thread) changed its words or re-armed it: its prompt,
-   * name, times, a resume, maxRuns, endsAt (markChangedBy). Such a schedule
+   * name, times, maxRuns, endsAt (markChangedBy; a resume is not one). Such a schedule
    * is no longer that Jarvis's own words: its turns never carry by="you"
    * (scheduler.ts, madeByThisJarvis). A run now by someone else does not set
    * it: only that one run is data (`byOther` on the run, and on `pending`).
@@ -565,11 +565,11 @@ function isCreator(s: Pick<Schedule, "createdBy">, by: Schedule["createdBy"]): b
 }
 
 /**
- * The edits that change a schedule's words or re-arm it: a resume
- * (`enabled: true`; pausing is not one), new times, prompt, name, or more
- * runs. notify and overlap change neither.
+ * The edits that change a schedule's words or re-arm it: new times, prompt,
+ * name, or more runs. A resume or pause (`enabled`), notify and overlap
+ * change neither: a resume only lets the same words run again.
  */
-const REARMING_FIELDS = ["enabled", "name", "prompt", "when", "maxRuns", "endsAt"] as const;
+const REARMING_FIELDS = ["name", "prompt", "when", "maxRuns", "endsAt"] as const;
 
 /**
  * Someone changed the schedule's words or re-armed it: unless that is the
@@ -659,7 +659,7 @@ export function editSchedule(
   // Edits the freshly read schedule; a refusal returns false, so nothing is saved.
   const updated = updateSchedule(id, (s) => {
     // Saved only if the edit is (a refusal below writes nothing).
-    if (REARMING_FIELDS.some((k) => body[k] !== undefined && !(k === "enabled" && body[k] === false))) markChangedBy(s, editor);
+    if (REARMING_FIELDS.some((k) => body[k] !== undefined)) markChangedBy(s, editor);
     const resuming = enabled === true && !s.enabled;
     const pausing = enabled === false && (s.enabled || !!s.pending);
     // Ended already: disabled, not by a pause.
