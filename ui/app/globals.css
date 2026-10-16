@@ -4983,6 +4983,202 @@ button.file-chip:hover {
   color: var(--muted);
 }
 
+/* A thread row's clock badge: its soonest scheduled run (schedules.ts,
+   threadBadge). A row narrower than 260px (the desktop column, at any
+   width it is dragged to under that) shows the clock alone, so the title
+   keeps its room; the time is in the tooltip. A wider row (the mobile
+   drawer, a widened column) shows the short time beside it, on one line. */
+.page-body .threads-list div.thread-row {
+  container-type: inline-size;
+}
+
+.thread-schedule-badge-time {
+  display: none;
+}
+
+@container (min-width: 260px) {
+  .thread-schedule-badge-time {
+    display: inline;
+  }
+}
+
+.thread-schedule-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.thread-schedule-badge + .thread-selected-mark {
+  margin-left: 0;
+}
+
+/* The open thread's schedules (schedules-panel.tsx): a card above its chat,
+   like the Jarvis children strip. */
+.schedules-panel {
+  flex: none;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: var(--text-sm);
+}
+
+.jarvis-children + .schedules-panel {
+  margin-top: var(--space-1);
+}
+
+.schedules-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 550;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.schedules-toggle .action-icon {
+  transition: transform var(--duration-slow, 200ms) ease;
+}
+
+.schedules-panel.open .schedules-toggle .action-icon {
+  transform: rotate(180deg);
+}
+
+.schedules-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-2);
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+.schedule {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--space-2) 0;
+}
+
+.schedule + .schedule {
+  border-top: 1px solid var(--border);
+}
+
+.schedule-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-2);
+  min-width: 0;
+}
+
+.schedule-name {
+  overflow-wrap: anywhere;
+}
+
+.schedule-when,
+.schedule-meta,
+.schedule-runs {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.schedule-paused .schedule-status {
+  color: var(--brand-honey);
+}
+
+.schedule-ended .schedule-status {
+  color: var(--muted);
+}
+
+.schedule-status {
+  overflow-wrap: anywhere;
+}
+
+.schedule-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--space-3);
+}
+
+.schedule-notify select {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 1px 4px;
+}
+
+.schedule-runs {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+}
+
+.schedule-runs li {
+  overflow-wrap: anywhere;
+}
+
+.schedule-run-at {
+  font-variant-numeric: tabular-nums;
+}
+
+.schedule-link {
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--brand-sky);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.schedule-link:hover,
+.schedule-link:focus-visible {
+  text-decoration: underline;
+}
+
+.schedule-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.schedule-actions button {
+  padding: 2px var(--space-2);
+  background: var(--surface-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.schedule-actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.schedule-actions .schedule-delete:hover:not(:disabled) {
+  color: var(--danger);
+}
+
 /* A Jarvis thread waiting on its child: the composer becomes the child's
    status, a way into it, and Stop where send sits. */
 .composer-pill.composer-locked {

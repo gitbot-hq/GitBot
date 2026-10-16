@@ -28,6 +28,8 @@ import ProfilePanelOverlay from "./profile-panel-overlay";
 import LearnMorePanel, { type LearnMoreKind } from "./learn-more-panel";
 import ThreadPanel from "./thread-panel";
 import JarvisChildren from "./jarvis-children";
+import SchedulesPanel from "./schedules-panel";
+import { IconClock } from "@tabler/icons-react";
 import OnboardingFlow from "./onboarding-flow";
 import ThemeButton from "./theme-button";
 import { CreateBotWithAgentModal, ImportModal, ShareModal } from "./share-modals";
@@ -65,6 +67,7 @@ import { useAttentionTitle } from "../lib/tab-title";
 import { useTabVisible } from "../lib/use-tab-visible";
 import { closeThreadNotifications, usePresence } from "../lib/presence";
 import { coalesce } from "../lib/coalesce";
+import { threadBadge } from "../lib/schedules";
 import "../v2-theme.css";
 import "../onboarding/onboarding.css";
 
@@ -1607,6 +1610,7 @@ export default function V2() {
                           unseen: rowHasNews,
                           lastOutcome: t.lastOutcome,
                         });
+                        const badge = threadBadge(t);
                         return (
                         <div
                           key={t.id}
@@ -1628,6 +1632,12 @@ export default function V2() {
                               <span className="thread-row-title" title={t.title}>{t.title}</span>
                               {isJarvis && preview && <span className="thread-row-preview">{preview}</span>}
                             </span>
+                            {badge && (
+                              <span className="thread-schedule-badge" title={badge.title} aria-label={badge.title}>
+                                <IconClock size={12} aria-hidden="true" />
+                                {badge.label && <span className="thread-schedule-badge-time">{badge.label}</span>}
+                              </span>
+                            )}
                             {t.id === activeThread?.id && <AnimatedActionIcon icon={CheckIcon} className="thread-selected-mark" size={16} aria-hidden="true" />}
                           </button>
                           <button
@@ -1703,6 +1713,16 @@ export default function V2() {
               </div>
               {isJarvis && activeThread && (
                 <JarvisChildren key={activeThread.id} jarvisThreadId={activeThread.id} bots={bots} working={chatWorking} states={threadSessions.states} onOpen={openThread} />
+              )}
+              {activeThread && activeThread.kind !== "setup" && !setupRequired && (
+                <SchedulesPanel
+                  key={`schedules-${activeThread.id}`}
+                  threadId={activeThread.id}
+                  working={chatWorking}
+                  onOpen={openThread}
+                  onChanged={quietRefresh}
+                  onError={toast}
+                />
               )}
               <Chat
                 thread={activeThread}

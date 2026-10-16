@@ -1,5 +1,5 @@
 import { BOT_AGENTS, botOrAgent, getBot, getThread, isJarvisBot } from "./bot-store";
-import { findProject, projectId, projectIdForFolder, projectNames } from "./project-index";
+import { findProject, projectNames } from "./project-index";
 import {
   createSchedule,
   deleteSchedule,
@@ -8,6 +8,7 @@ import {
   getSchedule,
   listSchedules,
   nextRunsOf,
+  scheduleInProject,
   targetThreadId,
   type Notify,
   type Schedule,
@@ -340,11 +341,7 @@ export function listSchedulesForJarvis(
     all = [...all, ...made];
   }
   if (filter.project) {
-    all = all.filter((s) => {
-      if (s.target?.kind === "new-thread") return s.target.projectId === filter.project;
-      const thread = getThread(targetThreadId(s) ?? "");
-      return !!thread && (projectIdForFolder(thread.repoPath) ?? projectId(thread.repoPath)) === filter.project;
-    });
+    all = all.filter((s) => scheduleInProject(s, filter.project!));
   }
   const serverZone = defaultTimeZone().tz;
   return { ok: true, schedules: all.map((s) => listing(s, jarvisThreadId, serverZone)), serverTime: serverClock(at) };

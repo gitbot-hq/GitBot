@@ -36,6 +36,7 @@ import {
   type Thread,
 } from "./bot-store";
 import { existsSync, statSync } from "fs";
+import { threadScheduleSummaries } from "./schedules";
 import { loadThreadMessages, threadContext } from "./thread-tools";
 import { EFFORT_LEVELS, isEffortLevel, isModelValue, MODEL_MAX_LENGTH, type EffortLevel } from "./claude-models";
 
@@ -142,7 +143,14 @@ export async function handleBotRoutes(
 
   if (path === "/threads") {
     if (method === "GET") {
-      jsonOk(res, { threads: listThreads(query.botId) });
+      // Each thread's enabled schedules, derived on read (never stored): the
+      // thread list's clock badge. Absent when it has none.
+      const summaries = threadScheduleSummaries();
+      const threads = listThreads(query.botId).map((t) => {
+        const schedule = summaries.get(t.id);
+        return schedule ? { ...t, schedule } : t;
+      });
+      jsonOk(res, { threads });
       return true;
     }
     if (method === "POST") {

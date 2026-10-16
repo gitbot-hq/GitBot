@@ -25,7 +25,7 @@ import {
   forgetDeletedThread,
   getSchedule,
   isFolder,
-  markChangedBy,
+  runIsByOther,
   isRunnable,
   JARVIS_THREAD_GONE,
   listSchedules,
@@ -343,17 +343,16 @@ export function runScheduleNow(
   const s = getSchedule(id);
   if (!s) return undefined;
   if (!isRunnable(s)) return { refused: `this schedule (${s.when?.kind} on ${s.target?.kind}) is not supported by this build` };
-  // A run at a time someone else chose is no longer the creating Jarvis's own (madeByThisJarvis).
-  updateSchedule(id, (x) => {
-    if (x.changedByOther) return false;
-    markChangedBy(x, by);
-    if (!x.changedByOther) return false;
-  });
+  // A run at a time someone else chose is not the creating Jarvis's own:
+  // that one run is data (no by="you"). The schedule is not marked, so its
+  // own times, and the creator's own run nows, still are (madeByThisJarvis).
+  const byOther = runIsByOther(s, by);
   const due = s.enabled && !!s.nextRunAt && Date.parse(s.nextRunAt) <= schedulerClock.now();
+  // A fire already due is the schedule's own time, whoever pressed the button.
   let fired = due ? fireSchedule(id, availableAgents, "due") : undefined;
   // A due fire that may no longer run (past endsAt) ended the schedule
   // instead; the user still asked for a run.
-  if (!fired?.run && !fired?.queued) fired = fireSchedule(id, availableAgents, "manual");
+  if (!fired?.run && !fired?.queued) fired = fireSchedule(id, availableAgents, "manual", { byOther });
   rearmScheduler();
   if (fired?.queued) return { schedule: fired.schedule, queued: true };
   return fired?.run ? { schedule: fired.schedule, run: fired.run } : undefined;
@@ -367,15 +366,19 @@ export function runScheduleNow(
  * which counts as a run and moves nothing. Either one, on a busy thread with
  * `overlap: "queue"`, becomes the schedule's pending fire instead (`queued`),
  * replacing any older one; it is claimed when the drain starts it.
+ * `byOther`: a manual run someone other than a Jarvis-made schedule's
+ * creator asked for. That run is data (no by="you"), queued or not.
  */
 export function fireSchedule(
   id: string,
   availableAgents: readonly string[],
   kind: "due" | "manual",
+  opts: { byOther?: boolean } = {},
 ): { schedule: Schedule; run?: ScheduleRun; queued?: true } | undefined {
   const nowMs = schedulerClock.now();
   const at = iso(nowMs);
   const wasHeld = heldByCap.delete(id);
+  const byOther = kind === "manual" && !!opts.byOther;
 
   // Claim first, and persist it, before anything can start.
   let runNumber: number | undefined;
@@ -398,7 +401,7 @@ export function fireSchedule(
     lastRunBefore = s.lastRunAt;
     if (kind === "manual") {
       if (queue) {
-        queueManualRun(s, nowMs);
+        queueManualRun(s, nowMs, byOther);
         queuedSince = s.pending?.dueAt;
       } else {
         runNumber = claimManualRun(s, nowMs);
@@ -437,7 +440,7 @@ export function fireSchedule(
     return { schedule: claimed };
   }
 
-  let run = startScheduledTurn(claimed, runNumber, availableAgents, at);
+  let run = startScheduledTurn(claimed, runNumber, availableAgents, at, byOther);
   const missed = settled.missed;
   if (run.outcome === "skipped-busy" && claimed.overlap !== "skip") {
     // startTurn found a turn in the way the busy check did not (a 409): the
@@ -445,7 +448,7 @@ export function fireSchedule(
     const pendingAt = dueAt ?? at;
     const back = updateSchedule(id, (s) => {
       unclaim(s, lastRunBefore);
-      s.pending = kind === "manual" ? { dueAt: pendingAt, manual: true } : { dueAt: pendingAt };
+      s.pending = kind === "manual" ? { dueAt: pendingAt, manual: true, ...(byOther ? { byOther: true as const } : {}) } : { dueAt: pendingAt };
       if (missed) s.history.push(missed);
     }) ?? claimed;
     console.log(`[schedules] fire ${id}: thread ${run.threadId} is busy (409); queued (due ${pendingAt})`);
@@ -564,12 +567,14 @@ function startPendingFire(id: string, availableAgents: readonly string[], where:
   let runNumber: number | undefined;
   let dueAt = at;
   let manual = false;
+  let byOther = false;
   let lastRunBefore: string | undefined;
   // Claimed, and off the queue, before the start: never both pending and started.
   const claimed = updateSchedule(id, (s) => {
     if (!s.pending) return false;
     dueAt = s.pending.dueAt;
     manual = !!s.pending.manual;
+    byOther = !!s.pending.byOther;
     lastRunBefore = s.lastRunAt;
     delete s.pending;
     s.runCount += 1;
@@ -577,12 +582,12 @@ function startPendingFire(id: string, availableAgents: readonly string[], where:
     s.lastRunAt = at;
   });
   if (!claimed || runNumber === undefined) return "none";
-  let run = startScheduledTurn(claimed, runNumber, availableAgents, at);
+  let run = startScheduledTurn(claimed, runNumber, availableAgents, at, byOther);
   if (run.outcome === "skipped-busy") {
     const pendingAt = dueAt;
     updateSchedule(id, (s) => {
       unclaim(s, lastRunBefore);
-      s.pending = manual ? { dueAt: pendingAt, manual: true } : { dueAt: pendingAt };
+      s.pending = manual ? { dueAt: pendingAt, manual: true, ...(byOther ? { byOther: true as const } : {}) } : { dueAt: pendingAt };
     });
     console.log(`[schedules] ${id}: ${where} is busy again; still queued (due ${pendingAt})`);
     return "busy";
@@ -624,8 +629,11 @@ const GONE: Record<string, string> = {
 /** Unattended: always auto-approve, never plan-only (see startScheduledTurn). */
 const SCHEDULED_PERMISSION = { permissionMode: "yolo", mode: "build" } as const;
 
-/** Starts a claimed fire's turn, or says why not. */
-function startScheduledTurn(s: Schedule, run: number, availableAgents: readonly string[], at: string): ScheduleRun {
+/**
+ * Starts a claimed fire's turn, or says why not. `byOther`: a run now that
+ * someone other than the creating Jarvis thread asked for, so never by="you".
+ */
+function startScheduledTurn(s: Schedule, run: number, availableAgents: readonly string[], at: string, byOther = false): ScheduleRun {
   if (s.target?.kind === "new-thread") return startNewThreadRun(s, s.target, run, availableAgents, at);
   const threadId = targetThreadId(s);
   if (!threadId) return { at, outcome: "failed-to-start", error: `target "${s.target?.kind}" is not supported` };
@@ -639,7 +647,7 @@ function startScheduledTurn(s: Schedule, run: number, availableAgents: readonly 
       {
         threadId,
         prompt: s.prompt,
-        scheduled: { id: s.id, name: s.name, run, ...(madeByThisJarvis(s, threadId) ? { createdHere: true as const } : {}) },
+        scheduled: { id: s.id, name: s.name, run, ...(!byOther && madeByThisJarvis(s, threadId) ? { createdHere: true as const } : {}) },
         // Unattended, so always auto-approve and never plan-only, whatever the
         // bot's default or the thread's pick in a browser: nobody is there to
         // answer an approval. (Jarvis is auto-approve anyway.) Documented in
@@ -734,9 +742,11 @@ export function newThreadTitle(s: Pick<Schedule, "name" | "when">, at: number): 
  * create_schedule tool, and nobody else has changed its words or re-armed it
  * since (changedByOther): the only kind whose prompt that Jarvis takes as
  * the user's own request (the tag's by="you"). POST /schedules always
- * records createdBy user. A PATCH of its words or times (or a resume), a run
- * now through the route, or another Jarvis thread's update or run marks a
- * Jarvis-made one changedByOther for good, so its turns lose by="you" too.
+ * records createdBy user. A PATCH of its words or times (or a resume), or
+ * another Jarvis thread's update, marks a Jarvis-made one changedByOther for
+ * good, so its turns lose by="you" too. A run now by anyone but its creator
+ * (the route, the schedules panel, another Jarvis thread) is data for that
+ * one run only: startScheduledTurn's `byOther`.
  */
 function madeByThisJarvis(s: Schedule, threadId: string): boolean {
   return s.createdBy?.kind === "jarvis" && s.createdBy.threadId === threadId && !s.changedByOther;

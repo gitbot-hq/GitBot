@@ -1,5 +1,7 @@
 import { jsonError, jsonOk, parseQuery, readBody, type IRequest, type IResponse } from "./server-common";
-import { createSchedule, deleteSchedule, editSchedule, getSchedule, listSchedules, nextRunsOf } from "./schedules";
+import { findProject } from "./project-index";
+import { createSchedule, deleteSchedule, describeSchedule, editSchedule, getSchedule, listSchedulesFor, nextRunsOf } from "./schedules";
+import { defaultTimeZone } from "./schedule-time";
 import { rearmScheduler, runScheduleNow, scheduleChanged, schedulerClock } from "./scheduler";
 
 // /schedules: list, create, change (pause, resume, edit), delete and run
@@ -45,11 +47,15 @@ export async function handleScheduleRoutes(
   const allowed = canWriteSchedules(req);
   if (!allowed.ok) { jsonError(res, allowed.status, allowed.message); return true; }
 
-  // GET /schedules?threadId=
+  // GET /schedules?threadId=&projectId=
   if (method === "GET" && path === "/schedules") {
-    const { threadId } = parseQuery(url);
+    const { threadId, projectId } = parseQuery(url);
+    if (projectId && !findProject(projectId)) { jsonError(res, 400, `no project with id "${projectId}"`); return true; }
     jsonOk(res, {
-      schedules: listSchedules(threadId ? { threadId } : {}),
+      // `describe`: its times in words (a once in the server's zone), so the
+      // UI's panel needs no cron reading of its own.
+      schedules: listSchedulesFor({ threadId: threadId || undefined, projectId: projectId || undefined })
+        .map((s) => ({ ...s, describe: describeSchedule(s, defaultTimeZone().tz) })),
       // Fixed for now: one gitbot per data dir runs every schedule.
       owner: { pid: process.pid, thisProcess: true },
     });

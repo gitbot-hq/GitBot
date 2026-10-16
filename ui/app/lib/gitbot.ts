@@ -61,8 +61,61 @@ export type ThreadFull = Thread & {
   lastActivityAt?: string;
   lastSeenAt?: string;
   lastOutcome?: "done" | "failed" | "stopped";
+  // GET /threads only: the thread's enabled schedules, worked out on read.
+  // Absent when it has none. Drawn as the row's clock badge.
+  schedule?: { count: number; nextRunAt: string | null };
   createdAt: string;
   updatedAt: string;
+};
+
+/** One run of a schedule, as src/schedules.ts records it. */
+export type ScheduleRun = {
+  at: string;
+  outcome: "started" | "skipped-busy" | "missed" | "failed-to-start";
+  missedCount?: number;
+  delayedMs?: number;
+  dueAt?: string;
+  threadId?: string;
+  turnOutcome?: "done" | "failed" | "stopped";
+  error?: string;
+};
+
+export type ScheduleNotify = "always" | "on-failure" | "never";
+
+/**
+ * A schedule as GET /schedules lists it (src/schedules.ts, Schedule). No
+ * model or effort: a run uses its thread's own, or the bot's.
+ */
+export type Schedule = {
+  id: string;
+  name: string;
+  prompt: string;
+  when:
+    | { kind: "once"; at: string }
+    | { kind: "cron"; expr: string; tz: string }
+    | { kind: "interval"; everyMinutes: number; anchor: string };
+  target: { kind: "thread"; threadId: string } | { kind: "new-thread"; botId: string; projectId: string };
+  notesTo?: string;
+  createdBy: { kind: "jarvis"; threadId: string } | { kind: "user"; remote?: string };
+  changedByOther?: true;
+  enabled: boolean;
+  pausedReason?: string;
+  overlap: "queue" | "skip";
+  notify: ScheduleNotify;
+  maxRuns?: number;
+  endsAt?: string;
+  runCount: number;
+  consecutiveFailures: number;
+  nextRunAt: string | null;
+  lastRunAt?: string;
+  pending?: { dueAt: string; manual?: true; byOther?: true };
+  history: ScheduleRun[];
+  createdAt: string;
+  updatedAt: string;
+  /** GET /schedules?threadId=: listed for its notes only (notesTo), not run here. */
+  notesHere?: true;
+  /** GET /schedules: its times in words. */
+  describe?: string;
 };
 
 /** One line of the agent's own plan, as TodoWrite writes it. `activeForm` is

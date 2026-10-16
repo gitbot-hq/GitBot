@@ -221,6 +221,37 @@ export function deleteThread(id: string) {
   });
 }
 
+/** The schedules on a thread, and those whose notes go to it (`notesHere`). */
+export function listSchedules(filter: { threadId?: string; projectId?: string } = {}) {
+  const q = new URLSearchParams();
+  if (filter.threadId) q.set("threadId", filter.threadId);
+  if (filter.projectId) q.set("projectId", filter.projectId);
+  const qs = q.toString();
+  return req<{ schedules: import("./gitbot").Schedule[]; owner: { pid: number; thisProcess: boolean } }>(
+    `/schedules${qs ? `?${qs}` : ""}`,
+  );
+}
+
+/** Pause or resume (`enabled`), or change `notify`. */
+export function patchSchedule(id: string, patch: { enabled?: boolean; notify?: import("./gitbot").ScheduleNotify }) {
+  return req<import("./gitbot").Schedule>(`/schedules/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export function deleteSchedule(id: string) {
+  return req<{ ok: true }>(`/schedules/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+/** Fires it now: `run` when it started (or failed to), `queued` when its thread is busy. */
+export function runScheduleNow(id: string) {
+  return req<{ schedule: import("./gitbot").Schedule; run?: import("./gitbot").ScheduleRun; queued?: true }>(
+    `/schedules/${encodeURIComponent(id)}/run`,
+    { method: "POST" },
+  );
+}
+
 /** Marks a thread viewed, clearing its "has news" on every device. */
 export function markThreadSeen(id: string) {
   return req<{ thread: import("./gitbot").ThreadFull }>(`/threads/${encodeURIComponent(id)}/seen`, {

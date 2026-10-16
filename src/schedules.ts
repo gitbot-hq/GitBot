@@ -3,7 +3,7 @@ import { statSync } from "fs";
 import { join } from "path";
 import { dataDir, quarantineCorrupt, readCollection, writeCollection } from "./json-store";
 import { botSetupError, getBot, getThread, isJarvisBot, threadAgent, type TurnOutcome } from "./bot-store";
-import { findProject } from "./project-index";
+import { findProject, projectId, projectIdForFolder } from "./project-index";
 import {
   countOccurrences,
   describeWhen,
@@ -48,9 +48,10 @@ export interface Schedule {
   /**
    * Set for good once anyone but the Jarvis thread that made it (a route,
    * another Jarvis thread) changed its words or re-armed it: its prompt,
-   * name, times, a resume, maxRuns, endsAt, or a run now (markChangedBy).
-   * Such a schedule is no longer that Jarvis's own words: its turns never
-   * carry by="you" (scheduler.ts, madeByThisJarvis).
+   * name, times, a resume, maxRuns, endsAt (markChangedBy). Such a schedule
+   * is no longer that Jarvis's own words: its turns never carry by="you"
+   * (scheduler.ts, madeByThisJarvis). A run now by someone else does not set
+   * it: only that one run is data (`byOther` on the run, and on `pending`).
    */
   changedByOther?: true;
   enabled: boolean;
@@ -98,9 +99,11 @@ export interface Schedule {
    * (deferred-turns.ts), and it is claimed then; a restart records it missed.
    * It may outlive the schedule's end: a once, or a last run, still waits.
    * `manual`: a run now the user asked for, not one of its times; a new
-   * `when` keeps it (a due fire of the old times is dropped).
+   * `when` keeps it (a due fire of the old times is dropped). `byOther`: a
+   * run now on a Jarvis-made schedule by anyone but the Jarvis thread that
+   * made it, so that run, when it starts, is data (no by="you").
    */
-  pending?: { dueAt: string; manual?: true };
+  pending?: { dueAt: string; manual?: true; byOther?: true };
   /** The last HISTORY_MAX runs, oldest first (see trimHistory). */
   history: ScheduleRun[];
   createdAt: string;
@@ -162,6 +165,56 @@ const now = () => new Date().toISOString();
 export function listSchedules(filter: { threadId?: string } = {}): Schedule[] {
   const all = readCollection<Schedule>(file(), "schedules");
   return filter.threadId ? all.filter((s) => targetThreadId(s) === filter.threadId) : all;
+}
+
+/**
+ * True when the schedule works in that project: a new-thread target there,
+ * or a thread target whose thread's folder is that project's.
+ */
+export function scheduleInProject(s: Schedule, project: string): boolean {
+  if (s.target?.kind === "new-thread") return s.target.projectId === project;
+  const thread = getThread(targetThreadId(s) ?? "");
+  return !!thread && (projectIdForFolder(thread.repoPath) ?? projectId(thread.repoPath)) === project;
+}
+
+/** A schedule as GET /schedules?threadId= lists it: `notesHere` when it is there for its notes only. */
+export type ListedSchedule = Schedule & { notesHere?: true };
+
+/**
+ * What GET /schedules lists. `threadId`: the schedules that run on that
+ * thread, then those whose notes go there (`notesTo`: a Jarvis thread's own,
+ * on other threads or making new ones), flagged `notesHere`, so one call
+ * gives a thread's schedules panel everything it shows. `projectId`: only
+ * those in that project (scheduleInProject).
+ */
+export function listSchedulesFor(filter: { threadId?: string; projectId?: string } = {}): ListedSchedule[] {
+  let all: ListedSchedule[] = listSchedules();
+  if (filter.threadId) {
+    const id = filter.threadId;
+    const on = all.filter((s) => targetThreadId(s) === id);
+    const notes = all.filter((s) => targetThreadId(s) !== id && s.notesTo === id).map((s) => ({ ...s, notesHere: true as const }));
+    all = [...on, ...notes];
+  }
+  if (filter.projectId) all = all.filter((s) => scheduleInProject(s, filter.projectId!));
+  return all;
+}
+
+/**
+ * Per thread, its enabled schedules: how many, and the soonest next run
+ * (null when none has one). Read fresh for GET /threads, never stored.
+ */
+export function threadScheduleSummaries(): Map<string, { count: number; nextRunAt: string | null }> {
+  const out = new Map<string, { count: number; nextRunAt: string | null }>();
+  for (const s of listSchedules()) {
+    if (!s.enabled) continue;
+    const id = targetThreadId(s);
+    if (!id) continue;
+    const cur = out.get(id) ?? { count: 0, nextRunAt: null };
+    cur.count += 1;
+    if (s.nextRunAt && (!cur.nextRunAt || Date.parse(s.nextRunAt) < Date.parse(cur.nextRunAt))) cur.nextRunAt = s.nextRunAt;
+    out.set(id, cur);
+  }
+  return out;
 }
 
 /**
@@ -358,8 +411,8 @@ export function claimManualRun(s: Schedule, now: number): number {
  * `pending` like a due fire, and counts once it starts. Like claimManualRun,
  * it leaves the next due time be, unless it holds the last run.
  */
-export function queueManualRun(s: Schedule, now: number): void {
-  s.pending = { dueAt: iso(now), manual: true };
+export function queueManualRun(s: Schedule, now: number, byOther = false): void {
+  s.pending = { dueAt: iso(now), manual: true, ...(byOther ? { byOther: true as const } : {}) };
   if (s.enabled && runsLeft(s) <= 0) endSchedule(s);
 }
 
@@ -469,6 +522,16 @@ export function hasEnded(s: Schedule, now: number): boolean {
   if (runsLeft(s) <= 0) return true;
   const next = nextOccurrence(s.when, now);
   return next == null || (!!s.endsAt && next >= Date.parse(s.endsAt));
+}
+
+/**
+ * True when a run now by `by` would take a Jarvis-made schedule's prompt out
+ * of its creator's hands: the schedule was made by a Jarvis thread, and `by`
+ * is anyone else (a route, another Jarvis thread). Only that run is data
+ * (scheduler.ts, runScheduleNow); the schedule itself is not marked.
+ */
+export function runIsByOther(s: Pick<Schedule, "createdBy">, by: Schedule["createdBy"]): boolean {
+  return s.createdBy?.kind === "jarvis" && !isCreator(s, by);
 }
 
 /** True when `by` is the Jarvis thread that made the schedule. */
