@@ -113,6 +113,13 @@ export interface Thread {
    */
   pendingNote?: string;
   /**
+   * Jarvis threads only: one status line per schedule this thread made whose
+   * runs it does not see itself (scheduler.ts, schedule-notes.ts), keyed by
+   * schedule id. Each is replaced, never appended to, as runs end, and all go
+   * with the user's next message here, after pendingNote, then are cleared.
+   */
+  scheduleNotes?: Record<string, ScheduleNote>;
+  /**
    * Jarvis threads only: the approvals its children asked for, shown as rows
    * in its conversation. Stored, not derived: once answered, an approval
    * leaves the live stream, and how it was answered is known nowhere else.
@@ -168,6 +175,25 @@ export interface FailedRun {
 }
 
 export const FAILED_RUNS_MAX = 20;
+
+/**
+ * A schedule's status line on the Jarvis thread that made it
+ * (Thread.scheduleNotes), with what it is worked out from: everything since
+ * the user's last message there. Written only by gitbot, from its own words,
+ * the schedule's name and ids: never from a run's text.
+ */
+export interface ScheduleNote {
+  /** The line Jarvis gets: `[schedule "Nightly audit": 3 runs since your last message, last done, thread <id>]`. */
+  line: string;
+  /** Runs that ended since the user's last message. */
+  runs: number;
+  /** The latest of them: how it ended, and its thread. */
+  last?: { outcome: string; threadId?: string };
+  /** Runs missed while gitbot was down. */
+  missed?: number;
+  /** Why it paused itself; cleared once it runs again. */
+  paused?: string;
+}
 
 /** One approval a Jarvis-owned child asked for: a row gitbot places in the Jarvis thread. */
 export interface ChildApproval {
@@ -394,6 +420,7 @@ export function deleteBot(id: string): boolean {
   writeCollection(BOTS_FILE, remaining);
   const threads = readCollection<Thread>(THREADS_FILE);
   writeCollection(THREADS_FILE, threads.filter((t) => t.botId !== id));
+  for (const thread of threads) if (thread.botId === id) threadDeleted(thread);
   return true;
 }
 
@@ -516,10 +543,39 @@ export function updateThread(id: string, patch: Partial<Thread>): Thread | undef
 
 export function deleteThread(id: string): boolean {
   const threads = readCollection<Thread>(THREADS_FILE);
-  const remaining = threads.filter((t) => t.id !== id);
-  if (remaining.length === threads.length) return false;
-  writeCollection(THREADS_FILE, remaining);
+  const gone = threads.find((t) => t.id === id);
+  if (!gone) return false;
+  writeCollection(THREADS_FILE, threads.filter((t) => t.id !== id));
+  threadDeleted(gone);
   return true;
+}
+
+// --- Thread deletion hook ---
+// Modules that keep state about threads (schedules) clean up after a delete
+// by registering here, so this store never imports them (no import cycle).
+
+type ThreadDeletedListener = (thread: Thread) => void;
+const threadDeletedListeners = new Set<ThreadDeletedListener>();
+
+/** Calls the listener after each thread is deleted, with the thread as it was. */
+export function onThreadDeleted(listener: ThreadDeletedListener): () => void {
+  threadDeletedListeners.add(listener);
+  return () => { threadDeletedListeners.delete(listener); };
+}
+
+/**
+ * Tells the listeners, after the write. A listener that throws is logged and
+ * never undoes the delete. One that deletes another thread just notifies
+ * again for that one; deleting a thread already gone notifies no one.
+ */
+function threadDeleted(thread: Thread): void {
+  for (const listener of [...threadDeletedListeners]) {
+    try {
+      listener(thread);
+    } catch (err: any) {
+      console.error(`[thread-deleted] thread ${thread.id}: ${err?.message ?? err}`);
+    }
+  }
 }
 
 /**
@@ -635,6 +691,36 @@ export function setRunningFor(id: string, owner: string | undefined): void {
   } catch (err: any) {
     console.error(`[running-mark] could not ${owner ? "mark" : "unmark"} thread ${id}: ${err?.message ?? err}`);
   }
+}
+
+/**
+ * Rewrites one schedule's note on a thread: `edit` gets the note as it
+ * stands (undefined when there is none) and returns the new one. The read,
+ * the edit and the write are one synchronous step, so a message being sent
+ * there can never take the old note while a new one is written. Not
+ * activity: updatedAt stays. Returns the note as written, or undefined when
+ * the thread is gone.
+ */
+export function setScheduleNote(
+  id: string,
+  scheduleId: string,
+  edit: (note: ScheduleNote | undefined) => ScheduleNote,
+): ScheduleNote | undefined {
+  const threads = readCollection<Thread>(THREADS_FILE);
+  const thread = threads.find((t) => t.id === id);
+  if (!thread) return undefined;
+  // Anything but an object of notes (a hand-edited file) reads as none.
+  const notes = isScheduleNotes(thread.scheduleNotes) ? thread.scheduleNotes : {};
+  const before = notes[scheduleId];
+  const note = edit(before && typeof before === "object" ? before : undefined);
+  thread.scheduleNotes = { ...notes, [scheduleId]: note };
+  writeCollection(THREADS_FILE, threads);
+  return note;
+}
+
+/** True for a scheduleNotes object as gitbot writes it. */
+export function isScheduleNotes(value: unknown): value is Record<string, ScheduleNote> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 /** A pending note with one more line; a line already there is not repeated. */

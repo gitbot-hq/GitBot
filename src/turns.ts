@@ -128,7 +128,7 @@ export function startTurn(request: TurnRequest, availableAgents: readonly string
 
   // Lock and Stop: a Jarvis thread waiting on its child takes no message from
   // the user (the UI hides the composer; this is the backstop), and the next
-  // one it does take carries any note left by a Stop.
+  // one it does take carries any note left by a Stop, and its schedules' lines.
   const waitingOn = threadId && !request.report ? runningChildOf(threadId) : undefined;
   if (waitingOn) {
     return { ok: false, status: 409, message: `Waiting on ${childLabel(waitingOn.threadId)}: stop it or wait for its report` };

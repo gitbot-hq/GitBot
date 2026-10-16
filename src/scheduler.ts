@@ -7,6 +7,7 @@ import {
   getBot,
   getThread,
   isJarvisBot,
+  onThreadDeleted,
   threadAgent,
   type Thread,
 } from "./bot-store";
@@ -15,15 +16,18 @@ import { runningChildOf } from "./child-lock";
 import { errorLine, latestLine, turnOutcome } from "./attention";
 import { sendSchedulePausedPush } from "./push";
 import { findProject } from "./project-index";
+import { noteSchedule } from "./schedule-notes";
 import { defaultTimeZone, localShort } from "./schedule-time";
 import { isShuttingDown, onTurnEnd, sessions, type EndedTurn } from "./server-common";
 import {
   claimManualRun,
   dropPending,
+  forgetDeletedThread,
   getSchedule,
   isFolder,
   markChangedBy,
   isRunnable,
+  JARVIS_THREAD_GONE,
   listSchedules,
   pauseSchedule,
   PAUSE_AFTER_FAILURES,
@@ -73,6 +77,12 @@ import { startTurn } from "./turns";
 // (`pausedReason`), and one `failed` push says so. A start that can never
 // work (its thread or bot is gone; a new-thread target's bot or project)
 // pauses it at once. Only the user resumes it (PATCH /schedules/:id).
+//
+// A schedule a Jarvis thread made (notesTo) keeps one status line there
+// (schedule-notes.ts) for its runs on other threads, its missed runs and its
+// pause, which Jarvis gets with the user's next message. A deleted thread
+// takes its schedules with it, and pauses the new-thread ones it made
+// (threadDeleted).
 
 /**
  * Time and timers, as the scheduler sees them. A seam: tests set `now` and
@@ -181,6 +191,7 @@ interface Running {
   availableAgents: readonly string[];
   cancelTimer: () => void;
   unlisten: () => void;
+  unlistenDeletes: () => void;
 }
 
 let running: Running | null = null;
@@ -202,12 +213,13 @@ export function startScheduler(availableAgents: readonly string[]): () => void {
   recentStarts = recentStartsFromHistory(schedulerClock.now());
   // Running first: whatever the startup pass below hits, schedules created
   // from here on still arm the timer and fire.
-  running = { availableAgents, cancelTimer: () => {}, unlisten: () => {} };
+  running = { availableAgents, cancelTimer: () => {}, unlisten: () => {}, unlistenDeletes: () => {} };
   try {
     running.unlisten = watchScheduledTurns();
   } catch (err: any) {
     console.error(`[scheduler] could not watch turn ends: ${err?.message ?? err}`);
   }
+  running.unlistenDeletes = onThreadDeleted(threadDeleted);
   try {
     recordStalePending(schedulerClock.now());
     recordMissed(schedulerClock.now());
@@ -229,6 +241,7 @@ export function stopScheduler(): void {
   if (!running) return;
   running.cancelTimer();
   running.unlisten();
+  running.unlistenDeletes();
   running = null;
 }
 
@@ -408,6 +421,8 @@ export function fireSchedule(
     const about = settled.estimated ? "about " : "";
     const why = tooLate ? "came due while gitbot was suspended or the clock jumped" : "passed while it waited";
     console.log(`[schedules] missed ${id}: ${about}${settled.missed.missedCount} run(s) from ${settled.missed.at} ${why}`);
+    // Suspended or stalled is gitbot being down, from the user's side.
+    if (tooLate) noteSchedule(claimed, { kind: "missed", count: settled.missed.missedCount ?? 0 });
   }
   if (queuedSince) {
     const busy = claimed.target?.kind === "new-thread" ? "its last run is still going" : `thread ${targetThreadId(claimed)} is busy`;
@@ -447,6 +462,7 @@ export function fireSchedule(
   const late = run.delayedMs ? ` ${Math.round(run.delayedMs / 1000)}s late (rate cap)` : "";
   const end = schedule.enabled || paused ? "" : schedule.pausedReason ? "; the schedule is paused" : "; the schedule has ended";
   console.log(`[schedules] fire ${id} run ${runNumber}: ${run.outcome}${where}${late}${why}${end}`);
+  noteFailedStart(schedule, run);
   if (paused) announcePause(schedule, paused, run.threadId);
   return { schedule, run };
 }
@@ -579,6 +595,7 @@ function startPendingFire(id: string, availableAgents: readonly string[], where:
   const why = run.error ? ` (${run.error})` : "";
   const on = run.threadId ? `thread ${run.threadId}` : where;
   console.log(`[schedules] fire ${id} run ${runNumber}: ${run.outcome} on ${on}, queued since ${dueAt}${why}`);
+  if (after) noteFailedStart(after, run);
   if (paused && after) announcePause(after, paused, run.threadId);
   return run.outcome;
 }
@@ -760,14 +777,18 @@ function retryUnsavedMissed(now: number): void {
         if (settled.missed) x.history.push(settled.missed);
       });
       missedUnsaved.delete(id);
+      let missedCount = 0;
       if (staleDueAt) {
         stalePendingUnsaved.delete(id);
         console.log(`[schedules] missed ${id}: the fire queued since ${staleDueAt}, saved on retry`);
+        missedCount += 1;
       }
       if (settled.missed) {
         const next = after?.nextRunAt ? `next run ${after.nextRunAt}` : "it has ended";
         console.log(`[schedules] missed ${id}: ${settled.estimated ? "about " : ""}${settled.missed.missedCount} run(s) from ${settled.missed.at}, saved on retry; ${next}`);
+        missedCount += settled.missed.missedCount ?? 0;
       }
+      if (after) noteSchedule(after, { kind: "missed", count: missedCount });
     } catch (err: any) {
       // Still can't save: the next tick tries again. Said again once a minute,
       // so a disk that stays full is visible after boot too.
@@ -790,10 +811,13 @@ function recordStalePending(now: number): void {
     if (!s.pending) continue;
     const dueAt = s.pending.dueAt;
     try {
-      updateSchedule(s.id, (x) => {
+      let dropped = false;
+      const after = updateSchedule(s.id, (x) => {
         if (!dropPending(x, now, "missed")) return false;
+        dropped = true;
       });
       console.log(`[schedules] missed ${s.id}: the fire queued since ${dueAt} was still waiting when gitbot stopped`);
+      if (after && dropped) noteSchedule(after, { kind: "missed", count: 1 });
     } catch (err: any) {
       missedUnsaved.set(s.id, now);
       stalePendingUnsaved.set(s.id, dueAt);
@@ -825,6 +849,7 @@ function recordMissed(now: number): void {
       const about = settled.estimated ? "about " : "";
       const next = after?.nextRunAt ? `next run ${after.nextRunAt}` : "it has ended";
       console.log(`[schedules] missed ${s.id}: ${about}${count} run(s) from ${dueAt} while gitbot was down; ${next}`);
+      if (after) noteSchedule(after, { kind: "missed", count });
     } catch (err: any) {
       missedUnsaved.set(s.id, now);
       console.error(`[scheduler] could not record ${s.id} as missed (it will not fire): ${err?.message ?? err}`);
@@ -832,10 +857,14 @@ function recordMissed(now: number): void {
   }
 }
 
-/** Why a schedule just paused itself: the reason stored, and the push's words. */
+/**
+ * Why a schedule just paused itself: the reason stored, the push's words,
+ * and its note's (gitbot's own words only: never the run's error text).
+ */
 interface Paused {
   reason: string;
   body: string;
+  note?: string;
 }
 
 /**
@@ -855,11 +884,11 @@ function countResult(s: Schedule, result: "done" | "failed", error: string, gone
   if (!s.enabled) return undefined;
   let paused: Paused;
   if (gone) {
-    paused = { reason: gone, body: `⏰ ${s.name} paused: ${gone}` };
+    paused = { reason: gone, body: `⏰ ${s.name} paused: ${gone}`, note: `paused: ${gone}` };
   } else if (s.consecutiveFailures >= PAUSE_AFTER_FAILURES) {
     const runs = `paused after ${PAUSE_AFTER_FAILURES} failed runs`;
     const line = clipAtWord(latestLine(error, Infinity), PAUSED_LINE_MAX);
-    paused = { reason: line ? `${runs}: ${line}` : runs, body: `⏰ ${s.name} ${runs}` };
+    paused = { reason: line ? `${runs}: ${line}` : runs, body: `⏰ ${s.name} ${runs}`, note: runs };
   } else {
     return undefined;
   }
@@ -879,6 +908,11 @@ export function clipAtWord(text: string, max: number): string {
   return `${(space > max / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
 
+/** A run that failed to start goes on the schedule's note; a busy skip does not. */
+function noteFailedStart(s: Schedule, run: ScheduleRun): void {
+  if (run.outcome === "failed-to-start") noteSchedule(s, { kind: "run", outcome: "failed to start", threadId: run.threadId });
+}
+
 /** A run that failed to start counts as a failure; a busy skip does not. */
 function countStartFailure(s: Schedule, run: ScheduleRun): Paused | undefined {
   if (run.outcome !== "failed-to-start") return undefined;
@@ -886,11 +920,13 @@ function countStartFailure(s: Schedule, run: ScheduleRun): Paused | undefined {
 }
 
 /**
- * Logs a pause and sends its one push. Never throws. `runThreadId`: the
- * thread of the run that paused it, which the push opens when the schedule
- * has no thread of its own (a new-thread target); none when no thread ran.
+ * Logs a pause, sends its one push, and puts it on the schedule's note.
+ * Never throws. `runThreadId`: the thread of the run that paused it, which
+ * the push opens when the schedule has no thread of its own (a new-thread
+ * target); none when no thread ran.
  */
 function announcePause(s: Schedule, paused: Paused, runThreadId?: string): void {
+  if (paused.note) noteSchedule(s, { kind: "paused", words: paused.note });
   try {
     console.log(`[schedules] ${s.id} paused: ${paused.reason}`);
     sendSchedulePausedPush({ id: s.id, name: s.name, threadId: targetThreadId(s) ?? runThreadId, body: paused.body });
@@ -928,6 +964,7 @@ export function noteScheduledTurnEnd(turn: EndedTurn): void {
     if (outcome === "stopped") return entry ? undefined : false;
     paused = countResult(s, outcome, errorLine(turn, Infinity));
   });
+  if (after) noteSchedule(after, { kind: "run", outcome, threadId: turn.threadId });
   if (paused && after) {
     turn.schedulePaused = true;
     announcePause(after, paused, turn.threadId);
@@ -985,6 +1022,30 @@ export function dropSupersededFailedRuns(turn: EndedTurn): void {
   const thread = getThread(turn.threadId);
   if (!thread?.failedRuns?.length || transcriptHasTimes(thread)) return;
   clearFailedRuns(thread.id);
+}
+
+/**
+ * A thread was deleted (bot-store's onThreadDeleted): the schedules that ran
+ * on it go, and those it made are detached, or paused with a push when they
+ * start a new thread each run (schedules.ts, forgetDeletedThread). Never
+ * throws into the delete.
+ */
+function threadDeleted(thread: Thread): void {
+  try {
+    const changed = forgetDeletedThread(thread.id, schedulerClock.now());
+    for (const s of changed.deleted) {
+      heldByCap.delete(s.id);
+      console.log(`[schedules] ${s.id} deleted: its thread ${thread.id} was deleted`);
+    }
+    for (const s of changed.detached) console.log(`[schedules] ${s.id}: its Jarvis thread ${thread.id} was deleted; it runs on, with no notes`);
+    for (const s of changed.paused) {
+      heldByCap.delete(s.id);
+      announcePause(s, { reason: JARVIS_THREAD_GONE, body: `⏰ ${s.name} paused: ${JARVIS_THREAD_GONE}` });
+    }
+    if (changed.deleted.length || changed.paused.length) rearmScheduler();
+  } catch (err: any) {
+    console.error(`[scheduler] thread ${thread.id} was deleted, but its schedules could not be updated: ${err?.message ?? err}`);
+  }
 }
 
 function watchScheduledTurns(): () => void {

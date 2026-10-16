@@ -1,5 +1,5 @@
 import { basename } from "path";
-import { appendNote, getBot, getThread, isJarvisBot, setRunningFor, updateThread, type Thread } from "./bot-store";
+import { appendNote, getBot, getThread, isJarvisBot, isScheduleNotes, setRunningFor, updateThread, type Thread } from "./bot-store";
 import { sessions, turnReportsTo, type SessionStore } from "./server-common";
 import type { ScheduledTurn } from "./schedule-tag";
 
@@ -73,9 +73,10 @@ export function addPendingNote(jarvisThreadId: string, note: string): void {
 }
 
 /**
- * The note waiting for a user turn on a Jarvis thread, if any. A report is
+ * The notes waiting for a user turn on a Jarvis thread, if any: the pending
+ * note first, then each schedule's line (Thread.scheduleNotes). A report is
  * not the user's message, and neither is a scheduled turn, so neither ever
- * carries one: the note waits for the user's own next message.
+ * carries them: they wait for the user's own next message.
  */
 export function pendingNoteFor(
   threadId: string | undefined,
@@ -84,8 +85,12 @@ export function pendingNoteFor(
 ): string | undefined {
   if (!threadId || report || scheduled) return undefined;
   const thread = getThread(threadId);
-  if (!thread?.pendingNote || !isJarvisBot(getBot(thread.botId))) return undefined;
-  return thread.pendingNote;
+  if (!thread || !isJarvisBot(getBot(thread.botId))) return undefined;
+  const schedules = isScheduleNotes(thread.scheduleNotes)
+    ? Object.values(thread.scheduleNotes).map((n) => n?.line).filter((l): l is string => typeof l === "string" && !!l)
+    : [];
+  const lines = [...(thread.pendingNote ? [thread.pendingNote] : []), ...schedules];
+  return lines.length ? lines.join("\n") : undefined;
 }
 
 /** The message as Jarvis receives it: the pending note first. */
@@ -94,7 +99,10 @@ export function withNote(note: string | undefined, prompt: string | undefined): 
   return prompt ? `${note}\n\n${prompt}` : note;
 }
 
-/** The note has been delivered: clear it so it is prepended only once. */
+/**
+ * The notes have been delivered: clear them so they are prepended only once.
+ * The schedule lines go too, so each schedule's run count starts again from 0.
+ */
 export function clearPendingNote(threadId: string): void {
-  updateThread(threadId, { pendingNote: undefined });
+  updateThread(threadId, { pendingNote: undefined, scheduleNotes: undefined });
 }

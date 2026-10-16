@@ -381,6 +381,59 @@ export function dropPending(s: Schedule, now: number, outcome: "skipped-busy" | 
   return entry;
 }
 
+// --- Deleted threads ---
+
+/** The pausedReason of a new-thread schedule whose Jarvis thread (notesTo) was deleted. */
+export const JARVIS_THREAD_GONE = "its Jarvis thread was deleted";
+
+export interface DeletedThreadChanges {
+  /** Schedules that ran on the thread: deleted with it. */
+  deleted: Schedule[];
+  /** New-thread schedules it made: paused (JARVIS_THREAD_GONE). */
+  paused: Schedule[];
+  /** Other schedules it made: they run on, with no notesTo. */
+  detached: Schedule[];
+}
+
+/**
+ * A thread was deleted (bot-store's onThreadDeleted; the scheduler listens).
+ * Its thread-target schedules are deleted: they have nothing left to run on.
+ * The schedules whose notes it took lose their notesTo; those that start a
+ * new thread each run are paused too, since nobody would hear about their
+ * runs but a push (an ended one stays ended, a paused one keeps its reason),
+ * while those on another thread keep running there. One write, nothing
+ * written when nothing changed.
+ */
+export function forgetDeletedThread(threadId: string, at: number = Date.now()): DeletedThreadChanges {
+  const out: DeletedThreadChanges = { deleted: [], paused: [], detached: [] };
+  const all = listSchedules();
+  if (!all.some((s) => targetThreadId(s) === threadId || s.notesTo === threadId)) return out;
+  const kept: Schedule[] = [];
+  for (const s of listForWrite()) {
+    if (targetThreadId(s) === threadId) {
+      out.deleted.push(s);
+      continue;
+    }
+    kept.push(s);
+    if (s.notesTo !== threadId) continue;
+    delete s.notesTo;
+    s.updatedAt = now();
+    if (s.target?.kind === "new-thread" && (s.enabled || s.pending)) {
+      const wasEnded = !s.enabled && !s.pausedReason;
+      pauseSchedule(s, s.pausedReason ?? JARVIS_THREAD_GONE);
+      // One that had ended and only held a fire stays ended (as editSchedule).
+      if (wasEnded && hasEnded(s, at)) delete s.pausedReason;
+      if (s.pausedReason === JARVIS_THREAD_GONE) {
+        out.paused.push(s);
+        continue;
+      }
+    }
+    out.detached.push(s);
+  }
+  writeCollection(file(), kept);
+  return out;
+}
+
 // --- Pausing, resuming and editing ---
 
 /** After this many failed runs in a row, a schedule pauses itself. */

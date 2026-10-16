@@ -6,7 +6,7 @@ import { EventEmitter } from "events";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { bindSession, createBot, createThread, dataDir, deleteThread, getThread, JARVIS_BOT_ID, jarvisDir, listThreads, updateThread } from "../src/bot-store";
+import { bindSession, createBot, createThread, dataDir, getThread, JARVIS_BOT_ID, jarvisDir, listThreads, updateThread } from "../src/bot-store";
 import { runningChildOf } from "../src/child-lock";
 import { watchDeferredTurns } from "../src/deferred-turns";
 import { startChildThread } from "../src/jarvis";
@@ -2540,10 +2540,15 @@ test("failed-to-start counts, a busy skip does not", async (t) => {
 
 test("a missing thread or bot pauses the schedule at once", async (t) => {
   const logs = t.mock.method(console, "log", () => {});
-  // The thread is deleted.
+  // The thread is gone without a delete gitbot saw (threads.json edited, or
+  // another process): deleteThread itself takes the schedule with it.
   const thread = plainThread("Doomed");
   const s = await scheduleRecurring(thread.id, { kind: "interval", everyMinutes: 1 });
-  assert.ok(deleteThread(thread.id));
+  const threadsFile = join(dataDir(), "threads.json");
+  const stored = JSON.parse(readFileSync(threadsFile, "utf-8"));
+  const without = (list: any[]) => list.filter((th) => th.id !== thread.id);
+  writeFileSync(threadsFile, JSON.stringify(Array.isArray(stored) ? without(stored) : { ...stored, threads: without(stored.threads) }));
+  assert.equal(getThread(thread.id), undefined);
   advanceTo(Date.parse(s.nextRunAt!));
   let got = getSchedule(s.id)!;
   assert.equal(got.history.at(-1)!.outcome, "failed-to-start");
@@ -3595,4 +3600,213 @@ test("new-thread runs never lock or report to a Jarvis thread", async (t) => {
   assert.equal(after.queuedReports?.length ?? 0, 0);
   assert.equal(after.pendingNote, undefined);
   assert.equal(getSchedule(made.id)!.history[0].turnOutcome, "done");
+});
+
+// --- Schedule notes and orphans (slice 10) ---
+
+/** A 1-minute schedule a Jarvis thread made with create_schedule. */
+function jarvisSchedule(jarvisId: string, target: any, fields: Record<string, unknown> = {}): Schedule {
+  const made = createScheduleForJarvis(jarvisId, { name: "Tick", prompt: "Reply with the word ping", when: { every_minutes: 1 }, target, ...fields }, now, ALL_AGENTS);
+  assert.ok(made.ok, JSON.stringify(made));
+  return getSchedule(made.id)!;
+}
+
+const notesOf = (threadId: string) => getThread(threadId)?.scheduleNotes ?? {};
+const lineOf = (threadId: string, scheduleId: string) => notesOf(threadId)[scheduleId]?.line;
+
+test("a run leaves one replaceable note line on the notesTo Jarvis thread", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const jarvis = jarvisThread();
+  const w = plainThread("Worker");
+  const s = jarvisSchedule(jarvis.id, { threadId: w.id });
+  assert.equal(s.notesTo, jarvis.id);
+
+  elapse(MIN);
+  assert.equal(runs.length, 1);
+  assert.deepEqual(notesOf(jarvis.id), {}, "nothing while the run is going");
+  await endAll();
+  assert.equal(lineOf(jarvis.id, s.id), `[schedule "Tick": 1 run since your last message, last done, thread ${w.id}]`);
+
+  elapse(MIN);
+  await endTurn(runs[1]);
+  elapse(MIN);
+  await endTurn(runs[2], "error");
+  assert.equal(runs.length, 3);
+  assert.deepEqual(Object.keys(notesOf(jarvis.id)), [s.id], "one line per schedule");
+  assert.equal(lineOf(jarvis.id, s.id), `[schedule "Tick": 3 runs since your last message, last failed, thread ${w.id}]`);
+  // A note is no turn: Jarvis was never woken.
+  assert.equal(onThread(jarvis.id).length, 0);
+  assert.equal(getThread(jarvis.id)!.pendingNote, undefined);
+
+  // A fresh-thread schedule names each run's own thread; its line sits beside the first.
+  const p = project();
+  const fresh = jarvisSchedule(jarvis.id, { agent: "claude-code", project: p.id }, { name: "Audit", when: { every_minutes: 60 } });
+  const fired = runScheduleNowForJarvis(jarvis.id, fresh.id, ALL_AGENTS);
+  assert.ok(fired.ok && fired.run?.outcome === "started", JSON.stringify(fired));
+  await endTurn(runs.at(-1)!);
+  const runThread = runs.at(-1)!.threadId!;
+  assert.notEqual(runThread, w.id);
+  assert.equal(lineOf(jarvis.id, fresh.id), `[schedule "Audit": 1 run since your last message, last done, thread ${runThread}]`);
+  assert.equal(lineOf(jarvis.id, s.id), `[schedule "Tick": 3 runs since your last message, last failed, thread ${w.id}]`);
+
+  // A run that fails to start is a run too.
+  rmSync(p.folder, { recursive: true, force: true });
+  runScheduleNowForJarvis(jarvis.id, fresh.id, ALL_AGENTS);
+  assert.equal(
+    lineOf(jarvis.id, fresh.id),
+    `[schedule "Audit" paused: its project is gone (its folder was removed or moved); 2 runs since your last message, last failed to start]`,
+  );
+});
+
+test("the note counts runs since the user's last message and resets after delivery", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const jarvis = jarvisThread();
+  const w = plainThread("Worker");
+  const s = jarvisSchedule(jarvis.id, { threadId: w.id });
+  for (let i = 0; i < 2; i++) {
+    elapse(MIN);
+    await endAll();
+  }
+  const line = `[schedule "Tick": 2 runs since your last message, last done, thread ${w.id}]`;
+  assert.equal(lineOf(jarvis.id, s.id), line);
+
+  const mine = await serve("POST", "/chat", { threadId: jarvis.id, prompt: "what did my schedules do?" });
+  assert.equal(mine.status, 200, JSON.stringify(mine.body));
+  const store = lastOn(jarvis.id);
+  assert.equal(userPrompt(store).prompt, `${line}\n\nwhat did my schedules do?`);
+  assert.equal(getThread(jarvis.id)!.scheduleNotes, undefined, "cleared once delivered");
+  assert.equal(getThread(jarvis.id)!.preview, "what did my schedules do?", "the preview is the user's words");
+  await endTurn(store);
+
+  // The count starts again.
+  elapse(MIN);
+  await endTurn(lastOn(w.id));
+  assert.equal(lineOf(jarvis.id, s.id), `[schedule "Tick": 1 run since your last message, last done, thread ${w.id}]`);
+});
+
+test("no note when the target is the notesTo thread itself", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const jarvis = jarvisThread();
+  const s = jarvisSchedule(jarvis.id, "this_thread");
+  elapse(MIN);
+  assert.equal(onThread(jarvis.id).length, 1, "the run is Jarvis's own turn");
+  await endAll();
+  assert.equal(getSchedule(s.id)!.history[0].turnOutcome, "done");
+  assert.deepEqual(notesOf(jarvis.id), {}, "Jarvis saw it itself");
+
+  // A schedule the user made (no notesTo) leaves no note anywhere.
+  const w = plainThread("Worker");
+  const mine = await scheduleRecurring(w.id, { kind: "interval", everyMinutes: 1 });
+  assert.equal(mine.notesTo, undefined);
+  elapse(MIN);
+  await endAll();
+  assert.deepEqual(notesOf(jarvis.id), {});
+  assert.deepEqual(notesOf(w.id), {});
+});
+
+test("missed runs and auto-pause leave notes", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const jarvis = jarvisThread();
+  const w = plainThread("Worker");
+  const made = now;
+  const s = jarvisSchedule(jarvis.id, { threadId: w.id });
+  elapse(MIN);
+  await endAll();
+
+  // Down from +1:10 to +3:40: the runs at +2 and +3 are missed.
+  elapse(10_000);
+  stopScheduler();
+  timer = null;
+  now = made + 3 * MIN + 40_000;
+  startScheduler(ALL_AGENTS);
+  assert.equal(
+    lineOf(jarvis.id, s.id),
+    `[schedule "Tick" missed 2 runs while gitbot was down; 1 run since your last message, last done, thread ${w.id}]`,
+  );
+
+  // Three failures in a row pause it: the same line says so.
+  for (let i = 0; i < 3; i++) {
+    advanceTo(Date.parse(getSchedule(s.id)!.nextRunAt!));
+    await endTurn(lastOn(w.id), "error");
+  }
+  assert.equal(getSchedule(s.id)!.enabled, false);
+  assert.deepEqual(Object.keys(notesOf(jarvis.id)), [s.id]);
+  const paused = `[schedule "Tick" missed 2 runs while gitbot was down; paused after 3 failed runs; 4 runs since your last message, last failed, thread ${w.id}]`;
+  assert.equal(lineOf(jarvis.id, s.id), paused);
+  assert.ok(!paused.includes("it broke"), "never the run's own error text");
+
+  // Delivered with the user's next message, the line is cleared; a missed note alone reads as such.
+  assert.equal((await serve("POST", "/chat", { threadId: jarvis.id, prompt: "and?" })).status, 200);
+  await endTurn(lastOn(jarvis.id));
+  const resumed = await serve("PATCH", `/schedules/${s.id}`, { enabled: true });
+  assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
+  const due = Date.parse(getSchedule(s.id)!.nextRunAt!);
+  stopScheduler();
+  timer = null;
+  now = due + 30_000;
+  startScheduler(ALL_AGENTS);
+  assert.equal(lineOf(jarvis.id, s.id), `[schedule "Tick" missed 1 run while gitbot was down]`);
+});
+
+test("deleting a target thread deletes its thread-target schedules", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const jarvis = jarvisThread();
+  const w = plainThread("Worker");
+  const other = plainThread("Other");
+  const byJarvis = jarvisSchedule(jarvis.id, { threadId: w.id });
+  const byUser = await scheduleRecurring(w.id, { kind: "interval", everyMinutes: 1 });
+  const elsewhere = await scheduleRecurring(other.id, { kind: "interval", everyMinutes: 5 });
+
+  // One of them waits as a pending fire behind a busy turn.
+  assert.equal((await serve("POST", "/chat", { threadId: w.id, prompt: "busy" })).status, 200);
+  elapse(MIN);
+  assert.ok(getSchedule(byUser.id)!.pending);
+
+  const res = await serve("DELETE", `/threads/${w.id}`);
+  assert.equal(res.status, 200);
+  assert.equal(getSchedule(byJarvis.id), undefined);
+  assert.equal(getSchedule(byUser.id), undefined);
+  assert.ok(getSchedule(elsewhere.id), "another thread's schedule stays");
+  const listed = await serve("GET", "/schedules");
+  assert.deepEqual(listed.body.schedules.map((x: Schedule) => x.id), [elsewhere.id]);
+
+  // A thread deleted some other way (a bot's delete takes its threads) does the same.
+  const bot = createBot({ name: "Gone Soon" });
+  const botThread = createThread(bot.id, folder(), "Bot's", "chat", "claude-code");
+  const onBot = await scheduleRecurring(botThread.id, { kind: "interval", everyMinutes: 1 });
+  assert.equal((await serve("DELETE", `/bots/${bot.id}`)).status, 200);
+  assert.equal(getSchedule(onBot.id), undefined);
+});
+
+test("deleting the notesTo Jarvis pauses its new-thread schedules and detaches thread-target ones", async (t) => {
+  const logs = t.mock.method(console, "log", () => {});
+  const jarvis = jarvisThread();
+  const w = plainThread("Worker");
+  const p = project();
+  const fresh = jarvisSchedule(jarvis.id, { agent: "claude-code", project: p.id }, { name: "Audit" });
+  const onW = jarvisSchedule(jarvis.id, { threadId: w.id });
+  const onJarvis = jarvisSchedule(jarvis.id, "this_thread", { name: "Self" });
+  // Paused by the user before: it keeps its own reason.
+  const userPaused = jarvisSchedule(jarvis.id, { agent: "claude-code", project: p.id }, { name: "Held" });
+  assert.equal((await serve("PATCH", `/schedules/${userPaused.id}`, { enabled: false })).status, 200);
+
+  assert.equal((await serve("DELETE", `/threads/${jarvis.id}`)).status, 200);
+  const paused = getSchedule(fresh.id)!;
+  assert.equal(paused.enabled, false);
+  assert.equal(paused.nextRunAt, null);
+  assert.equal(paused.pausedReason, "its Jarvis thread was deleted");
+  assert.equal(paused.notesTo, undefined);
+  assert.equal(pushLines(logs).filter((l) => l.includes(`failed "Audit" (schedule-${fresh.id})`)).length, 1, pushLines(logs).join("\n"));
+  assert.equal(getSchedule(userPaused.id)!.pausedReason, "paused by the user");
+  assert.equal(getSchedule(onJarvis.id), undefined, "the deleted thread's own schedule goes");
+
+  const kept = getSchedule(onW.id)!;
+  assert.equal(kept.enabled, true);
+  assert.equal(kept.notesTo, undefined);
+  // It keeps running on W, and notes nowhere.
+  advanceTo(Date.parse(kept.nextRunAt!));
+  assert.equal(onThread(w.id).length, 1);
+  await endAll();
+  assert.equal(getSchedule(onW.id)!.history.at(-1)!.turnOutcome, "done");
+  assert.equal(runs.filter((r) => r.scheduled?.id === fresh.id).length, 0, "the paused one never ran");
 });

@@ -4,9 +4,9 @@ import { EventEmitter } from "events";
 import { mkdtempSync, realpathSync } from "fs";
 import { tmpdir } from "os";
 import { basename, join } from "path";
-import { createThread, getThread, JARVIS_BOT_ID, jarvisDir, updateThread } from "../src/bot-store";
+import { createThread, getThread, JARVIS_BOT_ID, jarvisDir, setScheduleNote, updateThread } from "../src/bot-store";
 import { sendToThread } from "../src/send-to-thread";
-import { runningChildOf, withNote } from "../src/child-lock";
+import { pendingNoteFor, runningChildOf, withNote } from "../src/child-lock";
 import { stripGitbotNotes } from "../ui/app/lib/gitbot-note";
 import { liveByBot, rowLabel } from "../ui/app/lib/use-thread-sessions";
 import { startChildThread } from "../src/jarvis";
@@ -373,6 +373,65 @@ test("a report turn does not take the note; the user's next message does", async
   assert.ok(getThread(jarvis.id)?.pendingNote);
 });
 
+test("pending note then schedule notes, then the message; scheduled and report turns leave them", async () => {
+  const proj = project();
+  const jarvis = jarvisThread();
+  const lineA = `[schedule "Nightly audit": 3 runs since your last message, last done, thread ${"a".repeat(8)}]`;
+  const lineB = `[schedule "Digest" paused after 3 failed runs]`;
+  const notes = () => {
+    setScheduleNote(jarvis.id, "sched-a", () => ({ line: lineA, runs: 3 }));
+    setScheduleNote(jarvis.id, "sched-b", () => ({ line: lineB, runs: 0, paused: "paused after 3 failed runs" }));
+  };
+  notes();
+  // Replaced, never appended: one line per schedule.
+  setScheduleNote(jarvis.id, "sched-a", (n) => ({ ...n!, line: lineA }));
+  assert.deepEqual(Object.keys(getThread(jarvis.id)!.scheduleNotes!), ["sched-a", "sched-b"]);
+
+  // A scheduled turn on the Jarvis thread neither carries nor clears them.
+  const scheduled = startTurn({ threadId: jarvis.id, prompt: "Remind the user to stretch.", scheduled: { id: "s", name: "Stretch", run: 1 } }, ALL_AGENTS);
+  assert.ok(scheduled.ok, JSON.stringify(scheduled));
+  assert.equal(sessions.get(scheduled.sessionId)!.events.find((e) => e.type === "user_prompt")?.prompt, "Remind the user to stretch.");
+  assert.equal(pendingNoteFor(jarvis.id, false, { id: "s", name: "Stretch", run: 1 }), undefined);
+  await end(sessions.get(scheduled.sessionId)!, "done");
+  assert.equal(Object.keys(getThread(jarvis.id)!.scheduleNotes ?? {}).length, 2);
+
+  // A report turn neither.
+  const child = startChildThread(jarvis.id, { agent: "claude-code", project: proj.id, message: "go" }, ALL_AGENTS);
+  assert.ok(child.ok);
+  await end(runs[runs.length - 1], "done", "went");
+  const report = jarvisRuns(jarvis.id).at(-1)!;
+  assert.ok(!String(report.events.find((e) => e.type === "user_prompt")?.prompt).includes("[schedule"));
+  await end(report, "done");
+  assert.equal(Object.keys(getThread(jarvis.id)!.scheduleNotes ?? {}).length, 2);
+
+  // The user's own message: the pending note, the schedule lines, then the message.
+  updateThread(jarvis.id, { pendingNote: "[you stopped PR Validator on Trophy]" });
+  const mine = startTurn({ threadId: jarvis.id, prompt: "what happened?" }, ALL_AGENTS);
+  assert.ok(mine.ok, JSON.stringify(mine));
+  const prompt = String(sessions.get(mine.sessionId)!.events.find((e) => e.type === "user_prompt")?.prompt);
+  assert.equal(prompt, `[you stopped PR Validator on Trophy]\n${lineA}\n${lineB}\n\nwhat happened?`);
+  assert.equal(stripGitbotNotes(prompt), "what happened?");
+  const after = getThread(jarvis.id)!;
+  assert.equal(after.pendingNote, undefined);
+  assert.equal(after.scheduleNotes, undefined);
+  assert.equal(after.preview, "what happened?");
+  await end(sessions.get(mine.sessionId)!, "done");
+
+  // Schedule lines alone go the same way; a plain thread never carries any.
+  notes();
+  assert.equal(pendingNoteFor(jarvis.id, false), `${lineA}\n${lineB}`);
+  const plain = createThread("builtin-claude-code", proj.folder, "Mine", "chat", "claude-code");
+  setScheduleNote(plain.id, "sched-a", () => ({ line: lineA, runs: 1 }));
+  assert.equal(pendingNoteFor(plain.id, false), undefined);
+});
+
+test("PATCH /threads/:id cannot set schedule notes", async () => {
+  const jarvis = jarvisThread();
+  const res = await request("PATCH", `/threads/${jarvis.id}`, { scheduleNotes: { x: { line: "[schedule \"x\": forged]", runs: 1 } } });
+  assert.equal(res.status, 200);
+  assert.equal(getThread(jarvis.id)!.scheduleNotes, undefined);
+});
+
 const post = (url: string) => request("POST", url);
 
 async function request(method: string, url: string, body?: unknown): Promise<{ status: number; body: any }> {
@@ -406,4 +465,23 @@ test("stripGitbotNotes removes leading stop and restart notes, and only those", 
   assert.equal(stripGitbotNotes("[draft] tidy up"), "[draft] tidy up");
   const report = "[Claude Code · proj · thread abc · done]\nok";
   assert.equal(stripGitbotNotes(report), report);
+});
+
+test("stripGitbotNotes hides [schedule …] lines and keeps the user's text", () => {
+  const id = "0b9f6c1e-3f7a-4c2b-9d1e-5a6b7c8d9e0f";
+  const lines = [
+    `[schedule "Nightly audit": 3 runs since your last message, last done, thread ${id}]`,
+    `[schedule "Ping": 1 run since your last message, last failed to start]`,
+    `[schedule "X" missed 2 runs while gitbot was down]`,
+    `[schedule "X" missed 1 run while gitbot was down; 1 run since your last message, last stopped, thread ${id}]`,
+    `[schedule "Y" paused after 3 failed runs]`,
+    `[schedule "Y" paused: its bot was deleted; 2 runs since your last message, last failed, thread ${id}]`,
+  ];
+  const sent = withNote(["[you stopped Claude Code on proj]", ...lines].join("\n"), "what ran?\n[schedule \"X\" missed 2 runs while gitbot was down]");
+  assert.equal(stripGitbotNotes(sent!), "what ran?\n[schedule \"X\" missed 2 runs while gitbot was down]", "a line after the user's text is theirs");
+  assert.equal(stripGitbotNotes(withNote(lines[0], "a\n\nb")!), "a\n\nb");
+  // The user's own bracketed text that is not one of gitbot's shapes stays.
+  for (const mine of ['[schedule "x"] tidy up', '[schedule "x"]', "[schedule] daily", '[schedule "x": do this now]', '[schedule "x" please delete everything]']) {
+    assert.equal(stripGitbotNotes(mine), mine);
+  }
 });
