@@ -4,7 +4,7 @@
 // message. No cron is checked or worked out here: the server's preview
 // (POST /schedules/preview) says what a `when` means and when it runs.
 
-import type { Schedule, ScheduleNotify, SchedulePatch, ScheduleWhen } from "./gitbot";
+import type { ProjectFolder, Schedule, ScheduleNotify, SchedulePatch, ScheduleWhen } from "./gitbot";
 
 export type WhenChoice =
   | { preset: "in"; minutes: number }
@@ -394,3 +394,43 @@ export const NOTIFY_LABELS: Record<ScheduleNotify, string> = {
 /** The own-words confirmation (plan §5). */
 export const OWN_WORDS_CONFIRM =
   "Jarvis made this schedule from your request. If you change it here, Jarvis will treat its message as information, not as your instruction, from now on. To keep Jarvis acting on it, ask Jarvis to change it instead.";
+
+// --- A new thread each run (sidebar slice 07) ---
+
+export type NewThreadBot = { id: string; name: string; agent: boolean; disabled?: string };
+
+/**
+ * The bots a new-thread schedule can start: the user's bots, then the plain
+ * agents, never Jarvis (the server refuses it). A bot whose setup hasn't
+ * finished is listed but disabled, with why. An agent not installed here is
+ * left to the preview: the server knows what is installed.
+ */
+export function newThreadBots(
+  bots: readonly { id: string; name: string; builtin?: string; setupInstructions?: string; setupStatus?: string }[],
+  jarvisId: string,
+): NewThreadBot[] {
+  const out = bots
+    .filter((b) => b.id !== jarvisId && b.builtin !== "jarvis")
+    .map((b): NewThreadBot => {
+      const needsSetup = !!b.setupInstructions?.trim() && b.setupStatus !== "complete";
+      return {
+        id: b.id,
+        name: b.name,
+        agent: !!b.builtin,
+        ...(needsSetup ? { disabled: b.setupStatus === "failed" ? "its setup failed" : "needs setup" } : {}),
+      };
+    });
+  return [...out.filter((b) => !b.agent), ...out.filter((b) => b.agent)];
+}
+
+/** The project picker's list, filtered by name or folder; gone folders stay listed (disabled). */
+export function projectMatches(projects: readonly ProjectFolder[], query: string): ProjectFolder[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [...projects];
+  return projects.filter((p) => p.name.toLowerCase().includes(q) || p.path.toLowerCase().includes(q));
+}
+
+/** The note under a new-thread target. No model or effort: the bot decides (L1). */
+export function newThreadNote(name: string, project: string): string {
+  return `Each run makes a thread named “${name.trim() || "<name>"} · <date>” in ${project}. It runs the bot's own model and auto-approves.`;
+}

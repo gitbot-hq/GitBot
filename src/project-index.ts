@@ -411,6 +411,35 @@ export function projectNames(): Map<string, string> {
   return displayNames(syncedIndex().projects);
 }
 
+export interface ProjectFolder {
+  id: string;
+  name: string;
+  path: string;
+  /** False when the folder is gone (or not a folder): it can't take new work. */
+  present: boolean;
+}
+
+/**
+ * Every project for a picker (GET /projects), by name: the index as it
+ * stands (no workspace scan), plus thread folders that are gone, listed
+ * `present: false`. The index drops a removed folder, so without those a
+ * project a thread used would just vanish from the picker.
+ */
+export function projectFolders(): ProjectFolder[] {
+  const { projects } = syncedIndex();
+  const names = displayNames(projects);
+  const out: ProjectFolder[] = projects.map((p) => ({ id: p.id, name: names.get(p.id)!, path: p.path, present: !folderGone(p.path) }));
+  const known = new Set(projects.map((p) => p.path));
+  const own = ownFolder();
+  for (const thread of listThreads()) {
+    const path = thread.repoPath;
+    if (!path || known.has(path) || isWithin(own, path) || !folderGone(path)) continue;
+    known.add(path);
+    out.push({ id: projectId(path), name: basename(path) || path, path, present: false });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path));
+}
+
 /**
  * A project's folder by id, from the index as it stands — no workspace scan.
  * Ids come from list_projects or add_project.

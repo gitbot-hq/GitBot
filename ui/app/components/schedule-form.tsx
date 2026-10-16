@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { createSchedule, patchSchedule, previewSchedule, type NewScheduleBody, type SchedulePreview } from "../lib/api";
-import type { Bot, Schedule, ScheduleNotify, SchedulePatch, ScheduleView } from "../lib/gitbot";
+import { createSchedule, patchSchedule, previewSchedule, type NewScheduleBody, type SchedulePreview, type ScheduleTargetBody } from "../lib/api";
+import { JARVIS_BOT_ID, type Bot, type ProjectFolder, type Schedule, type ScheduleNotify, type SchedulePatch, type ScheduleView } from "../lib/gitbot";
 import { fullTime } from "../lib/schedules";
 import {
   askJarvisDraft,
@@ -11,6 +11,8 @@ import {
   editInit,
   IN_CHIPS,
   JARVIS_TARGET_NOTE,
+  newThreadBots,
+  newThreadNote,
   notifySuggestion,
   patchDemotes,
   sameWhen,
@@ -24,6 +26,7 @@ import {
   type WhenChoice,
 } from "../lib/schedule-when";
 import OwnWordsConfirm from "./own-words-confirm";
+import ProjectPicker from "./project-picker";
 import ThreadPicker from "./thread-picker";
 
 const PROMPT_MAX = 4000;
@@ -144,6 +147,11 @@ export default function ScheduleForm({
   const [cron, setCron] = useState(start.cron);
   const [target, setTarget] = useState<FormTarget | null>(preset ?? null);
   const [picking, setPicking] = useState(!preset && !edit);
+  // Where: a thread, or a new thread each run (a bot and a project).
+  const [whereKind, setWhereKind] = useState<"thread" | "new">("thread");
+  const [newBotId, setNewBotId] = useState("");
+  const [project, setProject] = useState<ProjectFolder | null>(null);
+  const botChoices = useMemo(() => newThreadBots(bots, JARVIS_BOT_ID), [bots]);
   const [notify, setNotify] = useState<ScheduleNotify | null>(edit?.notify ?? null);
   const [advanced, setAdvanced] = useState(!!edit && (edit.maxRuns != null || !!edit.endsAt || edit.overlap === "skip" || edit.when.kind === "cron"));
   const [maxRuns, setMaxRuns] = useState(edit?.maxRuns != null ? String(edit.maxRuns) : "");
@@ -193,9 +201,18 @@ export default function ScheduleForm({
     return out;
   })();
 
+  // Where a new schedule would run, as the server takes it; null while not
+  // fully chosen. Edit sends none (the target can't change there).
+  const targetBody: ScheduleTargetBody | null = edit
+    ? null
+    : whereKind === "new"
+      ? newBotId && project ? { kind: "new-thread", botId: newBotId, projectId: project.id } : null
+      : target ? { kind: "thread", threadId: target.threadId } : null;
+
   // The preview's input, as a key: the same choice in the same zone asks once
-  // (an "in" chip is worked out again when it is sent).
-  const previewKey = JSON.stringify({ choice, tz, limits });
+  // (an "in" chip is worked out again when it is sent). The target is checked
+  // too, so "needs setup" or "not installed" shows before saving.
+  const previewKey = JSON.stringify({ choice, tz, limits, targetBody });
   useEffect(() => {
     const when = toWhen(choice, tz);
     setPreview(null);
@@ -210,7 +227,7 @@ export default function ScheduleForm({
     setPreviewError(null);
     const ctrl = new AbortController();
     const timer = window.setTimeout(() => {
-      previewSchedule({ when, tz, ...limits }, ctrl.signal).then(
+      previewSchedule({ when, tz, ...limits, ...(targetBody ? { target: targetBody } : {}) }, ctrl.signal).then(
         (p) => setPreview(p),
         (e) => {
           if (!ctrl.signal.aborted) setPreviewError(e instanceof Error ? e.message : String(e));
@@ -230,7 +247,7 @@ export default function ScheduleForm({
   }
 
   const effectiveNotify = notify ?? preview?.defaultNotify ?? null;
-  const ready = !!prompt.trim() && !!name.trim() && (!!target || !!edit) && !previewError && !!toWhen(choice, tz) && !!limits;
+  const ready = !!prompt.trim() && !!name.trim() && (!!targetBody || !!edit) && !previewError && !!toWhen(choice, tz) && !!limits;
 
   // Edit: the times count as changed only when they differ from the
   // prefill's (so a cron in another zone, or a once's seconds, is never
@@ -282,12 +299,12 @@ export default function ScheduleForm({
 
   function save() {
     const when = toWhen(choice, tz, Date.now());
-    if (!when || !target || !limits) return;
+    if (!when || !targetBody || !limits) return;
     const body: NewScheduleBody = {
       name: name.trim(),
       prompt,
       when,
-      target: { kind: "thread", threadId: target.threadId },
+      target: targetBody,
       ...(notify ? { notify } : {}),
       ...(overlap !== "queue" ? { overlap } : {}),
       ...limits,
@@ -419,8 +436,31 @@ export default function ScheduleForm({
 
       <fieldset className="schedule-field">
         <legend className="schedule-field-label">Where</legend>
+        {!edit && (
+          <div className="schedule-seg" role="group" aria-label="Thread or a new thread each run">
+            <button type="button" aria-pressed={whereKind === "thread"} onClick={() => setWhereKind("thread")}>A thread</button>
+            <button type="button" aria-pressed={whereKind === "new"} onClick={() => setWhereKind("new")}>A new thread each run</button>
+          </div>
+        )}
         {edit ? (
           <p className="schedule-where">Runs on <b>{runsOn(edit)}</b></p>
+        ) : whereKind === "new" ? (
+          <div className="schedule-new-thread">
+            <span className="schedule-field-hint">Project</span>
+            <ProjectPicker value={project} onChange={setProject} />
+            <label className="schedule-inline">
+              Bot
+              <select aria-label="Bot" value={newBotId} onChange={(e) => setNewBotId(e.target.value)}>
+                <option value="" disabled>Choose a bot…</option>
+                {botChoices.map((b) => (
+                  <option key={b.id} value={b.id} disabled={!!b.disabled}>
+                    {b.name}{b.agent ? " (agent)" : ""}{b.disabled ? ` · ${b.disabled}` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {project && <p className="schedule-where" role="note">{newThreadNote(name, project.name)}</p>}
+          </div>
         ) : !picking && target ? (
           <p className="schedule-where">
             This thread: <b>{target.title}</b> · {target.botName}{" "}
@@ -429,7 +469,7 @@ export default function ScheduleForm({
         ) : (
           <ThreadPicker bots={bots} value={target} onChange={setTarget} />
         )}
-        {!edit && target?.jarvis && (
+        {!edit && whereKind === "thread" && target?.jarvis && (
           <div className="schedule-jarvis-note" role="note">
             <p>{JARVIS_TARGET_NOTE}</p>
             <button
@@ -483,7 +523,7 @@ export default function ScheduleForm({
           </>
         )}
         <label className="schedule-inline">
-          If the thread is busy
+          {whereKind === "new" || edit?.target.kind === "new-thread" ? "If the last run is still going" : "If the thread is busy"}
           <select value={overlap} onChange={(e) => setOverlap(e.target.value as "queue" | "skip")}>
             <option value="queue">wait</option>
             <option value="skip">skip</option>

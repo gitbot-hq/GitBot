@@ -229,3 +229,22 @@ test("the dock links paused, more and unrun new-thread rows to the Schedules vie
   assert.match(src, /See all schedules →/);
   assert.match(src, /\{groups\.pausedCount\} paused/);
 });
+
+test("rowTarget for new-thread opens the latest run thread, else the card", () => {
+  const where = { kind: "new-thread" as const, botId: "builtin-claude-code", botName: "Claude Code", projectId: "p", projectName: "demo" };
+  const nt = (history: ScheduleView["history"]) => view({ target: { kind: "new-thread", botId: "builtin-claude-code", projectId: "p" }, where, history });
+  // Never run: no thread, so the row opens the card (the dock's fallback).
+  assert.equal(rowTarget(nt([])), null);
+  assert.equal(rowTarget(nt([{ at: at(-60_000), outcome: "failed-to-start", error: "x" }])), null);
+  // The latest run that made a thread still there (a deleted one has no botId).
+  const runs: ScheduleView["history"] = [
+    { at: at(-180_000), outcome: "started", threadId: "t1", botId: "builtin-claude-code" },
+    { at: at(-120_000), outcome: "started", threadId: "t2", botId: "builtin-claude-code" },
+    { at: at(-60_000), outcome: "started", threadId: "t3" },
+  ];
+  assert.deepEqual(rowTarget(nt(runs)), { botId: "builtin-claude-code", threadId: "t2" });
+  assert.equal(rowText(nt(runs), NOW, TZ).line, "new thread in demo · Claude Code");
+  // The dock falls back to the card when there is no thread to open.
+  const dock = readFileSync(join(__dirname, "..", "ui", "app", "components", "scheduled-dock.tsx"), "utf-8");
+  assert.match(dock, /target \? go\(target\) : onShowAll\(s\.id\)/);
+});

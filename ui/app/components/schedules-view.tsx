@@ -40,6 +40,7 @@ const HIGHLIGHT_MS = 4000;
 export default function SchedulesView({
   focusId,
   form: formAtOpen,
+  openTarget,
   bots,
   active,
   refreshKey,
@@ -52,6 +53,8 @@ export default function SchedulesView({
 }: {
   /** Opened on the form: new (the dock's +, a panel's + Add, for that thread when given), or editing a schedule (`edit`). */
   form?: { target?: FormTarget; edit?: ScheduleView };
+  /** The open thread, unless it is a setup thread: the view's own New schedule targets it. */
+  openTarget?: FormTarget;
   /** A schedule was edited: the shell toasts and reopens the view at its card. */
   onEdited: (schedule: Schedule & { nextRuns: string[] }, resumed: boolean) => void;
   bots: readonly Bot[];
@@ -192,7 +195,7 @@ export default function SchedulesView({
           <h2 ref={headingRef} tabIndex={-1}>Schedules</h2>
           {list && list.length > 0 && <span className="schedules-view-count">{panelLabel(list.length)}</span>}
           {!form && (
-            <button type="button" className="btn-primary schedules-new" onClick={() => setForm({ inView: true })}>
+            <button type="button" className="btn-primary schedules-new" onClick={() => setForm({ target: openTarget, inView: true })}>
               New schedule
             </button>
           )}

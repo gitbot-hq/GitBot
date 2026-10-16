@@ -2,7 +2,7 @@ import { EventEmitter } from "events";
 import { onThreadDeleted, onThreadSeen } from "./bot-store";
 import { jsonError, jsonOk, parseQuery, readBody, type IRequest, type IResponse } from "./server-common";
 import { findProject } from "./project-index";
-import { createSchedule, deleteSchedule, editSchedule, getSchedule, listSchedules, listSchedulesFor, nextRunsOf, onSchedulesWritten, previewTiming, targetThreadId, viewContext, viewSchedule } from "./schedules";
+import { checkTarget, createSchedule, deleteSchedule, editSchedule, getSchedule, listSchedules, listSchedulesFor, nextRunsOf, onSchedulesWritten, previewTiming, targetThreadId, viewContext, viewSchedule } from "./schedules";
 import { canonicalTimeZone, defaultTimeZone } from "./schedule-time";
 import { rearmScheduler, runScheduleNow, scheduleChanged, schedulerClock } from "./scheduler";
 
@@ -155,15 +155,22 @@ export async function handleScheduleRoutes(
     return true;
   }
 
-  // POST /schedules/preview {when, maxRuns?, endsAt?, tz}: the times a new
-  // schedule would get, or the 400 POST /schedules would give. Writes
-  // nothing, so it is not logged.
+  // POST /schedules/preview {when, maxRuns?, endsAt?, tz, target?}: the
+  // times a new schedule would get, or the 400 POST /schedules would give.
+  // A `target`, when sent, is checked too (a thread gone or in setup; a
+  // new-thread bot that is Jarvis, needs setup or runs on an agent not
+  // installed here; a project gone), after the times. Writes nothing, so it
+  // is not logged.
   if (method === "POST" && path === "/schedules/preview") {
     const body = await readBody(req);
     const zone = body?.tz === undefined ? defaultTimeZone() : canonicalTimeZone(body.tz);
     if (!zone.ok) { jsonError(res, 400, zone.error); return true; }
     const preview = previewTiming(body, zone.tz, schedulerClock.now());
     if (!preview.ok) { jsonError(res, 400, preview.error); return true; }
+    if (body?.target !== undefined) {
+      const target = checkTarget(body.target, availableAgents);
+      if (!target.ok) { jsonError(res, 400, target.error); return true; }
+    }
     jsonOk(res, preview.preview);
     return true;
   }

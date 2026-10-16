@@ -137,7 +137,7 @@ function jarvisThread() {
   return createThread(JARVIS_BOT_ID, jarvisDir(), undefined, "chat", "claude-code");
 }
 
-async function serve(method: string, url: string, body?: unknown, remote?: string) {
+async function serve(method: string, url: string, body?: unknown, remote?: string, agents: string[] = ALL_AGENTS) {
   const req = Object.assign(new EventEmitter(), {
     method,
     url,
@@ -153,7 +153,7 @@ async function serve(method: string, url: string, body?: unknown, remote?: strin
     write() {},
     end(chunk) { out = chunk ?? ""; },
   };
-  const done = handleRequest(req, res, ALL_AGENTS, tmpdir());
+  const done = handleRequest(req, res, agents, tmpdir());
   setImmediate(() => {
     (req as unknown as EventEmitter).emit("data", JSON.stringify(body ?? {}));
     (req as unknown as EventEmitter).emit("end");
@@ -1206,6 +1206,44 @@ test("preview returns the same errors as create", async (t) => {
   const fields = await serve("POST", "/schedules/preview", { when: { kind: "cron", expr: "0 9 * * * *" }, tz: "UTC" });
   assert.match(fields.body.error, /use a 5-field cron pattern/);
   assert.equal(listSchedules().length, 0);
+});
+
+test("preview checks a new-thread target: Jarvis refused, setup needed, agent missing", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const p = project();
+  const when = { kind: "interval", everyMinutes: 60 };
+  const preview = (target: unknown, agents?: string[]) => serve("POST", "/schedules/preview", { when, tz: "UTC", target }, undefined, agents);
+  const refused = async (target: unknown, pattern: RegExp, agents?: string[]) => {
+    const r = await preview(target, agents);
+    assert.equal(r.status, 400, JSON.stringify(target));
+    assert.match(r.body.error, pattern);
+    // The same message the save would give.
+    const created = await serve("POST", "/schedules", { name: "Audit", prompt: "x", when, target }, undefined, agents);
+    assert.equal(created.body.error, r.body.error);
+  };
+  const newThread = (botId: string, projectId = p.id) => ({ kind: "new-thread", botId, projectId });
+
+  const ok = await preview(newThread("builtin-claude-code"));
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.describe, "every hour");
+  await refused(newThread(JARVIS_BOT_ID), /cannot start a Jarvis thread/);
+  const cutter = createBot({ name: "Video Cutter", setupInstructions: "install ffmpeg" });
+  await refused(newThread(cutter.id), /Video Cutter is not set up on this machine/);
+  await refused(newThread("builtin-codex"), /Codex runs on codex, which is not installed on this machine/, ["claude-code"]);
+  await refused(newThread("builtin-claude-code", "p-0000000000"), /no project with id/);
+  rmSync(p.folder, { recursive: true });
+  await refused(newThread("builtin-claude-code"), /no project with id|is not there/);
+
+  // Thread targets are checked too: missing, or a setup thread.
+  await refused({ kind: "thread", threadId: "gone" }, /no thread with id "gone"/);
+  const setup = createThread(cutter.id, folder(), "Setup", "setup");
+  await refused({ kind: "thread", threadId: setup.id }, /setup thread cannot be scheduled/);
+  assert.equal((await preview({ kind: "thread", threadId: plainThread().id })).status, 200);
+
+  // A bad time is reported first, as the save does.
+  const both = await serve("POST", "/schedules/preview", { when: { kind: "interval", everyMinutes: 0 }, tz: "UTC", target: newThread(JARVIS_BOT_ID) });
+  assert.doesNotMatch(both.body.error, /Jarvis/);
+  assert.equal(listSchedules().length, 0, "nothing is written");
 });
 
 test("preview warns under 5 minutes and writes nothing", async (t) => {

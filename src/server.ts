@@ -27,6 +27,7 @@ import { initAgent as initClaudeCode, listSessions as listClaudeSessions, loadTr
 import { initAgent as initOpencode, stopAgent as stopOpencode, listSessions as listOpencodeSessions, getSessionHistory, abortSession as opencodeAbort, respondPermission as opencodePermission } from "./start-opencode";
 import { initAgent as initCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
 import { handleBotRoutes } from "./bot-routes";
+import { handleProjectRoutes } from "./project-routes";
 import { startTurn } from "./turns";
 import { releaseToUser } from "./send-to-thread";
 import { deliverQueuedReports, watchChildReports } from "./reports";
@@ -100,6 +101,9 @@ export async function handleRequest(
 
     // Schedules: /schedules
     if (await handleScheduleRoutes(req, res, availableAgents)) return;
+
+    // Projects: GET /projects (read-only, for the schedule form)
+    if (await handleProjectRoutes(req, res)) return;
 
     // GET /sessions
     if (method === "GET" && path === "/sessions") {

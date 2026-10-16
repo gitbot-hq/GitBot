@@ -980,6 +980,28 @@ export function checkNewThreadTarget(
   return { ok: true, target: { kind: "new-thread", botId: bot.id, projectId: project.id } };
 }
 
+/**
+ * A schedule's target from a request body, checked as createSchedule checks
+ * it (and POST /schedules/preview, so the form sees the same message before
+ * saving): an existing, non-setup thread, or a new-thread target
+ * (checkNewThreadTarget).
+ */
+export function checkTarget(
+  target: any,
+  availableAgents?: readonly string[],
+): { ok: true; target: Schedule["target"] } | { ok: false; error: string } {
+  if (!target || typeof target !== "object") return { ok: false, error: "target is required" };
+  if (target.kind === "thread") {
+    if (typeof target.threadId !== "string" || !target.threadId) return { ok: false, error: "target.threadId is required" };
+    const thread = getThread(target.threadId);
+    if (!thread) return { ok: false, error: `no thread with id "${target.threadId}"` };
+    if (thread.kind === "setup") return { ok: false, error: "a bot's setup thread cannot be scheduled" };
+    return { ok: true, target: { kind: "thread", threadId: thread.id } };
+  }
+  if (target.kind === "new-thread") return checkNewThreadTarget(target, availableAgents);
+  return { ok: false, error: `target.kind "${String(target.kind)}" is not supported: use "thread" or "new-thread"` };
+}
+
 /** True when `path` is a folder that exists now. */
 export function isFolder(path: string): boolean {
   try {
@@ -1097,21 +1119,9 @@ export function createSchedule(
   }
   if (notify !== undefined && !isNotify(notify)) return { ok: false, error: NOTIFY_ERROR };
 
-  if (!target || typeof target !== "object") return { ok: false, error: "target is required" };
-  let stored: Schedule["target"];
-  if (target.kind === "thread") {
-    if (typeof target.threadId !== "string" || !target.threadId) return { ok: false, error: "target.threadId is required" };
-    const thread = getThread(target.threadId);
-    if (!thread) return { ok: false, error: `no thread with id "${target.threadId}"` };
-    if (thread.kind === "setup") return { ok: false, error: "a bot's setup thread cannot be scheduled" };
-    stored = { kind: "thread", threadId: thread.id };
-  } else if (target.kind === "new-thread") {
-    const checked = checkNewThreadTarget(target, availableAgents);
-    if (!checked.ok) return checked;
-    stored = checked.target;
-  } else {
-    return { ok: false, error: `target.kind "${String(target.kind)}" is not supported: use "thread" or "new-thread"` };
-  }
+  const checkedTarget = checkTarget(target, availableAgents);
+  if (!checkedTarget.ok) return checkedTarget;
+  const stored = checkedTarget.target;
 
   const all = listForWrite();
   // The total counts every stored schedule (it bounds the file); a thread's

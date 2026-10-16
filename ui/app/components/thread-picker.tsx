@@ -8,7 +8,7 @@ import { pickerGroups, type FormTarget } from "../lib/schedule-when";
 /**
  * The schedule form's "Where": a searchable list of every thread (all bots,
  * from GET /threads), grouped by bot, newest activity first. Setup threads
- * are never offered. A new thread each run is slice 07's: shown, disabled.
+ * are never offered. (A new thread each run is the form's other Where choice.)
  */
 export default function ThreadPicker({
   bots,
@@ -70,10 +70,6 @@ export default function ThreadPicker({
           </div>
         ))}
       </div>
-      <label className="thread-picker-row disabled" title="Coming soon">
-        <input type="radio" name={name} disabled />
-        <span>A new thread each run <em>(coming soon)</em></span>
-      </label>
     </div>
   );
 }

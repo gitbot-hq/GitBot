@@ -477,3 +477,41 @@ test("a workspace that cannot be scanned leaves list_projects working", async ()
   rmSync(ws, { recursive: true });
   assert.deepEqual((await listProjects()).projects.map((p) => p.name), ["kept"]);
 });
+
+// --- GET /projects (sidebar slice 07) ---
+
+test("GET /projects lists id, name, path and present", async () => {
+  const { handleProjectRoutes } = await import("../src/project-routes");
+  const get = async (url = "/projects", method = "GET") => {
+    let status = 0;
+    let out = "";
+    const handled = await handleProjectRoutes(
+      { method, url, headers: {} } as any,
+      { headersSent: false, writableEnded: false, writeHead(code: number) { status = code; }, write() {}, end(chunk?: string) { out = chunk ?? ""; } } as any,
+    );
+    return { handled, status, body: out ? JSON.parse(out) : null };
+  };
+  const demo = tempFolder("demo");
+  const added = tempFolder("api");
+  createThread("some-bot", demo);
+  assert.ok(addProject(added).ok);
+  const scans = workspaceScanCount();
+
+  const first = await get();
+  assert.equal(first.status, 200);
+  assert.deepEqual(first.body.projects, [
+    { id: projectId(added), name: "api", path: added, present: true },
+    { id: projectId(demo), name: "demo", path: demo, present: true },
+  ], "sorted by name");
+
+  // A removed folder a thread used stays listed, not present.
+  rmSync(demo, { recursive: true });
+  const after = await get();
+  assert.deepEqual(after.body.projects.map((p: { name: string; present: boolean }) => [p.name, p.present]), [["api", true], ["demo", false]]);
+  assert.equal(after.body.projects[1].id, projectId(demo));
+  assert.equal(workspaceScanCount(), scans, "no workspace scan");
+
+  // Read-only: other methods and paths are not this route's.
+  assert.equal((await get("/projects", "POST")).handled, false);
+  assert.equal((await get("/projects/x")).handled, false);
+});

@@ -259,16 +259,30 @@ export type SchedulePreview = {
 };
 
 /** A new schedule's times in words and its first runs, or its error (a 400). Writes nothing. */
-export function previewSchedule(body: { when: import("./gitbot").ScheduleWhen; maxRuns?: number; endsAt?: string; tz: string }, signal?: AbortSignal) {
+/** The known projects (GET /projects), for the new-thread target: read-only, no scan. */
+export function getProjects() {
+  return req<{ projects: import("./gitbot").ProjectFolder[] }>("/projects");
+}
+
+/** `target`, when given, is checked too: the save's 400 for it shows before saving. */
+export function previewSchedule(
+  body: { when: import("./gitbot").ScheduleWhen; maxRuns?: number; endsAt?: string; tz: string; target?: ScheduleTargetBody },
+  signal?: AbortSignal,
+) {
   return req<SchedulePreview>("/schedules/preview", { method: "POST", body: JSON.stringify(body), signal });
 }
+
+/** Where a new schedule runs: a thread, or a new thread each run (the bot's own model and effort). */
+export type ScheduleTargetBody =
+  | { kind: "thread"; threadId: string }
+  | { kind: "new-thread"; botId: string; projectId: string };
 
 /** The body the form sends: no createdBy or notesTo (the server records the user). */
 export type NewScheduleBody = {
   name: string;
   prompt: string;
   when: import("./gitbot").ScheduleWhen;
-  target: { kind: "thread"; threadId: string };
+  target: ScheduleTargetBody;
   notify?: import("./gitbot").ScheduleNotify;
   overlap?: "queue" | "skip";
   maxRuns?: number;

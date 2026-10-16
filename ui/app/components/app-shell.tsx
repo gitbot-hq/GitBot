@@ -2021,6 +2021,7 @@ export default function V2() {
                 key={schedulesView.key}
                 focusId={schedulesView.focusId}
                 form={schedulesView.form}
+                openTarget={openThreadTarget()}
                 bots={bots}
                 onCreated={scheduleCreated}
                 onEdited={scheduleEdited}

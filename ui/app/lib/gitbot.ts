@@ -30,6 +30,9 @@ export type Bot = {
   builtin?: string;
 };
 
+/** A project as GET /projects lists it; `present` false when its folder is gone. */
+export type ProjectFolder = { id: string; name: string; path: string; present: boolean };
+
 /** Jarvis's fixed id (see src/bot-store.ts). */
 export const JARVIS_BOT_ID = "builtin-jarvis";
 

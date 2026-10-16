@@ -223,3 +223,22 @@ test("fromWhen and editInit fall back on a when this build can't read, and it is
     assert.equal(isReadableWhen(when), true, JSON.stringify(when));
   }
 });
+
+test("new-thread bots: Jarvis absent, a bot that needs setup disabled with why, agents last", async () => {
+  const { newThreadBots, projectMatches, newThreadNote } = await import("../ui/app/lib/schedule-when");
+  const list = newThreadBots([
+    { id: "builtin-claude-code", name: "Claude Code", builtin: "claude-code" },
+    { id: "builtin-jarvis", name: "Jarvis", builtin: "jarvis" },
+    { id: "b1", name: "PR checker" },
+    { id: "b2", name: "Video Cutter", setupInstructions: "install ffmpeg", setupStatus: "pending" },
+    { id: "b3", name: "Done", setupInstructions: "x", setupStatus: "complete" },
+  ], "builtin-jarvis");
+  assert.deepEqual(list.map((b) => [b.id, b.disabled ?? null]), [["b1", null], ["b2", "needs setup"], ["b3", null], ["builtin-claude-code", null]]);
+  const projects = [
+    { id: "p1", name: "demo", path: "/w/demo", present: true },
+    { id: "p2", name: "api", path: "/w/api", present: false },
+  ];
+  assert.deepEqual(projectMatches(projects, "API").map((p) => p.id), ["p2"], "a gone folder stays listed");
+  assert.equal(projectMatches(projects, "").length, 2);
+  assert.match(newThreadNote("Hello run", "demo"), /“Hello run · <date>” in demo\. .*auto-approves/);
+});
