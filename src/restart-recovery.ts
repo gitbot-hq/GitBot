@@ -1,4 +1,4 @@
-import { setRunningFor, settleRunningMarks } from "./bot-store";
+import { getBot, getThread, setRunningFor, settleRunningMarks, threadAgent } from "./bot-store";
 import { threadLabel } from "./child-lock";
 import { isShuttingDown, onTurnEnd, sessions, turnReportsTo } from "./server-common";
 
@@ -31,6 +31,36 @@ export function recoverInterruptedChildren(isAlive: (pid: number) => boolean = p
   } catch (err: any) {
     console.error(`[restart-recovery] skipped: ${err?.message ?? err}`);
     return [];
+  }
+}
+
+/**
+ * At startup, after recoverInterruptedChildren and once opencode is up: stops
+ * each interrupted opencode child's session on the opencode server. gitbot's
+ * exit kills a server it spawned, but not one it found running (the user's
+ * own `opencode serve`), and a turn there runs on after gitbot is gone. A
+ * session that is not running takes the abort as a no-op. Fire and forget:
+ * never throws, never waits.
+ */
+export function abortInterruptedOpencode(
+  threadIds: readonly string[],
+  abort: (sdkSessionId: string, repoPath: string) => Promise<void>,
+): void {
+  for (const id of threadIds) {
+    try {
+      const thread = getThread(id);
+      if (!thread?.sdkSessionId) continue;
+      const bot = getBot(thread.botId);
+      const agent = bot ? threadAgent(thread, bot) : thread.agent;
+      if (agent !== "opencode") continue;
+      const sdkSessionId = thread.sdkSessionId;
+      console.log(`[restart-recovery] stopping interrupted opencode session ${sdkSessionId} (thread ${id})`);
+      Promise.resolve()
+        .then(() => abort(sdkSessionId, thread.repoPath))
+        .catch((err: any) => console.warn(`[restart-recovery] could not stop opencode session ${sdkSessionId}: ${err?.message ?? err}`));
+    } catch (err: any) {
+      console.error(`[restart-recovery] thread ${id}: ${err?.message ?? err}`);
+    }
   }
 }
 

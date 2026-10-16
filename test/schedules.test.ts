@@ -2485,6 +2485,25 @@ test("a turn our own shutdown killed counts for nothing", async (t) => {
   assert.equal(got.enabled, true);
 });
 
+test("a stopping gitbot fires nothing: the tick claims and starts no due run", async () => {
+  const thread = plainThread("Demo");
+  const at = now + 90_000;
+  const s = await scheduleOnce(thread.id);
+  setShuttingDown(true);
+  try {
+    advanceTo(at);
+    advanceTo(at + 10 * TIMER_CAP_MS);
+  } finally {
+    setShuttingDown(false);
+  }
+  assert.equal(runs.length, 0);
+  const got = getSchedule(s.id)!;
+  assert.equal(got.runCount, 0);
+  assert.equal(got.nextRunAt, s.nextRunAt, "unclaimed: the next start records it missed");
+  assert.equal(got.enabled, true);
+  assert.deepEqual(got.history, []);
+});
+
 test("failed-to-start counts, a busy skip does not", async (t) => {
   t.mock.method(console, "log", () => {});
   watchDrain(t);

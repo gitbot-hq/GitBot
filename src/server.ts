@@ -2,6 +2,7 @@ import http from "node:http";
 import {
   createHttpServer,
   setupShutdown,
+  abortRunningSessions,
   handleWorkspaceRoutes,
   shouldAutoApprove,
   sessions,
@@ -33,7 +34,7 @@ import { watchDeferredTurns } from "./deferred-turns";
 import { noteChildStopped } from "./child-lock";
 import { answerChildApprovals, watchChildApprovals } from "./child-approvals";
 import { flattenAskAnswers, isAskUserQuestion, type AskAnswers } from "./ask-user-question";
-import { recoverInterruptedChildren, watchRunningMarks } from "./restart-recovery";
+import { abortInterruptedOpencode, recoverInterruptedChildren, watchRunningMarks } from "./restart-recovery";
 import { watchThreadActivity } from "./attention";
 import { handlePushRoutes, watchPush } from "./push";
 import { handleScheduleRoutes } from "./schedule-routes";
@@ -611,7 +612,23 @@ Output only the cleaned text.`;
   }
 }
 
+let exitCleanupInstalled = false;
+
+/**
+ * The exit-time cleanup: kills running turns' agents (codex; the Claude Agent
+ * SDK reaps its own) and the opencode server gitbot spawned, even one still
+ * starting. Registered before start() spawns anything, so a SIGTERM (exitNow,
+ * shutdown.ts) at any point of startup leaves no child behind. Idempotent.
+ */
+export function installExitCleanup(): void {
+  if (exitCleanupInstalled) return;
+  exitCleanupInstalled = true;
+  process.on("exit", abortRunningSessions);
+  process.on("exit", stopOpencode);
+}
+
 export async function start(network: string = "local", portOverride?: number, caffeinate: boolean = false) {
+  installExitCleanup();
   const workspaceCwd = process.cwd();
   console.log(`gitbot — starting workspace server in ${workspaceCwd}`);
 
@@ -635,6 +652,9 @@ export async function start(network: string = "local", portOverride?: number, ca
   // A child a restart interrupted tells its Jarvis with the user's next message.
   const interrupted = recoverInterruptedChildren();
   if (interrupted.length) console.log(`  interrupted by restart: ${interrupted.length} child thread(s), Jarvis will be told`);
+  // An opencode child ran on a server that may have outlived the restart (one
+  // gitbot did not spawn): stop its session there, so "interrupted" is true.
+  if (opencodeAvailable) abortInterruptedOpencode(interrupted, abortCalls.opencode);
   watchRunningMarks();
   // A child Jarvis started reports back to it when its turn ends, and its
   // approvals show as rows in that Jarvis thread meanwhile.
@@ -657,7 +677,7 @@ export async function start(network: string = "local", portOverride?: number, ca
   // after every listener above and the broadcast (test/push.test.ts pins this).
   watchDeferredTurns(availableAgents);
 
-  const { server, caffeinatePid } = await createHttpServer({
+  const { server } = await createHttpServer({
     portOverride,
     caffeinate,
     network,
@@ -677,9 +697,7 @@ export async function start(network: string = "local", portOverride?: number, ca
     handleRequest(req as unknown as IRequest, res as unknown as IResponse, availableAgents, workspaceCwd);
   });
 
-  process.on("exit", stopOpencode);
-  setupShutdown(() => {
-    stopOpencode();
-    server.close(() => process.exit(0));
-  }, caffeinatePid);
+  // SIGINT and SIGTERM exit at once (index.ts, shutdown.ts); the exit
+  // cleanup was installed first thing (installExitCleanup, maybeCaffeinate).
+  setupShutdown();
 }

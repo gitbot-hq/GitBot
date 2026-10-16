@@ -149,8 +149,11 @@ export function maybeCaffeinate(enabled: boolean): number | null {
     stdio: "ignore",
   });
   child.unref();
-  console.log(`  caffeinate: running for ${hours}h (pid ${child.pid})`);
-  return child.pid ?? null;
+  const pid = child.pid ?? null;
+  // Detached, so it would outlive gitbot: stopped on any exit from here on.
+  if (pid !== null) process.on("exit", () => killCaffeinate(pid));
+  console.log(`  caffeinate: running for ${hours}h (pid ${pid})`);
+  return pid;
 }
 
 export function killCaffeinate(pid: number | null): void {
@@ -624,35 +627,37 @@ export async function createHttpServer(opts: {
   return { server, PORT, caffeinatePid };
 }
 
-let shuttingDown = false;
+// The flag lives in shutdown.ts (a leaf, loaded first); re-exported for the
+// modules and tests that read it from here.
+export { isShuttingDown, setShuttingDown } from "./shutdown";
 
 /**
- * True once gitbot has begun shutting down. Turns that end from here on were
- * killed by the shutdown, not finished: they report to no one and keep their
- * running mark, so the next start tells their Jarvis.
+ * Kills every running turn's agent, synchronously: an exit handler. A codex
+ * turn's child was spawned with the controller's signal, so the abort kills
+ * it at once; nothing else would (the Claude Agent SDK reaps its own children
+ * on exit, and opencode's server is stopped by stopOpencode). The turns' async
+ * aftermath never runs: the process ends in this same tick.
  */
-export function isShuttingDown(): boolean {
-  return shuttingDown;
+export function abortRunningSessions(): void {
+  for (const store of sessions.values()) {
+    try {
+      store.abortController?.abort();
+    } catch {
+      // One bad store must not keep the others' agents alive.
+    }
+  }
 }
 
-/** For tests: a shutdown without the process exit. */
-export function setShuttingDown(value: boolean): void {
-  shuttingDown = value;
-}
-
-export function setupShutdown(cleanup: () => void, caffeinatePid: number | null): void {
-  const shutdown = () => {
-    shuttingDown = true;
-    console.log("\nShutting down...");
-    killCaffeinate(caffeinatePid);
-    cleanup();
-  };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-  process.on("exit", () => killCaffeinate(caffeinatePid));
+/**
+ * The error handlers, once gitbot is up. Neither signals nor exit cleanup are
+ * here: index.ts sends SIGINT and SIGTERM to exitNow (shutdown.ts), and the
+ * exit handlers are registered before anything is spawned (start(),
+ * maybeCaffeinate), so a kill mid-startup cleans up too. An uncaught
+ * exception exits through them (process.exit runs every exit handler).
+ */
+export function setupShutdown(): void {
   process.on("uncaughtException", (err) => {
     console.error("Uncaught exception:", err);
-    killCaffeinate(caffeinatePid);
     process.exit(1);
   });
   process.on("unhandledRejection", (reason) => {

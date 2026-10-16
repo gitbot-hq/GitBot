@@ -54,6 +54,14 @@ The client sends ordinary HTTP requests and receives a turn's output over a `GET
 - **Scoped to a folder.** The agent runs with the thread's folder as its working directory.
 - **Abort.** `POST /sessions/:id/abort` signals an `AbortController` (Claude Code, Codex) or calls the SDK's abort (OpenCode).
 - **Cleanup.** Idle-session cleanup is currently disabled; finished sessions stay in memory until gitbot stops.
+- **Stopping gitbot.** SIGINT (Ctrl-C) and SIGTERM take one path (`shutdown.ts`, installed first thing in `index.ts`). gitbot exits at once, in the signal's own tick. It does not wait for open browser streams or running turns, and no scheduled run or request can start after the signal. The cleanup runs as `exit` handlers, registered before startup spawns anything (`installExitCleanup` at the top of `start()`, and `maybeCaffeinate` for its own child), so a kill at any point of startup cleans up too:
+  - Claude Code and Codex turns' agents are killed: the Claude Agent SDK's own reaper, and `abortRunningSessions` for Codex.
+  - The opencode server gitbot spawned is stopped (`stopOpencode`), even one still starting, and its turns end with it.
+  - caffeinate is stopped.
+
+  **An opencode server gitbot did not spawn** (one already running on :4096, such as the user's own `opencode serve`) outlives gitbot, and so do turns running on it. The exit is synchronous, so it cannot make the HTTP abort call. Instead, the next start stops each interrupted Jarvis child's opencode session there (`abortInterruptedOpencode`). An opencode turn on such a server that is not a Jarvis child (one the user typed into a thread) has no running mark, so it is not stopped; it runs to its end on that server unseen.
+
+  A child that was running keeps its running mark, so the next start tells its Jarvis it was interrupted. Queued reports are delivered at the next start. A schedule fire that was due or queued meanwhile is recorded as missed, never fired late.
 
 ### When a turn ends
 
@@ -123,6 +131,7 @@ Opening `/` loads the bot hub on a new Jarvis thread, stored only when its first
 GitBot/
 ├── src/
 │   ├── index.ts              # CLI entry point
+│   ├── shutdown.ts           # SIGINT/SIGTERM: exit at once (installed first)
 │   ├── server.ts             # Request routing, chat + session routes
 │   ├── server-common.ts      # HTTP server, SSE, session store, workspace routes
 │   ├── bot-store.ts          # Bot + thread persistence (JSON files)

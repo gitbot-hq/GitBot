@@ -37,6 +37,17 @@ const OPENCODE_URL = "http://127.0.0.1:4096";
 // finds the port taken — so gitbot stops it on the way out.
 let spawnedServer: { close(): void } | null = null;
 
+// The spawned `opencode serve` is tied to this signal for gitbot's lifetime
+// (the SDK hands it to spawn), so stopAgent kills it even while createOpencode
+// is still waiting for it to listen, or after that wait timed out.
+let serverAbort = new AbortController();
+
+/** A seam: tests swap `create` for a stand-in that spawns no opencode. */
+export const opencodeServer = {
+  create: (options: { signal: AbortSignal; config: unknown }): Promise<{ server: { close(): void }; client: any }> =>
+    sdkLoaded.createOpencode(options),
+};
+
 const permissionConfig = {
   edit: "ask",
   bash: "ask",
@@ -75,8 +86,14 @@ export async function initAgent(): Promise<boolean> {
     return true;
   }
 
+  await spawnServer();
+  return true;
+}
+
+/** Spawns `opencode serve`, tied to serverAbort. Never throws. Exported for tests. */
+export async function spawnServer(): Promise<void> {
   try {
-    const result = await loaded.createOpencode({ config: { permission: permissionConfig } });
+    const result = await opencodeServer.create({ signal: serverAbort.signal, config: { permission: permissionConfig } });
     spawnedServer = result.server;
     // Seed the default client (no directory) from the spawned server's client
     clientsByDir.set("", result.client);
@@ -88,14 +105,17 @@ export async function initAgent(): Promise<boolean> {
     const reason = String(err?.message ?? err).split("\n")[0];
     console.warn(`  opencode: could not start a server on ${OPENCODE_URL} (${reason}) — opencode turns will fail until one is running`);
   }
-
-  return true;
 }
 
-/** Stops the opencode server this gitbot started, if it started one. */
+/**
+ * Stops the opencode server this gitbot started, if it started one — even one
+ * still starting. Synchronous: an exit handler, registered before the spawn.
+ */
 export function stopAgent(): void {
   spawnedServer?.close();
   spawnedServer = null;
+  serverAbort.abort();
+  serverAbort = new AbortController();
 }
 
 /**

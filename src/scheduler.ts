@@ -290,6 +290,9 @@ function tick(): void {
   const r = running;
   if (!r) return;
   r.cancelTimer = () => {};
+  // Shutdown exits in the signal's own tick, so this cannot run then; a
+  // backstop, so that nothing ever fires a turn from a stopping gitbot.
+  if (isShuttingDown()) return;
   let failed = false;
   let roomAt: number | null = null;
   const now = schedulerClock.now();

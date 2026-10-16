@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 
-process.on("SIGINT", () => {
-  console.log();
-  process.exit(0);
-});
+// First of all: Ctrl-C and SIGTERM exit at once, even mid-startup.
+import { installSignalHandlers } from "./shutdown";
+installSignalHandlers();
 
 import { existsSync } from "fs";
 import { join } from "path";

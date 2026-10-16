@@ -9,7 +9,7 @@ import { runningChildOf } from "../src/child-lock";
 import { startChildThread } from "../src/jarvis";
 import { addProject } from "../src/project-index";
 import { deliverQueuedReports, watchChildReports } from "../src/reports";
-import { pidAlive, recoverInterruptedChildren, watchRunningMarks } from "../src/restart-recovery";
+import { abortInterruptedOpencode, pidAlive, recoverInterruptedChildren, watchRunningMarks } from "../src/restart-recovery";
 import {
   buildSessionsDump,
   emitEvent,
@@ -120,6 +120,47 @@ test("interrupted detection: only threads still marked at startup", () => {
   assert.equal(getThread(finished.id)?.pendingNote, undefined);
   // Recovery runs once: a second startup finds nothing.
   assert.deepEqual(restart(), []);
+});
+
+test("an interrupted opencode child's session is stopped on the opencode server; other agents' are not", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const proj = project();
+  const jarvis = jarvisThread();
+  const oc = createThread("builtin-opencode", proj.folder, "OC", "chat", "opencode", jarvis.id);
+  updateThread(oc.id, { sdkSessionId: "ses_oc" });
+  setRunningFor(oc.id, jarvis.id);
+  // Never got a session id: nothing to stop.
+  const ocFresh = createThread("builtin-opencode", proj.folder, "OC fresh", "chat", "opencode", jarvis.id);
+  setRunningFor(ocFresh.id, jarvis.id);
+  const cc = createThread("builtin-claude-code", proj.folder, "CC", "chat", "claude-code", jarvis.id);
+  updateThread(cc.id, { sdkSessionId: "sdk-cc" });
+  setRunningFor(cc.id, jarvis.id);
+  // A finished opencode child: not interrupted, never touched.
+  const done = createThread("builtin-opencode", proj.folder, "OC done", "chat", "opencode", jarvis.id);
+  updateThread(done.id, { sdkSessionId: "ses_done" });
+
+  const interrupted = restart();
+  assert.deepEqual([...interrupted].sort(), [oc.id, ocFresh.id, cc.id].sort());
+  const aborted: Array<[string, string]> = [];
+  abortInterruptedOpencode(interrupted, async (id, repoPath) => { aborted.push([id, repoPath]); });
+  await turnEnd();
+  assert.deepEqual(aborted, [["ses_oc", proj.folder]]);
+});
+
+test("a failing opencode abort at startup is logged, never thrown", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const warn = t.mock.method(console, "warn", () => {});
+  const proj = project();
+  const jarvis = jarvisThread();
+  const oc = createThread("builtin-opencode", proj.folder, "OC", "chat", "opencode", jarvis.id);
+  updateThread(oc.id, { sdkSessionId: "ses_gone" });
+  setRunningFor(oc.id, jarvis.id);
+  const interrupted = restart();
+  assert.doesNotThrow(() => abortInterruptedOpencode(interrupted, () => { throw new Error("no server"); }));
+  assert.doesNotThrow(() => abortInterruptedOpencode(interrupted, () => Promise.reject(new Error("refused"))));
+  await turnEnd();
+  assert.equal(warn.mock.callCount(), 2);
+  assert.match(String(warn.mock.calls[0].arguments[0]), /could not stop opencode session ses_gone/);
 });
 
 // --- After a restart mid-child ---
