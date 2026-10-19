@@ -3986,6 +3986,12 @@ button.file-chip:hover {
   margin-top: var(--space-2);
 }
 
+/* The actions sit flush with the reply's left edge, inside the chat
+   body's scroll box (which clips sideways): line each tooltip up with its
+   button's left edge and open it inward, instead of centering it past
+   the column's edge where it gets cut off. */
+.msg-acts [data-tip]::after { left: 0; translate: none; }
+
 .copy-reply-error {
   align-self: center;
   color: var(--danger);
