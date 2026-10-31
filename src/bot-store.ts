@@ -160,6 +160,18 @@ export function updateBot(id: string, patch: Partial<Bot>): Bot | undefined {
   const { id: _ignored, createdAt: _created, ...rest } = patch;
   const before = bots[idx];
   const merged: Bot = { ...before, ...rest, updatedAt: now() };
+  // JSON has no undefined, so a client clears a field by sending null. Drop
+  // it rather than storing null, so "unset" has one shape on disk.
+  for (const key of Object.keys(rest) as (keyof Bot)[]) {
+    if ((rest as Record<string, unknown>)[key] === null) delete (merged as Partial<Bot>)[key];
+  }
+
+  // A model id belongs to the harness it was picked for: "claude-opus-…" means
+  // nothing to Codex. Switching agents without naming a new model falls back
+  // to the new agent's own default instead of carrying the old id across.
+  const agentBefore = before.agent ?? DEFAULT_BOT_AGENT;
+  const agentAfter = merged.agent ?? DEFAULT_BOT_AGENT;
+  if (agentAfter !== agentBefore && merged.model === before.model) merged.model = undefined;
 
   // Setup state follows the instructions it exists for: gaining them arms a run,
   // losing them drops it, and rewriting them asks the machine to be prepared
@@ -214,6 +226,23 @@ export function ensureSetupThread(botId: string, fallbackPath: string): Thread |
   const thread = createThread(bot.id, bot.repoPath || fallbackPath, `Set up ${bot.name}`, "setup");
   updateBot(bot.id, { setupThreadId: thread.id, setupStatus: bot.setupStatus ?? "pending" });
   return thread;
+}
+
+/**
+ * Points the bot's setup thread at the agent the bot now runs on. A chat
+ * thread keeps the agent its conversation started in, but the setup thread is
+ * the bot's own plumbing: after an agent switch it must run on the new agent,
+ * and the old agent's session id cannot be resumed there, so the run starts
+ * fresh. Returns the thread when it was rebound.
+ */
+export function rebindSetupThread(botId: string): Thread | undefined {
+  const bot = getBot(botId);
+  if (!bot?.setupThreadId) return undefined;
+  const thread = getThread(bot.setupThreadId);
+  if (!thread || thread.kind !== "setup") return undefined;
+  const agent = bot.agent ?? DEFAULT_BOT_AGENT;
+  if ((thread.agent ?? agent) === agent) return undefined;
+  return updateThread(thread.id, { agent, sdkSessionId: null, messageCount: 0, preview: "" });
 }
 
 export function setSetupStatus(botId: string, status: SetupStatus): Bot | undefined {

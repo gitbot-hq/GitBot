@@ -19,6 +19,7 @@ import {
   deleteThread,
   botNeedsSetup,
   ensureSetupThread,
+  rebindSetupThread,
   setSetupStatus,
   isBotAgent,
   BOT_AGENTS,
@@ -108,6 +109,8 @@ export async function handleBotRoutes(
       }
       const bot = updateBot(botId, body as Partial<Bot>);
       if (!bot) { jsonError(res, 404, "Bot not found"); return true; }
+      // An agent switch moves the setup run onto the new agent.
+      rebindSetupThread(bot.id);
       // Setup instructions can arrive on an edit, not just at creation.
       const setupThread = ensureSetupThread(bot.id, workspaceCwd);
       jsonOk(res, { bot: getBot(bot.id) ?? bot, setupThread });

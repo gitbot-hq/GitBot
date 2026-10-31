@@ -5,6 +5,7 @@ import { createInterface } from "readline";
 import { join, extname } from "path";
 import { homedir } from "os";
 import { randomUUID } from "crypto";
+import { createRequire } from "module";
 import { isIP } from "net";
 import type {
   Codex as CodexClass,
@@ -50,7 +51,58 @@ export async function initAgent(): Promise<boolean> {
     console.warn("  @openai/codex-sdk not installed — codex agent unavailable");
     return false;
   }
+  preferredCodexPath = resolvePreferredCodex();
   return true;
+}
+
+/**
+ * The user's own `codex`, when it is newer than the one bundled with the SDK.
+ * The bundled build is pinned to the SDK release and falls behind: models the
+ * user's config names (and their installed CLI handles) are refused by it.
+ * GITBOT_CODEX_PATH overrides. Null leaves the SDK's bundled binary in charge.
+ */
+let preferredCodexPath: string | null = null;
+
+function parseVersion(text: string): number[] | undefined {
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(text);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : undefined;
+}
+
+function newerThan(a: number[], b: number[]): boolean {
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  return false;
+}
+
+function bundledCodexVersion(): number[] | undefined {
+  try {
+    // The SDK pins its binary through an exact @openai/codex dependency. The
+    // SDK is ESM-only, so find its directory on the module search paths, then
+    // resolve the binary package from there so nested installs are found.
+    const sdkDir = (require.resolve.paths("@openai/codex-sdk") ?? [])
+      .map((base) => join(base, "@openai", "codex-sdk"))
+      .find((dir) => existsSync(join(dir, "package.json")));
+    if (!sdkDir) return undefined;
+    const fromSdk = createRequire(join(sdkDir, "package.json"));
+    const pkgPath = join(fromSdk.resolve("@openai/codex/bin/codex.js"), "..", "..", "package.json");
+    return parseVersion(JSON.parse(readFileSync(pkgPath, "utf-8")).version ?? "");
+  } catch {
+    return undefined;
+  }
+}
+
+function resolvePreferredCodex(): string | null {
+  if (process.env.GITBOT_CODEX_PATH) return process.env.GITBOT_CODEX_PATH;
+  const path = codexOnPath();
+  if (!path) return null;
+  try {
+    const installed = parseVersion(execSync(`"${path}" --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }));
+    const bundled = bundledCodexVersion();
+    if (!installed || !bundled || !newerThan(installed, bundled)) return null;
+    console.log(`  using installed Codex ${installed.join(".")} at ${path} (bundled is ${bundled.join(".")})`);
+    return path;
+  } catch {
+    return null;
+  }
 }
 
 /** Absolute path of the `codex` on PATH, or null when there is none. */
@@ -71,6 +123,7 @@ function codexOnPath(): string | null {
  * The two may be different versions, hence the warning.
  */
 function createCodex(ctor: typeof CodexClass, options: ConstructorParameters<typeof CodexClass>[0]): CodexClass {
+  if (preferredCodexPath) return new ctor({ ...options, codexPathOverride: preferredCodexPath });
   try {
     return new ctor(options);
   } catch (err: any) {

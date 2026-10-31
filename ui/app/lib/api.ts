@@ -134,11 +134,12 @@ export type BotInput = {
   description?: string;
   agent?: string;
   instructions?: string;
-  setupInstructions?: string;
-  repoPath?: string;
-  model?: string;
+  // null clears the stored value on an edit.
+  setupInstructions?: string | null;
+  repoPath?: string | null;
+  model?: string | null;
   permissionMode?: string;
-  allowedTools?: string[];
+  allowedTools?: string[] | null;
   disallowedTools?: string[];
 };
 

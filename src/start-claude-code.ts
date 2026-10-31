@@ -16,9 +16,56 @@ import {
 import { bindSession } from "./bot-store";
 import { presetSystemPrompt, recordSetupOutcome } from "./bot-prompt";
 
+/**
+ * The Claude Code executable to run. The SDK ships its own copy, pinned to the
+ * SDK release, and the API refuses newer models from older Claude Code
+ * builds ("version 2.1.280 or newer is required"). The user's own `claude`,
+ * which they keep updated, is used whenever it is newer than the bundled one.
+ * Undefined leaves the choice to the SDK. GITBOT_CLAUDE_PATH overrides.
+ */
+let claudeExecutable: string | undefined;
+
+function parseVersion(text: string): number[] | undefined {
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(text);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : undefined;
+}
+
+function newerThan(a: number[], b: number[]): boolean {
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  return false;
+}
+
+function bundledClaudeVersion(): number[] | undefined {
+  try {
+    const pkg = require("@anthropic-ai/claude-agent-sdk/package.json");
+    return parseVersion(String(pkg.claudeCodeVersion ?? ""));
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveClaudeExecutable(): string | undefined {
+  if (process.env.GITBOT_CLAUDE_PATH) return process.env.GITBOT_CLAUDE_PATH;
+  try {
+    const lookup = process.platform === "win32" ? "where claude" : "command -v claude";
+    const path = execSync(lookup, { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] })
+      .split(/\r?\n/)[0]?.trim();
+    if (!path) return undefined;
+    const installed = parseVersion(execFileSync(path, ["--version"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }));
+    const bundled = bundledClaudeVersion();
+    if (!installed) return undefined;
+    if (bundled && !newerThan(installed, bundled)) return undefined;
+    console.log(`  using installed Claude Code ${installed.join(".")} at ${path}${bundled ? ` (bundled is ${bundled.join(".")})` : ""}`);
+    return path;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function initAgent(): Promise<boolean> {
   try {
     execSync("claude --version", { stdio: "ignore" });
+    claudeExecutable = resolveClaudeExecutable();
     return true;
   } catch {
     console.warn("  claude CLI not found — claude-code agent unavailable");
@@ -71,6 +118,7 @@ export async function runAgent(store: SessionStore): Promise<void> {
       prompt: promptParam,
       options: {
         model: store.model ?? "claude-sonnet-4-6",
+        ...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
         permissionMode: store.mode === "plan" ? "plan" : "default",
         abortController,
         includePartialMessages: true,
