@@ -50,6 +50,14 @@ const AGENT_OPTIONS = [
   { id: "opencode", label: "OpenCode" },
 ];
 
+// Examples only: each agent reads its own model ids, and OpenCode wants a
+// provider prefix.
+const MODEL_PLACEHOLDERS: Record<string, string> = {
+  "claude-code": "claude-sonnet-4-6",
+  codex: "gpt-5-codex",
+  opencode: "anthropic/claude-sonnet-4-6",
+};
+
 function fallbackPref(id: string): AvatarPref {
   return {
     mascot: defaultMascotFor(id),
@@ -196,11 +204,13 @@ export default function BotForm({
       description: description.trim(),
       agent,
       instructions,
-      setupInstructions: setupInstructions.trim() || undefined,
-      repoPath: repoPath.trim() || undefined,
-      model: model.trim() || undefined,
+      // On an edit, null clears a stored value; undefined would be dropped
+      // from the JSON and leave the old value in place.
+      setupInstructions: setupInstructions.trim() || (editing ? null : undefined),
+      repoPath: repoPath.trim() || (editing ? null : undefined),
+      model: model.trim() || (editing ? null : undefined),
       permissionMode,
-      allowedTools: tools.length ? tools : undefined,
+      allowedTools: tools.length ? tools : editing ? null : undefined,
     };
   }
 
@@ -408,6 +418,8 @@ export default function BotForm({
                     disabled={missing && a.id !== agent}
                     onClick={() => {
                       agentTouched.current = true;
+                      // A model id only means something to its own agent.
+                      if (a.id !== agent) setModel("");
                       setAgent(a.id);
                     }}
                   >
@@ -462,11 +474,11 @@ export default function BotForm({
               placeholder="blank uses the server's directory"
             />
           </Field>
-          <Field label="Model" tip="optional">
+          <Field label="Model" tip="optional; blank uses the agent's default">
             <input
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder="claude-sonnet-4-6"
+              placeholder={MODEL_PLACEHOLDERS[agent] ?? ""}
             />
           </Field>
           <Field label="Allowed tools" tip="comma-separated; blank means all">

@@ -635,6 +635,13 @@ export default function V2() {
       editing != null &&
       editing.setupInstructions !== saved.setupInstructions &&
       needsSetup(saved);
+    // Switching agents moves the setup run onto the new agent, which starts
+    // it over (the server resets the setup thread), so launch it again.
+    const agentChanged =
+      editing !== "new" &&
+      editing != null &&
+      (editing.agent || "claude-code") !== (saved.agent || "claude-code") &&
+      needsSetup(saved);
     setAvatarPref(saved.id, pref);
     setSwitchTo(null);
     if (editing === "new") {
@@ -646,6 +653,9 @@ export default function V2() {
       if (setupChanged) {
         setupLaunchRef.current = null;
         openSetup(saved.id, "changed", saved);
+      } else if (agentChanged) {
+        setupLaunchRef.current = null;
+        openSetup(saved.id, "start", saved);
       }
     }
   }

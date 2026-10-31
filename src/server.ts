@@ -30,7 +30,7 @@ import { initAgent as initOpencode, stopAgent as stopOpencode, runAgent as runOp
 import { initAgent as initCodex, runAgent as runCodex, listSessions as listCodexSessions, loadTranscript as loadCodexTranscript } from "./start-codex";
 import { handleBotRoutes } from "./bot-routes";
 import { handleMarketplaceRoutes } from "./marketplace-proxy";
-import { getBot, getThread, touchThread, updateThread, botNeedsSetup, DEFAULT_BOT_AGENT } from "./bot-store";
+import { getBot, getThread, touchThread, updateThread, botNeedsSetup, rebindSetupThread, DEFAULT_BOT_AGENT } from "./bot-store";
 import { botPermissionToSession } from "./server-common";
 import { uiFileFor } from "./static-ui";
 
@@ -246,24 +246,33 @@ export async function handleRequest(
         const bot = getBot(thread.botId);
         if (!bot) { jsonError(res, 404, "Bot not found"); return; }
         repoPath = thread.repoPath;
+        const isSetup = thread.kind === "setup";
+        // The setup thread always runs on the bot's current agent. One that
+        // started on another agent is rebound (and starts a fresh session),
+        // otherwise a bot switched from Codex to Claude Code keeps sending its
+        // setup to Codex forever.
+        if (isSetup) rebindSetupThread(bot.id);
+        const current = getThread(threadId) ?? thread;
         // An explicit thread choice wins; older threads without one inherit
         // the bot's configured agent.
-        agent = thread.agent ?? bot.agent ?? DEFAULT_BOT_AGENT;
+        agent = current.agent ?? bot.agent ?? DEFAULT_BOT_AGENT;
         if (!availableAgents.includes(agent)) {
           jsonError(res, 400, `${bot.name} runs on ${agent}, which is not installed on this machine`, {
             agentUnavailable: agent,
           });
           return;
         }
-        if (thread.agent !== agent) updateThread(threadId, { agent });
-        existingId = thread.sdkSessionId ?? undefined;
-        model = model ?? bot.model;
+        if (current.agent !== agent) updateThread(threadId, { agent });
+        existingId = current.sdkSessionId ?? undefined;
+        // The bot's model was picked for the bot's agent. A thread still on an
+        // older agent must not receive it: Codex rejects "claude-opus-…".
+        const botAgent = bot.agent ?? DEFAULT_BOT_AGENT;
+        model = model ?? (agent === botAgent ? bot.model : undefined);
         // Bot presets speak their own vocabulary ("auto-approve", "plan"); the
         // session speaks PermissionMode. Translate, or nothing auto-approves.
         const botPermission = botPermissionToSession(bot.permissionMode, agent);
         permissionMode = permissionMode ?? botPermission.permissionMode;
         mode = mode ?? botPermission.mode;
-        const isSetup = thread.kind === "setup";
         // Work waits on setup; the setup thread itself is exempt, since it is
         // the thing that clears the block.
         if (!isSetup && botNeedsSetup(bot)) {
